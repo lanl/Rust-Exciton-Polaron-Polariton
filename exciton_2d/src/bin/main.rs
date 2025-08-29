@@ -1,0 +1,148 @@
+// src/bin/main.rs
+use clap::Parser;
+use exciton_2d::{Exciton2DGridSystem, ExcitonConfig};
+use log::{LevelFilter};
+use std::path::PathBuf;
+use std::time::Instant;
+
+#[derive(Parser, Debug)]
+#[clap(author, version, about, long_about = None)]
+struct Args {
+    /// Lattice constant
+    #[clap(long, default_value_t = 3.0)]
+    a0: f64,
+    
+    /// Potential strength
+    #[clap(long, default_value_t = 0.05)]
+    v0: f64,
+    
+    /// Grid size
+    #[clap(long, default_value_t = 128)]
+    grid_size: usize,
+    
+    /// Box size
+    #[clap(long, default_value_t = 3.0)]
+    box_size: f64,
+    
+    /// Directory to save/load data
+    #[clap(long, default_value = "saved_data")]
+    save_dir: String,
+    
+    /// Force recalculation of relative coordinate solutions
+    #[clap(long)]
+    recalculate: bool,
+    
+    /// Force recalculation of band structure
+    #[clap(long)]
+    recalculate_bands: bool,
+    
+    /// Number of parallel jobs (-1 for all cores)
+    #[clap(long, default_value_t = -1)]
+    n_jobs: i32,
+    
+    /// Number of relative coordinate eigenstates
+    #[clap(long, default_value_t = 5)]
+    n_rel_states: usize,
+    
+    /// Number of bands to calculate
+    #[clap(long, default_value_t = 5)]
+    n_bands: usize,
+    
+    /// Directory to save output figures
+    #[clap(long, default_value = "output_figures")]
+    output_dir: String,
+    
+    /// Batch size for memory-intensive operations
+    #[clap(long, default_value_t = 32)]
+    batch_size: usize,
+    
+    /// Number of k-points for band structure
+    #[clap(long, default_value_t = 60)]
+    n_k: usize,
+
+    /// Number of kappas for band structure
+    #[clap(long, default_value_t = 11)]
+    n_kappa: usize,
+}
+
+fn main() {
+    // Parse command-line arguments
+    let args = Args::parse();
+    
+    // Set up logging
+    env_logger::Builder::new()
+        .filter_level(LevelFilter::Info)
+        .init();
+    
+    // Create output directory if it doesn't exist
+    std::fs::create_dir_all(&args.output_dir).expect("Failed to create output directory");
+    
+    // List of lattice constants and potential strengths to run
+    let a0_list = vec![3.5];
+    let v0_list = vec![0.1, 0.2];
+    
+    for &a0 in &a0_list {
+        for &v0 in &v0_list {
+            // Print configuration
+            println!("Running exciton calculation with a0={}, v0={}, grid_size={}, box_size={}",
+                     a0, v0, args.grid_size, args.box_size);
+            
+            // Create configuration
+            let config = ExcitonConfig {
+                n_kappa: args.n_kappa,
+                a0,
+                v0,
+                k: vec![0.0, 0.0],
+                m_e: 1.0,
+                m_h: 1.0,
+                verbose: false,
+                grid_size: args.grid_size,
+                box_size: args.box_size,
+                save_dir: PathBuf::from(&args.save_dir),
+                recalculate: args.recalculate,
+                n_jobs: args.n_jobs,
+                use_gpu: false,
+                batch_size: args.batch_size,
+            };
+            
+            // Create the 2D exciton system
+            let system = Exciton2DGridSystem::from_config(config);
+            
+            // Solve for the relative coordinate eigenstates
+            let (rel_eigvals, _, _) = system.solve_rel_hamiltonian(16);
+            println!("Relative coordinate eigenvalues:");
+            for i in 0..std::cmp::min(16, rel_eigvals.len()) {
+                println!("E_{} = {:.6}", i, rel_eigvals[i]);
+            }
+            
+            // Diagonalize the full Hamiltonian
+            let (eigvals, _, _, _, _) = system.diagonalize_full_hamiltonian(
+                args.n_rel_states,
+                args.n_bands,
+                1, // select_parity = 0 means both parities
+            );
+            
+            println!("\nFull Hamiltonian eigenvalues:");
+            for i in 0..eigvals.len() {
+                println!("E_{} = {:.6}", i, eigvals[i]);
+            }
+            
+            let start_time = Instant::now();
+            // Calculate and plot band structure
+            let (k_points, eigvals_list, parities_list) = system.calculate_band_structure(
+                args.n_k,
+                args.n_rel_states,
+                args.n_bands,
+                args.recalculate_bands,
+                0, // select_parity = 0 means both parities
+            );
+            let elapsed = start_time.elapsed();
+    
+            // Print the timing information
+            println!("Band structure calculation completed in {:.2?}", elapsed);
+            
+            let band_path = format!("{}/band_structure_a0{}_v0{}.png", args.output_dir, a0, v0);
+            system.plot_band_structure(&k_points, &eigvals_list, &parities_list, Some(&band_path));
+        }
+    }
+}
