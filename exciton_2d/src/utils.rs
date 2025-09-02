@@ -1,7 +1,6 @@
 // src/utils.rs
 use log::info;
 use ndarray::Array2;
-use num_complex::Complex64;
 use std::process;
 
 pub fn print_memory_usage(message: &str) {
@@ -30,27 +29,18 @@ pub fn apply_symmetry(k_point: &[f64], symmetry_op: usize) -> Vec<f64> {
 
 pub fn fast_matrix_element_calc(
     psi_i_real: &Array2<f64>,
-    psi_i_imag: &Array2<f64>,
     psi_j_real: &Array2<f64>,
-    psi_j_imag: &Array2<f64>,
-    cos_term: &Array2<f64>,
+    v_term: &Array2<f64>,
     dx: f64,
-) -> Complex64 {
-    // Calculate the conjugate of psi_i
-    let psi_i_conj_real = psi_i_real;
-    let psi_i_conj_imag = &(-psi_i_imag);
-    
-    // Calculate the product (psi_i_conj * cos_term * psi_j)
-    let real_part = (psi_i_conj_real * cos_term) * psi_j_real - 
-                   (psi_i_conj_imag * cos_term) * psi_j_imag;
-    let imag_part = (psi_i_conj_real * cos_term) * psi_j_imag + 
-                   (psi_i_conj_imag * cos_term) * psi_j_real;
+) -> f64 {
+
+    // Calculate the product (psi_i_conj * V(x) * psi_j)
+    let real_part = (psi_i_real * v_term) * psi_j_real;
     
     // Sum and scale by dx^2
     let real_sum = real_part.sum() * dx * dx;
-    let imag_sum = imag_part.sum() * dx * dx;
     
-    Complex64::new(real_sum, imag_sum)
+    real_sum
 }
 
 // Add this to utils.rs:

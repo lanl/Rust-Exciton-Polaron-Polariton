@@ -3,7 +3,6 @@ use crate::grid::Grid;
 use crate::utils::fast_matrix_element_calc;
 use log::{info, warn};
 use ndarray::Array2;
-use num_complex::Complex64;
 use ordered_float::OrderedFloat;
 use std::sync::{Arc, RwLock};
 use std::collections::HashMap;
@@ -14,7 +13,7 @@ pub struct MatrixElementCalculator {
     grid: Grid,
     save_dir: String,
     recalculate: bool,
-    matrix_element_cache: Arc<RwLock<HashMap<(usize, usize, (OrderedFloat<f64>, OrderedFloat<f64>)), Complex64>>>,
+    matrix_element_cache: Arc<RwLock<HashMap<(usize, usize, (OrderedFloat<f64>, OrderedFloat<f64>)), f64>>>,
     precomputed: Arc<RwLock<HashMap<String, Array2<f64>>>>,
     cached_eigvecs: Arc<RwLock<Option<Array2<f64>>>>,
     pub verbose: bool,
@@ -69,7 +68,7 @@ impl MatrixElementCalculator {
         *self.cached_eigvecs.write().unwrap() = Some(eigvecs);
     }
     
-    pub fn cached_potential_matrix_element(&self, kappa_pot: (OrderedFloat<f64>, OrderedFloat<f64>), i: usize, j: usize) -> Complex64 {
+    pub fn cached_potential_matrix_element(&self, kappa_pot: (OrderedFloat<f64>, OrderedFloat<f64>), i: usize, j: usize) -> f64 {
         let cache_key = (i, j, kappa_pot);
         
         // First check if the result is already in the cache
@@ -141,7 +140,7 @@ impl MatrixElementCalculator {
         eigvecs: &Array2<f64>,
         x_grid: &Array2<f64>,
         y_grid: &Array2<f64>
-    ) -> Complex64 {
+    ) -> f64 {
         // Get the eigenvectors for states i and j
         let psi_i: Array2<f64> = eigvecs.column(i)
             .to_shape((self.grid.grid_size, self.grid.grid_size)).unwrap().to_owned();
@@ -153,25 +152,21 @@ impl MatrixElementCalculator {
         let mut cos_y = Array2::zeros((1, self.grid.grid_size));
         
         for i in 0..self.grid.grid_size {
-            cos_x[[i, 0]] = (kappa_pot.0.0 * x_grid[[i, 0]]).cos();
-            cos_y[[0, i]] = (kappa_pot.1.0 * y_grid[[0, i]]).cos();
+            cos_x[[i, 0]] = (kappa_pot.0.0 * x_grid[[i, 0]] / 2.0).cos();
+            cos_y[[0, i]] = (kappa_pot.1.0 * y_grid[[0, i]] / 2.0).cos();
         }
         
         let cos_term = cos_x + cos_y;
-        
-        // Use the optimized function for the matrix element calculation
-        let psi_i_imag = Array2::zeros((self.grid.grid_size, self.grid.grid_size)); // Real wavefunctions
-        let psi_j_imag = Array2::zeros((self.grid.grid_size, self.grid.grid_size)); // Real wavefunctions
-        
+                
         fast_matrix_element_calc(
-            &psi_i, &psi_i_imag, 
-            &psi_j, &psi_j_imag,
+            &psi_i, 
+            &psi_j,
             &cos_term, self.grid.dx
         )
     }
 
     
-    pub fn get_potential_matrix_element_direct(&self, kappa_pot: &[f64], i: usize, j: usize, rel_eigvecs: &Array2<f64>) -> Complex64 {
+    pub fn get_potential_matrix_element_direct(&self, kappa_pot: &[f64], i: usize, j: usize, rel_eigvecs: &Array2<f64>) -> f64 {
         let kappa_pot_tuple = (OrderedFloat(kappa_pot[0]), OrderedFloat(kappa_pot[1]));
         let cache_key = (i, j, kappa_pot_tuple);
         
@@ -200,20 +195,16 @@ impl MatrixElementCalculator {
             let mut cos_y = Array2::zeros((1, self.grid.grid_size));
             
             for i in 0..self.grid.grid_size {
-                cos_x[[i, 0]] = (kappa_pot[0] * x_grid[[i, 0]]).cos();
-                cos_y[[0, i]] = (kappa_pot[1] * y_grid[[0, i]]).cos();
+                cos_x[[i, 0]] = (kappa_pot[0] * x_grid[[i, 0]] / 2.0).cos();
+                cos_y[[0, i]] = (kappa_pot[1] * y_grid[[0, i]] / 2.0).cos();
             }
             
             cos_x + cos_y
         };
         
-        // Use the optimized function for the matrix element calculation
-        let psi_i_imag = Array2::zeros((self.grid.grid_size, self.grid.grid_size)); // Real wavefunctions
-        let psi_j_imag = Array2::zeros((self.grid.grid_size, self.grid.grid_size)); // Real wavefunctions
-        
         let matrix_element = fast_matrix_element_calc(
-            &psi_i, &psi_i_imag, 
-            &psi_j, &psi_j_imag,
+            &psi_i, 
+            &psi_j,
             &cos_term, self.grid.dx
         );
         
@@ -223,7 +214,7 @@ impl MatrixElementCalculator {
         matrix_element
     }
     
-    pub fn calculate_matrix_elements(&self, w_kappa_tuples: &HashMap<(OrderedFloat<f64>, OrderedFloat<f64>), f64>, n_rel_states: usize) -> HashMap<(usize, usize, (OrderedFloat<f64>, OrderedFloat<f64>)), Complex64> {
+    pub fn calculate_matrix_elements(&self, w_kappa_tuples: &HashMap<(OrderedFloat<f64>, OrderedFloat<f64>), f64>, n_rel_states: usize) -> HashMap<(usize, usize, (OrderedFloat<f64>, OrderedFloat<f64>)), f64> {
         // Check if precomputed matrix elements exist
         let matrix_elements_filename = format!(
             "{}/matrix_elements_grid{}_box{}_nrel{}.json",
@@ -253,7 +244,7 @@ impl MatrixElementCalculator {
                 for j in 0..n_rel_states {
                     // Use cached matrix element calculation
                     let matrix_element = self.cached_potential_matrix_element(kappa_pot_tuple, i, j);
-                    if matrix_element.norm() > 1e-12 {  // Only store non-zero elements
+                    if matrix_element > 1e-12 {  // Only store non-zero elements
                         v_rel.insert((i, j, kappa_pot_tuple), matrix_element);
                     }
                 }

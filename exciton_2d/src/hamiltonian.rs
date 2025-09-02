@@ -431,8 +431,8 @@ impl FullHamiltonian {
                             // Get the potential matrix element if it exists
                             if let Some(&matrix_element) = v_rel.get(&(i_rel, j_rel, kappa_pot_tuple)) {
                                 // Add to matrix if non-zero
-                                if matrix_element.norm() > 1e-12 {
-                                    h_full[[i, j]] += v0 * matrix_element.re;
+                                if matrix_element > 1e-12 {
+                                    h_full[[i, j]] += v0 * matrix_element;
                                 }
                             }
                         }
