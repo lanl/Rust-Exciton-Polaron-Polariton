@@ -1,9 +1,16 @@
 use exciton_2d::{Exciton2DGridSystem, ExcitonConfig, utils::fast_matrix_element_calc};
-use ndarray_linalg::generate;
-use std::{path::PathBuf, usize};
+use ndarray_linalg::c64;
+use std::{f64::consts::PI, path::PathBuf, usize};
 use ndarray::{arr1, array, linalg::kron, Array1, Array2};
 
 const C: f64 = 137.036;
+
+pub fn to_c_2(arr:&Array2<f64>) -> Array2<c64>{
+
+    let new_arr = arr.map(|x| c64::from(x));
+
+    new_arr    
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct Vector3D {
@@ -146,22 +153,73 @@ impl IntHamiltonian {
         let n_ph = self.photon_modes[0].n_fock.pow(self.photon_modes.len() as u32);
         let n_ex = self.exciton_vecs.len();
         let mut h_int = Array2::<f64>::zeros((n_ex * n_ph, n_ex * n_ph));
-        self.photon_modes.iter().enumerate().for_each(|(mode_i,mode)|{
+        self.photon_modes.iter().enumerate().for_each(|(mode_i,mode1)|{
 
             let m_com = self.exciton.m;
+            let q = &mode1.q;
 
-            // P a^+ a
-            let p_dot_q = self.get_p_com(kappas, k, &mode.q);
-            let aa_dag = self.get_h_ph_sing_full(mode_i);
-            h_int = &h_int + kron(&(p_dot_q / m_com),&aa_dag);
+            // P • q a^+ a
+            let p_dot_q = self.get_p_com(kappas, k, q);
+            let aa_dag1 = self.get_h_ph_sing_full(mode_i);
+            h_int = &h_int + &kron(&(p_dot_q / m_com),&aa_dag1);
 
-            // P cos() (a^dag + a)
-            let p_dot_eps = self.get_p_com(kappas, k, &mode.eps);
-            let p_cos =self.coupling * &p_dot_eps;
-            let a = self.get_a_sing_full(mode_i);
-            h_int = &h_int + kron(&p_cos, &(&a + &a.t()))
+            // P • A cos() (a^dag + a)
+            let p_dot_eps = self.get_p_com(kappas, k, &mode1.eps);
+            let p_cos = 2.0 * self.coupling / m_com * self.get_cos_x(&q) * &p_dot_eps;
+            let a1 = self.get_a_sing_full(mode_i);
+            h_int = &h_int + &kron(&p_cos, &(&a1 + &a1.t()));
+
+            // -d/dx • A sin() (a^dag - a)
+            let p_sin = self.get_p_sin_x(q) * self.coupling * 2.0 / self.exciton.mu;
+            h_int = &h_int + &kron(&p_sin, &(&a1.t() - &a1));
+
+            self.photon_modes.iter().enumerate().for_each(|(mode_j,mode2)| {
+                let q_2 = &mode2.q;
+                let qq = q.dot(q_2);
+
+                // q_i a_i^+ a_i q_j a_j^+ a_j
+                let ex_eye: Array2<f64> = Array2::eye(n_ex);
+                let aa_2 = &aa_dag1.dot(&self.get_h_ph_sing_full(mode_j)) * qq / 2.0 / m_com;
+                h_int = &h_int + &kron(&ex_eye, &aa_2);
+
+                // Diamagnetic term
+                let a2 = self.get_a_sing_full(mode_j);
+                
+                // Sum
+                let cos_sum = self.get_cos_x(&(q + q_2)) * self.coupling.powi(2);
+                h_int = &h_int + kron(&cos_sum, &(&a1.dot(&a2) + &a1.t().dot(&a2.t())));
+
+                // Diff
+                let cos_diff = self.get_cos_x(&(q - q_2)) * self.coupling.powi(2);
+                h_int = &h_int + kron(&cos_diff, &(&a1.t().dot(&a2) + &a1.dot(&a2.t())));
+
+            });
         });
         
+    }
+
+    // fn build_rel_p(&self, unit_vec:Array1<f64>, n_rel_states: usize) {
+    //     let nx = self.exciton.grid_size;
+    //     let rel_vecs = to_c_2(&self.rel_vecs);
+
+    //     let t = to_c_2(&self.compute_sinc_dvr_rel()) * c64::i();
+
+
+    // }
+
+    fn compute_sinc_dvr_rel(&self) -> Array2<f64> {
+        let dx = self.exciton.grid.dx;
+        let nx = self.exciton.grid_size;
+
+        Array2::from_shape_fn((nx,nx), |(i, j)| {
+            if i == j {
+                PI.powi(2) / 3.0 / dx*dx
+            }
+            else {
+                let diff: f64 = i as f64 - j as f64;
+                (-1.0 as f64).powf(diff) / (diff + f64::EPSILON) / dx 
+            }
+        })
     }
 
     fn get_a_sing_full(&self, mode_i: usize)  -> Array2<f64> {
@@ -199,7 +257,7 @@ impl IntHamiltonian {
         .unwrap()
     }
 
-    pub fn get_cos_x(&self, mode_i: usize) {
+    pub fn get_cos_x(&self, q: &Array1<f64>) -> Array2<f64>{
         let n_com = self.exciton.n_kappa;
         let e_vecs = &self.exciton_vecs;
         let n_eig = e_vecs.len();
@@ -217,16 +275,49 @@ impl IntHamiltonian {
                     vec2.iter().enumerate()
                         .map(move |(i2, &a2)| {
                             let rel_ind2 = i2 % n_com;
-                            a1 * a2 // PLACEHOLDER!!!
+                            a1 * a2 * self.get_cos_elements( rel_ind1, rel_ind2, q)
                         })
                 })
                 .sum();
 
             cos_ij
-        });
+        })
     }
 
-    fn get_cos_elements(&self, mode_i: usize, i1: usize, i2: usize) -> f64{
+    fn get_p_sin_x(&self, q: &Array1<f64>) -> Array2<f64>{
+        let n_com = self.exciton.n_kappa;
+        let e_vecs = &self.exciton_vecs;
+        let n_eig = e_vecs.len();
+
+        // Build matrix using functional operations
+        Array2::from_shape_fn((n_eig, n_eig), |(idx1, idx2)| {
+            // For each pair of eigenvectors
+            let vec1 = &e_vecs[idx1];
+            let vec2 = &e_vecs[idx2];
+            
+            // Compute p_ij using iterator operations
+            let sin_ij: f64 = vec1.iter().enumerate()
+                .flat_map(|(i1, &a1)| {
+                    let com_ind1 = i1 / n_com;
+                    let rel_ind1 = i1 % n_com;
+                    vec2.iter().enumerate()
+                        .filter_map(move |(i2, &a2)| {
+                            let com_ind2 = i2 / n_com;
+                            let rel_ind2 = i2 % n_com;
+                            if com_ind1 == com_ind2 {
+                                Some(a1 * a2 * self.get_psin_elements( rel_ind1, rel_ind2, q))
+                            } else {
+                                None
+                            }
+                        })
+                })
+                .sum();
+
+            sin_ij
+        })
+    }
+
+    fn get_cos_elements(&self, i1: usize, i2: usize, q: &Array1<f64>) -> f64{
         let x_grid = &self.exciton.grid.x;
         let y_grid = &self.exciton.grid.y;
         let eigvecs = &self.rel_vecs;
@@ -239,21 +330,51 @@ impl IntHamiltonian {
             .to_shape((grid_size, grid_size)).unwrap().to_owned();
         
         // Calculate the cosine term
-        let mut cos_x = Array2::zeros((grid_size, 1));
-        let mut cos_y = Array2::zeros((1, grid_size));
+        let mut q_x = Array2::zeros((grid_size, 1));
+        let mut q_y = Array2::zeros((1, grid_size));
         
         for i in 0..grid_size {
-            cos_x[[i, 0]] = (x_grid[i]).cos();
-            cos_y[[0, i]] = (y_grid[i]).cos();
+            q_x[[i, 0]] = x_grid[i] * q[0] / 2.0;
+            q_y[[0, i]] = y_grid[i] * q[1] / 2.0;
         }
         
-        let cos_term = cos_x + cos_y;
+        let cos_term = (q_x + q_y).cos();
         
         fast_matrix_element_calc(
             &psi_i, 
             &psi_j, 
             &cos_term, self.exciton.grid.dx
         )
+    }
+
+    fn get_psin_elements(&self, i1: usize, i2: usize, q: &Array1<f64>) -> f64{
+        let x_grid = &self.exciton.grid.x;
+        let y_grid = &self.exciton.grid.y;
+        let eigvecs = &self.rel_vecs;
+        let grid_size = self.exciton.grid_size;
+        let dx = self.exciton.grid.dx;
+
+        // Get the eigenvectors for states i and j
+        let psi_i = eigvecs.column(i1)
+            .to_shape((grid_size, grid_size)).unwrap().to_owned();
+        let psi_j = eigvecs.column(i2)
+            .to_shape((grid_size, grid_size)).unwrap().to_owned();
+        
+        // Calculate the cosine term
+        let mut q_x = Array2::zeros((grid_size, 1));
+        let mut q_y = Array2::zeros((1, grid_size));
+        
+        for i in 0..grid_size {
+            q_x[[i, 0]] = x_grid[i] * q[0] / 2.0;
+            q_y[[0, i]] = y_grid[i] * q[1] / 2.0;
+        }
+        
+        let sin_term = (q_x + q_y).sin();
+        let p = self.compute_sinc_dvr_rel();
+        let p_sin = &p.dot(&sin_term) + &sin_term.dot(&p);
+        
+        (psi_i * p_sin * psi_j).sum() * dx * dx
+
     }
 
     pub fn get_p_com(&self, kappas: &Vec<Vec<f64>>, k: &Vec<f64>, field_vec: &Array1<f64>) -> Array2<f64> {
@@ -293,6 +414,41 @@ impl IntHamiltonian {
                 .sum()
         })
     }
+
+    fn _get_aa_2(&self, mode_i: usize, mode_j: usize, mode1: &PhotonMode, mode2: &PhotonMode) -> Array2<f64>{
+        let q2 = mode1.q.dot(&mode2.q);
+
+        if mode_i == mode_j {
+            self.photon_modes.iter().enumerate().map(|(idx,mode)| {
+                if idx == mode_i {
+                    let n_max = (mode.n_fock - 1) as f64;
+                    let diags = Array1::linspace(0.0, mode.omega * n_max, mode.n_fock);
+
+                    return Array2::from_diag(&(&diags * &diags))
+                }
+                else {
+                    let diags = Array1::<f64>::ones(mode.n_fock);
+                    return Array2::from_diag(&diags)
+                }
+            }).reduce(|acc, sing_mat| kron(&acc, &sing_mat))
+            .unwrap() * q2
+        }
+        else {
+            self.photon_modes.iter().enumerate().map(|(idx,mode)| {
+                if idx == mode_i || idx == mode_j{
+                    let n_max = (mode.n_fock - 1) as f64;
+                    let diags = Array1::linspace(0.0, mode.omega * n_max, mode.n_fock);
+
+                    return Array2::from_diag(&diags)
+                }
+                else {
+                    let diags = Array1::<f64>::ones(mode.n_fock);
+                    return Array2::from_diag(&diags)
+                }
+            }).reduce(|acc, sing_mat| kron(&acc, &sing_mat))
+            .unwrap() * q2
+        }
+    }
 }
 
 pub struct LightMatter {
@@ -329,8 +485,11 @@ fn main() {
     
     // Solve for the relative coordinate eigenstates
     let n_rel = 16;
+    
+    let (sorted_eigvals, sorted_eigvecs, rel_eigvals, rel_eigvecs, _) = system.diagonalize_full_hamiltonian(n_rel, 10, 1);
 
-
-
+    let h_ex = Array2::from_diag(&sorted_eigvals);
+    
+    
 
 }
