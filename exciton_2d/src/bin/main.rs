@@ -109,10 +109,10 @@ fn main() {
             let system = Exciton2DGridSystem::from_config(config);
             
             // Solve for the relative coordinate eigenstates
-            let (rel_eigvals, _, _) = system.solve_rel_hamiltonian(16);
+            let (rel_eigvals, _, rel_pars) = system.solve_rel_hamiltonian(16);
             println!("Relative coordinate eigenvalues:");
             for i in 0..std::cmp::min(16, rel_eigvals.len()) {
-                println!("E_{} = {:.6}", i, rel_eigvals[i]);
+                println!("E_{} = {:.6} with parity {:.0}", i, rel_eigvals[i], rel_pars[i]);
             }
             
             // Diagonalize the full Hamiltonian

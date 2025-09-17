@@ -1,7 +1,7 @@
 use exciton_2d::{utils::fast_matrix_element_calc, Exciton2DGridSystem, ExcitonConfig, FullHamiltonian};
 use ndarray_linalg::{c64, Eigh};
 use std::{collections::HashMap, f64::consts::PI, path::PathBuf, usize};
-use ndarray::{arr1, array, linalg::kron, Array1, Array2};
+use ndarray::{arr1, array, linalg::kron, Array1, Array2, s};
 use std::time::Instant;
 use serde::{Serialize, Deserialize};
 use std::path::Path;
@@ -150,9 +150,17 @@ pub enum Polarization {
 impl Polarization {
     pub fn get_pol(&self, q: Vector3D, normal: Vector3D) -> (f64,f64) {
 
-        let te = q.cross(&normal).normalize();
-        let tm = te.cross(&q).normalize();
+        let te:Vector3D;
+        let tm:Vector3D;
 
+        if q.cross(&normal).normalize().magnitude() < 0.5 {
+            te = Vector3D::new(0.0, 1.0, 0.0);
+            tm = Vector3D::new(1.0, 0.0, 0.0);
+        }
+        else {
+            te = q.cross(&normal).normalize();
+            tm = te.cross(&q).normalize();
+        }
         match self {
             Polarization::TE => (te.x, te.y),
             Polarization::TM => (tm.x, tm.y),
@@ -233,7 +241,7 @@ impl LMMatrixElement {
         Self { cos_mat: cos_mat, p_sin_mat: p_sin_mat }
     }
 
-    fn get_cos_elements(&self, exciton: &FullHamiltonian,
+    pub fn get_cos_elements(&self, exciton: &FullHamiltonian,
         rel_vecs: &Array2<f64>, i1: usize, i2: usize, q: &Array1<f64>) -> f64{
         
         let x_grid = &exciton.rel_ham.grid.x;
@@ -322,11 +330,28 @@ impl PhotonicHamiltonian {
         Self { photon_modes: photon_modes }
     }
 
-    fn get_h_ph_sing(&self, omega:f64, n_fock: usize) -> Array2<f64> {
+    fn _get_h_ph_sing(&self, omega:f64, n_fock: usize) -> Array2<f64> {
         let n_max = (n_fock - 1) as f64;
         let diags = Array1::linspace(0.0, omega * n_max, n_fock);
 
+        // println!("For Omega = {}, diags = {:?}", omega, diags);
+
         return Array2::from_diag(&diags);
+    }
+
+    fn get_h_ph_sing_full(&self, mode_i: usize) -> Array2<f64>{
+        self.photon_modes.iter().enumerate().map(|(idx,mode)| {
+            if idx == mode_i {
+                let n_max = (mode.n_fock - 1) as f64;
+                let diags = Array1::linspace(0.0, mode.omega * n_max, mode.n_fock);
+
+                Array2::from_diag(&diags)
+            }
+            else {
+                Array2::eye(mode.n_fock)
+            }
+        }).reduce(|acc, sing_mat| kron(&acc, &sing_mat))
+        .unwrap()
     }
 
     pub fn get_h_ph(&self) -> Array2<f64> {
@@ -337,16 +362,21 @@ impl PhotonicHamiltonian {
         if photon_modes.is_empty() {
             // Return an appropriate default or error handling
             // For example, a 1x1 zero matrix:
-            return Array2::ones((1, 1));
+            return Array2::eye(1);
         }
 
-        photon_modes.iter().map(|mode| self.get_h_ph_sing(mode.omega, mode.n_fock))
-            .reduce(|acc, h_ph_sing| kron(&acc, &h_ph_sing))
-            .unwrap()
+        let test = photon_modes.iter().enumerate().map(|(mode_i, _)| self.get_h_ph_sing_full(mode_i))
+            .reduce(|acc, h_ph_sing| &acc + &h_ph_sing)
+            .unwrap();
+
+        // println!("Photonic Hamiltonian {:?}", test);
+
+        test
     }
 }
 
-pub struct IntHamiltonian {
+#[derive(Clone)]
+pub struct LMIntHamiltonian {
     pub exciton: FullHamiltonian,
     pub photon_modes: Vec<PhotonMode>,
     pub coupling: f64,
@@ -354,7 +384,7 @@ pub struct IntHamiltonian {
     pub rel_vecs: Array2<f64>
 }
 
-impl IntHamiltonian {
+impl LMIntHamiltonian {
     pub fn new (exciton: FullHamiltonian, 
                 modes:  Vec<PhotonMode>, 
                 coupling: f64, 
@@ -383,9 +413,9 @@ impl IntHamiltonian {
             let q = &mode1.q;
 
             // P • q a^+ a
-            let p_dot_q = self.get_p_com(kappas, k, q);
+            // let p_dot_q = self.get_p_com(kappas, k, q);
             let aa_dag1 = self.get_h_ph_sing_full(mode_i);
-            h_int = &h_int + &kron(&(p_dot_q / m_com),&aa_dag1);
+            // h_int = &h_int + &kron(&(p_dot_q / m_com),&aa_dag1);
 
             // // P • A cos() (a^dag + a)
             let p_dot_eps = self.get_p_com(kappas, k, &mode1.eps);
@@ -427,6 +457,8 @@ impl IntHamiltonian {
             });
         });
         
+        let _sum = h_int.sum();
+
         h_int
     }
 
@@ -581,7 +613,12 @@ impl IntHamiltonian {
         
         // Precompute p_dot_unit for each component
         let p_dot_unit_cache: Vec<f64> = kappas.iter()
-            .map(|kappa| (k_arr.clone() + arr1(kappa)).dot(field_vec))
+            .map(|kappa| {
+                let _test = kappa.clone();
+                let _test1 = [field_vec[0], field_vec[1]];
+                let _test2 = [k_arr[0], k_arr[1]];
+                (k_arr.clone() + arr1(kappa)).dot(field_vec)
+            })
             .collect();
         
         // Build matrix using functional operations
@@ -645,7 +682,7 @@ impl IntHamiltonian {
 
 pub struct LightMatter {
     pub photon: PhotonicHamiltonian,
-    pub interaction: IntHamiltonian, // exciton info stored in interaction
+    pub interaction: LMIntHamiltonian, // exciton info stored in interaction
     pub exciton_energies: Array1<f64>,
     n_rel: usize, 
     n_ex_eig: usize, 
@@ -664,7 +701,7 @@ impl LightMatter {
             = exciton_ham.diagonalize_full_hamiltonian(n_rel, n_ex_eig, parity);
 
         let photon = PhotonicHamiltonian::new(photon_modes.clone());
-        let interaction = IntHamiltonian::new(exciton_ham, photon_modes.clone(), coupling, e_vecs, r_vecs);
+        let interaction = LMIntHamiltonian::new(exciton_ham, photon_modes.clone(), coupling, e_vecs, r_vecs);
         
         Self { photon: photon, interaction: interaction, exciton_energies: exciton_energies, n_rel: n_rel,
             n_ex_eig: n_ex_eig, parity: parity}
@@ -679,6 +716,7 @@ impl LightMatter {
         kron(&h_ex, &Array2::eye(h_ph.shape()[0]))
         + kron(&Array2::eye(h_ex.shape()[0]), &h_ph)
         + h_int
+
     }
 
     pub fn diagonalize_lm_ham(&self) -> (Array1<f64> , Array2<f64>){
@@ -723,7 +761,7 @@ impl BandStructureCalculatorLM {
         n_points: usize,
     ) -> String {
         format!(
-            "{}/band_a0{}_V0{}_grid{}_box{}_nrel{}_nbands{}_npoints{}_par{}_coup{}.json",
+            "{}/band_a0{}_V0{}_grid{}_box{}_nrel{}_nbands{}_npoints{}_par{}_coup{}_nmodes{}.bin",
             self.save_dir,
             self.a0,
             self.v0,
@@ -733,13 +771,14 @@ impl BandStructureCalculatorLM {
             self.light_matter.interaction.exciton.kappa_vectors.len(),
             n_points,
             self.light_matter.parity,
-            self.light_matter.interaction.coupling
+            self.light_matter.interaction.coupling,
+            self.light_matter.photon.photon_modes.len(),
         )
     }
     
     pub fn calculate_lm_band_structure(&self, n_points: usize) -> (Vec<Vec<f64>>, Vec<Array1<f64>>) {
         
-        let _filename = self.get_lm_band_structure_filename(n_points);
+        let filename = self.get_lm_band_structure_filename(n_points);
 
         let points_per_seg = n_points / self.sym_points.len();
 
@@ -768,7 +807,12 @@ impl BandStructureCalculatorLM {
         }).collect();
         pb.finish_with_message("Bandstructure calculation complete");
 
-        // save_band_data(filename, (k_points.clone(), eigvals_list.clone())).unwrap();
+        // Create directory if it doesn't exist
+        if let Some(parent) = Path::new(&filename).parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+
+        save_band_data(filename, (k_points.clone(), eigvals_list.clone())).unwrap();
 
         (k_points, eigvals_list)
     }
@@ -780,16 +824,19 @@ pub fn plot_band_structure(
     k_points: &Vec<Vec<f64>>,
     sym_points: Vec<Vec<f64>>,
     sym_labels: Vec<String>,
-    eigvals_list: &Vec<Array1<f64>>,
+    eigvals_list_full: &Vec<Array1<f64>>,
+    n_bands: usize,
     a0: f64,
     save_path: Option<&str>,
     _show: bool,
+    v0: f64,
+    coupling: f64,
 ) {
-    
     if let Some(path) = save_path {
         info!("Saving band structure plot to {}", path);
         
-        let root = BitMapBackend::new(path, (800, 600)).into_drawing_area();
+        // Create a larger drawing area with better resolution
+        let root = BitMapBackend::new(path, (1200, 900)).into_drawing_area();
         root.fill(&WHITE).unwrap();
         
         // Create x-axis for the plot (path length)
@@ -803,32 +850,47 @@ pub fn plot_band_structure(
         let dx = k_points[1][0] - k_points[0][0];
 
         // Define the high-symmetry points
-        let _b1 = 2.0 * std::f64::consts::PI / a0;
         let points_per_segment = k_points.len() / 3;
         let n_sym = sym_points.len();
         
-        let mut sym_positions:Vec<f64> = sym_points.iter().enumerate().map(|(ind,_)| {
-                x[((ind * points_per_segment) as i32 - 1).max(0) as usize]
-            }).collect();
+        let mut sym_positions: Vec<f64> = sym_points.iter().enumerate().map(|(ind, _)| {
+            x[ind * points_per_segment]
+        }).collect();
         sym_positions.push(x[x.len() - 1]);
 
-        println!("Sym_positions = {:?}", sym_positions);
-
-        // Find min/max energy values
+        // Find min/max energy values with some padding
         let mut min_energy = f64::INFINITY;
         let mut max_energy = f64::NEG_INFINITY;
+
+        let n_bands = n_bands.min(eigvals_list_full[0].len());
+
+        let eigvals_list: &Vec<Array1<f64>> = &eigvals_list_full.iter().map(|eigvals| {
+            eigvals.slice(s![0..n_bands-1]).to_owned()
+        }).collect();
         
         for eigvals in eigvals_list {
             min_energy = min_energy.min(eigvals.fold(f64::INFINITY, |a, &b| a.min(b)));
             max_energy = max_energy.max(eigvals.fold(f64::NEG_INFINITY, |a, &b| a.max(b)));
         }
         
-        // Set up chart
+        // Add padding to the energy range (5%)
+        let energy_padding = (max_energy - min_energy) * 0.05;
+        min_energy -= energy_padding;
+        max_energy += energy_padding;
+        
+
+        // Add a title with parameters
+        let title = format!("Exciton-Polariton Band Structure (a₀={:.1}, V₀={:.1}, g={:.3})", 
+                           a0, v0, coupling);
+
+        // Set up chart with better styling
         let mut chart = ChartBuilder::on(&root)
-            .caption("Exciton Band Structure", ("sans-serif", 20))
+            .caption(title, ("sans-serif", 30).into_font())
             .margin(10)
-            .x_label_area_size(30)
-            .y_label_area_size(30)
+            .margin_top(20)
+            .margin_bottom(10)
+            .x_label_area_size(40)
+            .y_label_area_size(60)
             .build_cartesian_2d(
                 x[0]..x[x.len() - 1],
                 min_energy..max_energy
@@ -837,59 +899,202 @@ pub fn plot_band_structure(
         
         // Configure mesh with custom x-ticks for high-symmetry points
         chart.configure_mesh()
-            .x_labels(4)
+            .x_labels(n_sym + 1)
             .x_label_formatter(&|v| {
-                sym_positions.iter().enumerate().map(|(ind,x)| {
-                    if (v - x).abs() < dx {
-                        sym_labels[ind%n_sym].clone()
+                for (ind, &x_pos) in sym_positions.iter().enumerate() {
+                    if (v - x_pos).abs() < dx {
+                        if ind < n_sym {
+                            return sym_labels[ind].clone();
+                        } else {
+                            return sym_labels[0].clone(); // Last point wraps to first label
+                        }
                     }
-                    else {
-                        "".to_string()
-                    }
-                }).collect()
+                }
+                "".to_string()
             })
-            .y_desc("Energy")
+            .y_desc("Energy (a.u.)")
+            .axis_desc_style(("sans-serif", 20))
+            .label_style(("sans-serif", 18))
+            .disable_mesh()
             .draw()
             .unwrap();
         
-        // Draw vertical lines at high-symmetry points
-        let line_vec: Vec<PathElement<_>> = sym_positions.iter().map(|x| {
-            PathElement::new(vec![(*x, min_energy), (*x, max_energy)], BLACK.mix(0.5))
-        }).collect();
-
-        chart.draw_series(line_vec).unwrap();
+        // Draw vertical lines at high-symmetry points with better styling
+        let line_style = ShapeStyle {
+            color: RGBColor(80, 80, 80).mix(0.8),
+            filled: false,
+            stroke_width: 1,
+        };
         
-        // Draw each band with colors based on parity values
-        for band_idx in 0..eigvals_list[0].len() {
-            for k_idx in 0..x.len() - 1 {
-                let color = BLUE;
-                
-                // Plot the segment with the appropriate color
-                chart.draw_series(LineSeries::new(
-                    vec![
-                        (x[k_idx], eigvals_list[k_idx][band_idx]),
-                        (x[k_idx+1], eigvals_list[k_idx+1][band_idx])
-                    ],
-                    color.mix(0.8)
-                )).unwrap();
-            }
+        for &x_pos in &sym_positions {
+            chart.draw_series(LineSeries::new(
+                vec![(x_pos, min_energy), (x_pos, max_energy)],
+                line_style,
+            )).unwrap();
         }
         
+        // Draw each band with different colors for better visualization
+        let num_bands = (&eigvals_list[0]).len();
+        println!("Number of bands: {}", num_bands );
+        
+        for band_idx in 0..num_bands {
+            let color = BLUE;
+            let band_points: Vec<(f64, f64)> = x.iter()
+                .zip(eigvals_list.iter())
+                .map(|(&x_val, eigvals)| (x_val, eigvals[band_idx]))
+                .collect();
+            
+            chart.draw_series(LineSeries::new(
+                band_points,
+                ShapeStyle {
+                    color: color.mix(0.9),
+                    filled: false,
+                    stroke_width: 2,
+                }
+            )).unwrap();
+        }
+        
+                
         root.present().unwrap();
+        info!("Band structure plot saved to {}", path);
     }
 }
 
+pub struct PolaronPolariton {
+    pub phonon_modes: Vec<PhotonMode>,
+    pub polariton: LightMatter,
+    pub coupling: Vec<f64>,
+    pub pp_int: PPIntHamiltonian,
+}
+
+impl PolaronPolariton {
+    pub fn new(phonon_modes: Vec<PhotonMode>, polariton: LightMatter, coupling: Vec<f64>) -> Self{
+
+        let pp_int = PPIntHamiltonian::new(polariton.interaction.clone(), 
+                                                             polariton.photon.photon_modes.clone(), 
+                                                             coupling.clone());
+
+        Self { phonon_modes: phonon_modes, polariton: polariton, coupling: coupling, pp_int: pp_int}
+    }
+
+    pub fn build_pp_hamiltonian(&self) -> Array2<f64>{
+        let h_lm = self.polariton.build_lm_hamiltonian();
+        let h_pn = self.get_h_pn();
+        let h_pp_int = self.pp_int.get_pp_int_h();
+
+        let i_lm = Array2::eye(h_lm.shape()[0]);
+        let i_pn = Array2::eye(h_pn.shape()[0]);
+
+        kron(&h_lm, &i_pn) + kron(&i_lm, &h_pn) + h_pp_int
+    }
+
+    pub fn get_h_pn(&self) -> Array2<f64> {
+        let phonon = PhotonicHamiltonian::new(self.phonon_modes.clone());
+        phonon.get_h_ph()
+    }
+
+}
+
+pub struct PPIntHamiltonian {
+    pub polariton_int: LMIntHamiltonian,
+    pub phonon_modes: Vec<PhotonMode>,
+    pub coupling: Vec<f64>,
+}
+
+impl PPIntHamiltonian {
+    pub fn new (polariton_int: LMIntHamiltonian,
+                phonon_modes: Vec<PhotonMode>,
+                coupling: Vec<f64>, ) -> Self {
+        Self {  polariton_int: polariton_int,
+                phonon_modes: phonon_modes,
+                coupling: coupling}
+    }
+
+    pub fn get_pp_int_h(&self) -> Array2<f64>{
+        let cos_x = self.get_pp_matrix_elements();
+
+        let n_ex = self.polariton_int.exciton_vecs.len();
+        let n_ph = self.polariton_int.photon_modes[0].n_fock.pow(self.polariton_int.photon_modes.len() as u32);
+        let n_pn = self.phonon_modes[0].n_fock.pow(self.phonon_modes.len() as u32);
+
+        let i_ph = Array2::eye(n_ph);
+
+        let mut h_int = Array2::<f64>::zeros((n_ex*n_ph*n_pn, n_ex*n_ph*n_pn));
+
+        self.phonon_modes.iter().enumerate().for_each(|(mode_i, _)| {
+            // 2 gamma cos() (b^+ + b)
+            
+            let coupling = self.coupling[mode_i];
+            let k_ind = vec![mode_i as i32];
+            let g_cos = coupling * 2.0 * self.polariton_int.get_matrix_from_hash(&k_ind, &cos_x);
+            
+            let b = self.get_b_sing_full(mode_i);
+
+            h_int = &h_int + &kron(&kron(&g_cos, &i_ph), &(&b.t() + &b))
+
+        });
+
+        h_int
+    }
+
+    pub fn get_b_sing_full(&self, mode_i:usize) -> Array2<f64> {
+        self.phonon_modes.iter().enumerate().map(|(idx,mode)| {
+            if idx == mode_i {
+                let dim = mode.n_fock;
+                let mut a = Array2::<f64>::zeros((dim, dim));
+                for n in 1..dim {
+                    a[[n-1,n]] = (n as f64).sqrt();
+                }
+
+                a
+            }
+            else {
+                Array2::eye(mode.n_fock)
+            }
+        }).reduce(|acc, sing_mat| kron(&acc, &sing_mat))
+        .unwrap()
+    }
+
+    pub fn get_pp_matrix_elements(&self) -> HashMap<(usize,usize, Vec<i32>), f64>{
+        let mat_calc = LMMatrixElement::new();
+
+        let rel_vecs = &self.polariton_int.rel_vecs;
+        let modes = &self.phonon_modes;
+        let exciton = &self.polariton_int.exciton;
+
+        let n_rel = rel_vecs.shape()[1];
+
+        let get_cos = |i1: usize, i2: usize, q: &Array1<f64>| -> f64 { 
+            mat_calc.get_cos_elements(exciton, rel_vecs, i1, i2, q)
+        };
+
+        let mut cos_mat: HashMap<(usize,usize, Vec<i32>), f64> = HashMap::new();
+
+        modes.iter().enumerate().for_each(|(k_ind,mode)| {
+            for i1 in 0 .. n_rel {
+                for i2 in 0 .. n_rel {
+                    let k = &mode.q;
+
+                    cos_mat.entry((i1,i2,vec![k_ind as i32]))
+                        .or_insert_with(|| get_cos(i1, i2, k));
+                }
+            }
+        });
+
+        cos_mat
+    }
+}
 
 fn main() {
 
     // Create exciton config
     let e_config = ExcitonConfig {
         n_kappa: 11,
-        a0: 3.0,
-        v0: 0.2,
+        a0: 9.0,
+        v0: 0.01,
         k: vec![0.0, 0.0],
-        m_e: 1.0,
-        m_h: 1.0,
+        m_e: 0.3,
+        m_h: 0.3,
         verbose: false,
         grid_size: 128,
         box_size: 3.0,
@@ -907,8 +1112,8 @@ fn main() {
     
     // Solve for the relative coordinate eigenstates
     let n_rel = 16;
-    let n_ex_eig = 30;
-    let parity = 1;
+    let n_ex_eig = 100;
+    let parity = 0;
 
     // let start_time = Instant::now();
 
@@ -923,9 +1128,10 @@ fn main() {
     
 
     
-    let coupling = 0.01;
-    let omega_0 = 0.1;
-    let qx_values = vec![-2e-4, 0.0, 2e-4];
+    let coupling = 0.00;
+    let omega_0 = 0.0;
+    // let qx_values = vec![0.0, 0.5e-3, 1e-3, 1.5e-3, 2e-3];
+    let qx_values = vec![0.0];
     let qz = omega_0 / C;
     let n_fock = 2;
     let photon_modes: Vec<PhotonMode> = qx_values.iter().map(|qx| {
@@ -935,17 +1141,22 @@ fn main() {
     let light_matter = LightMatter::new(exciton.full_ham, photon_modes, coupling,
                                     n_rel,n_ex_eig,parity);
 
-    let sym_points = vec![ vec![0.0,0.0], vec![PI / a0, 0.0], vec![PI/a0, PI/a0]];
+    // let sym_points = vec![ vec![0.0,0.0], vec![PI / a0, 0.0], vec![PI/a0, PI/a0]];
+    let sym_points = vec![ vec![0.0,0.0], vec![PI / a0, 0.0]];
+    // let sym_labels = vec!["Γ".to_string(), "X".to_string(), "M".to_string()];
+    let sym_labels = vec!["Γ".to_string(), "X".to_string()];
 
     let start_time = Instant::now();
-    let band_structure = BandStructureCalculatorLM::new(light_matter, a0,v0, "lm_data/".to_string(), sym_points.clone());
+    let band_structure = BandStructureCalculatorLM::new(light_matter, a0,v0, "lm_data".to_string(), sym_points.clone());
     let (k_points, eigvals_list) = band_structure.calculate_lm_band_structure(60);
     let end_time = Instant::now();
     let duration = end_time.duration_since(start_time);
     println!("Calc dispersion in {:?}", duration);
 
-    let sym_labels = vec!["Γ".to_string(), "X".to_string(), "M".to_string()];
-    plot_band_structure(&k_points, sym_points, sym_labels, &eigvals_list, a0, Some("disp_plot.png"), false);
+    let n_bands = 40;
+
+    plot_band_structure(&k_points, sym_points, sym_labels, &eigvals_list, n_bands, a0, Some("disp_plot.png"), false,
+        v0, coupling);
 
     
     // let start_time = Instant::now();
