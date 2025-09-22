@@ -538,74 +538,74 @@ impl LMIntHamiltonian {
         let n_eig = e_vecs.len();
         let n_rel = e_vecs[0].len() / n_com;
         
-        // // Initialize triplet matrix for building sparse matrix
-        // let mut mat = TriMat::new((n_eig, n_eig));
+        // Initialize triplet matrix for building sparse matrix
+        let mut mat = TriMat::new((n_eig, n_eig));
         
-        // // Build matrix for relative coordinate operators
-        // for idx1 in 0..n_eig {
-        //     let vec1 = &e_vecs[idx1];
-            
-        //     for idx2 in 0..n_eig {
-        //         let vec2 = &e_vecs[idx2];
-                
-        //             // Calculate matrix element in the full basis
-        //         let mat_ij: f64 = (0..n_rel).flat_map(|rel_ind1| {
-        //                 (0 .. n_rel).flat_map(move |rel_ind2| {
-        //                     // Get the matrix element for these relative states
-        //                     let mat_element = mat_hash.get(&(rel_ind1,rel_ind2,q_inds.clone()))
-        //                                 .unwrap_or_else(|| panic!("Matrix element missing for i1 = {}, 
-        //                                 i2 = {}, q_ind = {:?}",rel_ind1,rel_ind2, q_inds));
-                            
-        //                     // Sum over center-of-mass states (diagonal in CoM)
-        //                     (0..n_com).map(move |com_ind| {
-        //                         let i1 = n_com * rel_ind1 + com_ind;
-        //                         let i2 = n_com * rel_ind2 + com_ind;
-
-        //                         let a1 = vec1[i1];
-        //                         let a2 = vec2[i2];
-
-        //                         a1 * a2 * mat_element
-        //                     })
-        //                 })
-        //             }).sum();
-                
-        //         // Only add non-zero elements to sparse matrix
-        //         if mat_ij.abs() > 1e-10 {
-        //             mat.add_triplet(idx1, idx2, mat_ij);
-        //         }
-        //     }
-        // }
-        
-        // mat.to_csr()
-
-        CsMatBase::csr_from_dense(Array2::from_shape_fn((n_eig, n_eig), |(idx1, idx2)| {
-            // For each pair of eigenvectors
+        // Build matrix for relative coordinate operators
+        for idx1 in 0..n_eig {
             let vec1 = &e_vecs[idx1];
-            let vec2 = &e_vecs[idx2];
+            
+            for idx2 in 0..n_eig {
+                let vec2 = &e_vecs[idx2];
+                
+                    // Calculate matrix element in the full basis
+                let mat_ij: f64 = (0..n_rel).flat_map(|rel_ind1| {
+                        (0 .. n_rel).flat_map(move |rel_ind2| {
+                            // Get the matrix element for these relative states
+                            let mat_element = mat_hash.get(&(rel_ind1,rel_ind2,q_inds.clone()))
+                                        .unwrap_or_else(|| panic!("Matrix element missing for i1 = {}, 
+                                        i2 = {}, q_ind = {:?}",rel_ind1,rel_ind2, q_inds));
+                            
+                            // Sum over center-of-mass states (diagonal in CoM)
+                            (0..n_com).map(move |com_ind| {
+                                let i1 = n_com * rel_ind1 + com_ind;
+                                let i2 = n_com * rel_ind2 + com_ind;
 
-            // Calculate matrix element in the full basis
-            let mat_ij: f64 = (0..n_rel).flat_map(|rel_ind1| {
-                    (0 .. n_rel).flat_map(move |rel_ind2| {
-                        // Get the matrix element for these relative states
-                        let mat_element = mat_hash.get(&(rel_ind1,rel_ind2,q_inds.clone()))
-                                    .unwrap_or_else(|| panic!("Matrix element missing for i1 = {}, 
-                                    i2 = {}, q_ind = {:?}",rel_ind1,rel_ind2, q_inds));
-                        
-                        // Sum over center-of-mass states (diagonal in CoM)
-                        (0..n_com).map(move |com_ind| {
-                            let i1 = n_com * rel_ind1 + com_ind;
-                            let i2 = n_com * rel_ind2 + com_ind;
+                                let a1 = vec1[i1];
+                                let a2 = vec2[i2];
 
-                            let a1 = vec1[i1];
-                            let a2 = vec2[i2];
-
-                            a1 * a2 * mat_element
+                                a1 * a2 * mat_element
+                            })
                         })
-                    })
-                }).sum();
+                    }).sum();
+                
+                // Only add non-zero elements to sparse matrix
+                if mat_ij.abs() > 1e-10 {
+                    mat.add_triplet(idx1, idx2, mat_ij);
+                }
+            }
+        }
+        
+        mat.to_csr()
 
-            mat_ij
-        }).view(), 1e-10)
+        // CsMatBase::csr_from_dense(Array2::from_shape_fn((n_eig, n_eig), |(idx1, idx2)| {
+        //     // For each pair of eigenvectors
+        //     let vec1 = &e_vecs[idx1];
+        //     let vec2 = &e_vecs[idx2];
+
+        //     // Calculate matrix element in the full basis
+        //     let mat_ij: f64 = (0..n_rel).flat_map(|rel_ind1| {
+        //             (0 .. n_rel).flat_map(move |rel_ind2| {
+        //                 // Get the matrix element for these relative states
+        //                 let mat_element = mat_hash.get(&(rel_ind1,rel_ind2,q_inds.clone()))
+        //                             .unwrap_or_else(|| panic!("Matrix element missing for i1 = {}, 
+        //                             i2 = {}, q_ind = {:?}",rel_ind1,rel_ind2, q_inds));
+                        
+        //                 // Sum over center-of-mass states (diagonal in CoM)
+        //                 (0..n_com).map(move |com_ind| {
+        //                     let i1 = n_com * rel_ind1 + com_ind;
+        //                     let i2 = n_com * rel_ind2 + com_ind;
+
+        //                     let a1 = vec1[i1];
+        //                     let a2 = vec2[i2];
+
+        //                     a1 * a2 * mat_element
+        //                 })
+        //             })
+        //         }).sum();
+
+        //     mat_ij
+        // }).view(), 1e-10)
     }
 
     /// Calculates the sparse center-of-mass momentum matrix element P·field_vec
@@ -718,6 +718,8 @@ impl LightMatter {
     pub fn diagonalize_lm_ham_sparse(&self, n_eigenvalues: usize) -> (Array1<f64>, Array2<f64>) {
         // Build the sparse Hamiltonian
         let h_lm = self.build_lm_hamiltonian_sparse();
+
+        println!("Sparse Hamiltonian of density {}% built.", h_lm.density() * 100.0);
         let (n, _) = h_lm.shape();
         
         // Create ARPACK operator
@@ -1327,7 +1329,7 @@ fn main() {
     let omega_0 = 0.25;    // Photon frequency
     
     // Define photon modes
-    let qx_values = vec![0.0,0.01,0.02,0.03];
+    let qx_values = vec![0.0,0.01,0.02,0.03, 0.04,0.05,0.06,0.07, 0.08,0.09,0.1]; // Photon wavevectors along x
     let qz = omega_0 / C;
     let n_fock = 2;      // Dimension of Fock space
     
@@ -1352,9 +1354,9 @@ fn main() {
     let band_structure = BandStructureCalculatorLM::new(
         light_matter, a0, v0, "lm_data".to_string(), sym_points.clone());
     
-    // Calculate band structure with 60 points along the path
+    let n_k_points = 6;  // Number of k-points along the path
     // Using sparse matrices and ARPACK to calculate 40 lowest eigenvalues
-    let (k_points, eigvals_list) = band_structure.calculate_lm_band_structure_sparse(60, 40);
+    let (k_points, eigvals_list) = band_structure.calculate_lm_band_structure_sparse(n_k_points, 40);
     
     // End timing and print duration
     let end_time = Instant::now();

@@ -1264,7 +1264,7 @@ fn main() {
     let omega_0 = 0.25;    // Photon frequency
     
     // Define photon modes
-    let qx_values = vec![0.0,0.01,0.02,0.03];
+    let qx_values = vec![0.0,0.01,0.02,0.03, 0.04,0.05,0.06,0.07];
     let qz = omega_0 / C;
     let n_fock = 2;      // Dimension of Fock space
     
@@ -1290,7 +1290,8 @@ fn main() {
         light_matter, a0, v0, "lm_data".to_string(), sym_points.clone());
     
     // Calculate band structure with 60 points along the path
-    let (k_points, eigvals_list) = band_structure.calculate_lm_band_structure(60);
+    let n_k_points = 6;  // Number of k-points along the path
+    let (k_points, eigvals_list) = band_structure.calculate_lm_band_structure(n_k_points);
     
     // End timing and print duration
     let end_time = Instant::now();
