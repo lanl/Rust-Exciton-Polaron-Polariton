@@ -430,9 +430,10 @@ impl LMIntHamiltonian {
 
             // Define photonic operators
             let a1 = self.get_a_sing_full(mode_i);
+            let a1_dag = a1.clone().transpose_into().to_csr();
             let aa_dag1 = self.get_h_ph_sing_full(mode_i, &dummy_photon);
-            let x_cav_1 = &a1 + &a1.transpose_view();
-            let p_cav_1 = &a1.transpose_view() - &a1;
+            let x_cav_1 = &a1 + &a1_dag;
+            let p_cav_1 = &a1_dag - &a1;
 
             // Define relative operators
             let cos_x_mat = self.get_matrix_from_hash_sparse(&q_ind, &cos_x);
@@ -472,6 +473,7 @@ impl LMIntHamiltonian {
 
                 // Diamagnetic terms (A²)
                 let a2 = self.get_a_sing_full(mode_j);
+                let a2_dag = a2.clone().transpose_into().to_csr();
                 let q_ind1 = mode_i.max(mode_j) as i32;
                 let q_ind2 = mode_i.min(mode_j) as i32;
                 
@@ -482,7 +484,7 @@ impl LMIntHamiltonian {
                 let delta = kron(
                     (&cos_sum_matrix * diamag_factor).view(), 
                     (&(mul_csr_csr(a1.view(), a2.view()) as CsMat<f64>) 
-                        + &(mul_csr_csr(a1.transpose_view(), a2.transpose_view()) as CsMat<f64>)
+                        + &(mul_csr_csr(a1_dag.view(), a2_dag.view()) as CsMat<f64>)
                 ).view());
 
                 h_int = &h_int + &delta;
@@ -492,8 +494,8 @@ impl LMIntHamiltonian {
                 
                 let delta = kron(
                     (&cos_diff_matrix * diamag_factor).view(), 
-                    (&(mul_csr_csr(a1.transpose_view(), a2.view()) as CsMat<f64>) 
-                        + &(mul_csr_csr(a1.view(), a2.transpose_view()) as CsMat<f64>)
+                    (&(mul_csr_csr(a1_dag.view(), a2.view()) as CsMat<f64>) 
+                        + &(mul_csr_csr(a1.view(), a2_dag.view()) as CsMat<f64>)
                 ).view());
 
                 h_int = &h_int + &delta;
@@ -510,11 +512,11 @@ impl LMIntHamiltonian {
             if idx == mode_i {
                 // Create annihilation operator for this mode
                 let dim = mode.n_fock;
-                let mut a = CsMat::<f64>::zero((dim, dim));
+                let mut a = TriMat::new((dim, dim));
                 for n in 1..dim {
-                    a[[n-1,n]] = (n as f64).sqrt();
+                    a.add_triplet(n-1, n, (n as f64).sqrt());
                 }
-                a
+                a.to_csr()
             }
             else {
                 // Identity for other modes
@@ -687,6 +689,7 @@ impl LightMatter {
     pub fn diagonalize_lm_ham_sparse(&self, n_eigenvalues: usize) -> (Array1<f64>, Array2<f64>) {
         // Build the sparse Hamiltonian
         let h_lm = self.build_lm_hamiltonian_sparse();
+        let (n, _) = h_lm.shape();
         
         // Create ARPACK operator
         let op = ArpackOperator::new(h_lm);
@@ -698,7 +701,7 @@ impl LightMatter {
             .max_iter(1000);          // Maximum iterations
         
         // Solve eigenvalue problem
-        let result = arpack::eigs(op, n_eigenvalues, config).unwrap();
+        let result = arpack::eigs(op, n,n_eigenvalues, config).unwrap();
         
         // Convert to ndarray format
         let eigenvalues = Array1::from_vec(result.values);
@@ -925,6 +928,7 @@ impl PolaronPolariton {
     pub fn diagonalize_pp_ham_sparse(&self, n_eigenvalues: usize) -> (Array1<f64>, Array2<f64>) {
         // Build the sparse Hamiltonian
         let h_pp = self.build_pp_hamiltonian_sparse();
+        let (n, _) = h_pp.shape();
         
         // Create ARPACK operator
         let op = ArpackOperator::new(h_pp);
@@ -936,7 +940,7 @@ impl PolaronPolariton {
             .max_iter(1000);          // Maximum iterations
         
         // Solve eigenvalue problem
-        let result = arpack::eigs(op, n_eigenvalues, config).unwrap();
+        let result = arpack::eigs(op, n, n_eigenvalues, config).unwrap();
         
         // Convert to ndarray format
         let eigenvalues = Array1::from_vec(result.values);
