@@ -503,9 +503,9 @@ impl LMIntHamiltonian {
             let a1 = self.get_a_sing_full(mode_i);
             h_int = &h_int + &kron(&p_cos, &(&a1 + &a1.t()));
 
-            // ∇·A sin(q·r) (a† - a) term
+            // -∇·A sin(q·r) (a† - a) term
             let p_sin_x = &matrix_elements.p_sin_mat;
-            let p_sin = self.get_matrix_from_hash(&q_ind, &p_sin_x) * self.coupling * 2.0 / self.exciton.rel_ham.mu;
+            let p_sin = self.get_matrix_from_hash(&q_ind, &p_sin_x) * self.coupling * -2.0 / self.exciton.rel_ham.mu;
             h_int = &h_int + &kron(&p_sin, &(&a1.t() - &a1));
 
             // Iterate over all photon modes again for quadratic terms
@@ -1256,15 +1256,15 @@ fn main() {
     
     // Parameters for diagonalization
     let n_rel = 16;      // Number of relative coordinate states
-    let n_ex_eig = 100;  // Number of exciton eigenstates
+    let n_ex_eig = 20;  // Number of exciton eigenstates
     let parity = 0;      // Parity of states to consider
     
     // Light-matter coupling parameters
-    let coupling = 0.00;  // Coupling strength
-    let omega_0 = 0.0;    // Photon frequency
+    let coupling = 0.03;  // Coupling strength
+    let omega_0 = 0.25;    // Photon frequency
     
     // Define photon modes
-    let qx_values = vec![0.0];
+    let qx_values = vec![0.0,0.01,0.02,0.03];
     let qz = omega_0 / C;
     let n_fock = 2;      // Dimension of Fock space
     

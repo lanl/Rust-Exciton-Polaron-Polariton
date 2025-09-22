@@ -9,7 +9,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use log::info;
 use plotters::prelude::*;
 
-mod main_dense;
+// mod main_dense;
 
 // Add sprs and arpack dependencies
 use sprs::{kronecker_product as kron, smmp::mul_csr_csr, CsMat, CsMatBase, TriMat};
@@ -453,8 +453,8 @@ impl LMIntHamiltonian {
             let delta: CsMat<f64> = kron(p_cos_matrix.view(), x_cav_1.view());
             h_int = &h_int + &delta;
             
-            // ∇·A sin(q·r) (a† - a) term
-            let p_sin_factor = self.coupling * 2.0 / self.exciton.rel_ham.mu;
+            // -∇·A sin(q·r) (a† - a) term
+            let p_sin_factor = -self.coupling * 2.0 / self.exciton.rel_ham.mu;
             let delta = kron((&p_sin_x_mat * p_sin_factor).view(), p_cav_1.view());
             h_int = &h_int + &delta;
             
@@ -538,45 +538,74 @@ impl LMIntHamiltonian {
         let n_eig = e_vecs.len();
         let n_rel = e_vecs[0].len() / n_com;
         
-        // Initialize triplet matrix for building sparse matrix
-        let mut mat = TriMat::new((n_eig, n_eig));
+        // // Initialize triplet matrix for building sparse matrix
+        // let mut mat = TriMat::new((n_eig, n_eig));
         
-        // Build matrix for relative coordinate operators
-        for idx1 in 0..n_eig {
-            let vec1 = &e_vecs[idx1];
+        // // Build matrix for relative coordinate operators
+        // for idx1 in 0..n_eig {
+        //     let vec1 = &e_vecs[idx1];
             
-            for idx2 in 0..n_eig {
-                let vec2 = &e_vecs[idx2];
+        //     for idx2 in 0..n_eig {
+        //         let vec2 = &e_vecs[idx2];
                 
-                    // Calculate matrix element in the full basis
-                let mat_ij: f64 = (0..n_rel).flat_map(|rel_ind1| {
-                        (0 .. n_rel).flat_map(move |rel_ind2| {
-                            // Get the matrix element for these relative states
-                            let mat_element = mat_hash.get(&(rel_ind1,rel_ind2,q_inds.clone()))
-                                        .unwrap_or_else(|| panic!("Matrix element missing for i1 = {}, 
-                                        i2 = {}, q_ind = {:?}",rel_ind1,rel_ind2, q_inds));
+        //             // Calculate matrix element in the full basis
+        //         let mat_ij: f64 = (0..n_rel).flat_map(|rel_ind1| {
+        //                 (0 .. n_rel).flat_map(move |rel_ind2| {
+        //                     // Get the matrix element for these relative states
+        //                     let mat_element = mat_hash.get(&(rel_ind1,rel_ind2,q_inds.clone()))
+        //                                 .unwrap_or_else(|| panic!("Matrix element missing for i1 = {}, 
+        //                                 i2 = {}, q_ind = {:?}",rel_ind1,rel_ind2, q_inds));
                             
-                            // Sum over center-of-mass states (diagonal in CoM)
-                            (0..n_com).map(move |com_ind| {
-                                let i1 = n_com * rel_ind1 + com_ind;
-                                let i2 = n_com * rel_ind2 + com_ind;
+        //                     // Sum over center-of-mass states (diagonal in CoM)
+        //                     (0..n_com).map(move |com_ind| {
+        //                         let i1 = n_com * rel_ind1 + com_ind;
+        //                         let i2 = n_com * rel_ind2 + com_ind;
 
-                                let a1 = vec1[i1];
-                                let a2 = vec2[i2];
+        //                         let a1 = vec1[i1];
+        //                         let a2 = vec2[i2];
 
-                                a1 * a2 * mat_element
-                            })
-                        })
-                    }).sum();
+        //                         a1 * a2 * mat_element
+        //                     })
+        //                 })
+        //             }).sum();
                 
-                // Only add non-zero elements to sparse matrix
-                if mat_ij.abs() > 1e-10 {
-                    mat.add_triplet(idx1, idx2, mat_ij);
-                }
-            }
-        }
+        //         // Only add non-zero elements to sparse matrix
+        //         if mat_ij.abs() > 1e-10 {
+        //             mat.add_triplet(idx1, idx2, mat_ij);
+        //         }
+        //     }
+        // }
         
-        mat.to_csr()
+        // mat.to_csr()
+
+        CsMatBase::csr_from_dense(Array2::from_shape_fn((n_eig, n_eig), |(idx1, idx2)| {
+            // For each pair of eigenvectors
+            let vec1 = &e_vecs[idx1];
+            let vec2 = &e_vecs[idx2];
+
+            // Calculate matrix element in the full basis
+            let mat_ij: f64 = (0..n_rel).flat_map(|rel_ind1| {
+                    (0 .. n_rel).flat_map(move |rel_ind2| {
+                        // Get the matrix element for these relative states
+                        let mat_element = mat_hash.get(&(rel_ind1,rel_ind2,q_inds.clone()))
+                                    .unwrap_or_else(|| panic!("Matrix element missing for i1 = {}, 
+                                    i2 = {}, q_ind = {:?}",rel_ind1,rel_ind2, q_inds));
+                        
+                        // Sum over center-of-mass states (diagonal in CoM)
+                        (0..n_com).map(move |com_ind| {
+                            let i1 = n_com * rel_ind1 + com_ind;
+                            let i2 = n_com * rel_ind2 + com_ind;
+
+                            let a1 = vec1[i1];
+                            let a2 = vec2[i2];
+
+                            a1 * a2 * mat_element
+                        })
+                    })
+                }).sum();
+
+            mat_ij
+        }).view(), 1e-10)
     }
 
     /// Calculates the sparse center-of-mass momentum matrix element P·field_vec
@@ -1269,7 +1298,7 @@ fn main() {
     let e_config = ExcitonConfig {
         n_kappa: 11,                           // Number of k-points in Brillouin zone
         a0: 9.0,                               // Lattice constant
-        v0: 0.01,                              // Potential strength
+        v0: 0.1,                              // Potential strength
         k: vec![0.0, 0.0],                     // Initial k-vector
         m_e: 0.3,                              // Electron effective mass
         m_h: 0.3,                              // Hole effective mass
@@ -1290,15 +1319,15 @@ fn main() {
     
     // Parameters for diagonalization
     let n_rel = 16;      // Number of relative coordinate states
-    let n_ex_eig = 100;  // Number of exciton eigenstates
+    let n_ex_eig = 20;  // Number of exciton eigenstates
     let parity = 0;      // Parity of states to consider
     
     // Light-matter coupling parameters
-    let coupling = 0.00;  // Coupling strength
-    let omega_0 = 0.0;    // Photon frequency
+    let coupling = 0.03;  // Coupling strength
+    let omega_0 = 0.25;    // Photon frequency
     
     // Define photon modes
-    let qx_values = vec![0.0];
+    let qx_values = vec![0.0,0.01,0.02,0.03];
     let qz = omega_0 / C;
     let n_fock = 2;      // Dimension of Fock space
     
