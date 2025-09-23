@@ -1,209 +1,15 @@
 // Import statements for the various libraries used in this code
-use exciton_2d::{utils::fast_matrix_element_calc, Exciton2DGridSystem, ExcitonConfig, FullHamiltonian};
-use ndarray_linalg::{c64, Eigh};
-use std::{collections::HashMap, f64::consts::PI, path::PathBuf, usize};
-use ndarray::{arr1, array, linalg::kron, Array1, Array2, s};
-use std::time::Instant;
-use serde::{Serialize, Deserialize};
+use exciton_2d::{utils::fast_matrix_element_calc, FullHamiltonian};
+use ndarray_linalg::{Eigh};
+use std::{collections::HashMap, f64::consts::PI, usize};
+use ndarray::{arr1, linalg::kron, Array1, Array2, s};
 use std::path::Path;
-use bincode;
 use indicatif::{ProgressBar, ProgressStyle};
 
 use log::info;
 use plotters::prelude::*;
 
-// Define a serializable structure for band structure data storage
-#[derive(Serialize, Deserialize)]
-struct SerializableData {
-    matrix: Vec<Vec<f64>>,  // Stores k-points as a 2D matrix
-    arrays: Vec<Vec<f64>>,  // Stores eigenvalues as vectors
-}
-
-/// Saves band structure data to a binary file using bincode serialization
-/// 
-/// # Arguments
-/// * `path` - File path where data will be saved
-/// * `data` - Tuple containing k-points and eigenvalues
-/// 
-/// # Returns
-/// * `Result` indicating success or failure of the operation
-pub fn save_band_data<P: AsRef<Path>>(
-    path: P,
-    data: (Vec<Vec<f64>>, Vec<Array1<f64>>)
-) -> Result<(), Box<dyn std::error::Error>> {
-    // Unpack the tuple into k-points and eigenvalues
-    let (matrix, arrays) = data;
-    
-    // Convert Vec<Array1<f64>> to Vec<Vec<f64>> for serialization
-    let converted_arrays: Vec<Vec<f64>> = arrays
-        .into_iter()
-        .map(|arr| arr.to_vec())
-        .collect();
-    
-    // Create the serializable structure
-    let serializable_data = SerializableData {
-        matrix,
-        arrays: converted_arrays,
-    };
-    
-    // Serialize to bytes using bincode
-    let encoded: Vec<u8> = bincode::serialize(&serializable_data)?;
-    
-    // Write bytes to file
-    std::fs::write(path, encoded)?;
-    
-    Ok(())
-}
-
-/// Loads band structure data from a binary file
-/// 
-/// # Arguments
-/// * `path` - File path to read data from
-/// 
-/// # Returns
-/// * `Result` containing the deserialized k-points and eigenvalues, or an error
-pub fn load_band_data<P: AsRef<Path>>(
-    path: P
-) -> Result<(Vec<Vec<f64>>, Vec<Array1<f64>>), Box<dyn std::error::Error>> {
-    // Read file to bytes
-    let bytes = std::fs::read(path)?;
-    
-    // Deserialize from bytes
-    let serializable_data: SerializableData = bincode::deserialize(&bytes)?;
-    
-    // Convert Vec<Vec<f64>> back to Vec<Array1<f64>>
-    let arrays: Vec<Array1<f64>> = serializable_data.arrays
-        .into_iter()
-        .map(|vec| Array1::from_vec(vec))
-        .collect();
-    
-    Ok((serializable_data.matrix, arrays))
-}
-
-// Speed of light in atomic units
-const C: f64 = 137.036;
-
-/// Converts a real matrix to a complex matrix
-/// 
-/// # Arguments
-/// * `arr` - Real-valued matrix to convert
-/// 
-/// # Returns
-/// * Complex-valued matrix with the same values
-pub fn to_c_2(arr:&Array2<f64>) -> Array2<c64>{
-    let new_arr = arr.map(|x| c64::from(x));
-    new_arr    
-}
-
-/// Represents a 3D vector with x, y, z components
-#[derive(Debug, Clone, Copy)]
-pub struct Vector3D {
-    x: f64,
-    y: f64,
-    z: f64,
-}
-
-impl Vector3D {
-    /// Create a new 3D vector with the given components
-    fn new(x: f64, y: f64, z: f64) -> Self {
-        Vector3D { x, y, z }
-    }
-    
-    /// Calculate the magnitude (length) of the vector
-    fn magnitude(&self) -> f64 {
-        f64::sqrt(self.x * self.x + self.y * self.y + self.z * self.z)
-    }
-    
-    /// Normalize the vector (make it unit length)
-    fn normalize(&self) -> Self {
-        let mag = self.magnitude();
-        if mag < 1e-10 {
-            // Avoid division by zero for very small vectors
-            return *self;
-        }
-        Vector3D {
-            x: self.x / mag,
-            y: self.y / mag,
-            z: self.z / mag,
-        }
-    }
-    
-    /// Calculate the cross product with another vector
-    fn cross(&self, other: &Vector3D) -> Self {
-        Vector3D {
-            x: self.y * other.z - self.z * other.y,
-            y: self.z * other.x - self.x * other.z,
-            z: self.x * other.y - self.y * other.x,
-        }
-    }
-    
-    /// Calculate the dot product with another vector
-    fn _dot(&self, other: &Vector3D) -> f64 {
-        self.x * other.x + self.y * other.y + self.z * other.z
-    }
-}
-
-/// Represents a photon mode with polarization, wavevector, frequency, and Fock space dimension
-#[derive(Debug, Clone)]
-pub struct PhotonMode {
-    pub eps: Array1<f64>, // Polarization vector (x,y components)
-    pub q: Array1<f64>,   // Wavevector (x,y components)
-    pub omega: f64,       // Frequency
-    pub n_fock: usize     // Dimension of the Fock space
-}
-
-impl PhotonMode {
-    /// Creates a new photon mode with the specified wavevector, polarization, and Fock space dimension
-    pub fn new(q: Vector3D, pol: Polarization, n_fock: usize) -> Self{
-        // Calculate frequency from wavevector magnitude
-        let omega = q.magnitude() * C;
-        
-        // Define normal vector (perpendicular to 2D plane)
-        let normal = Vector3D::new(0.0, 0.0, 1.0);
-        
-        // Get polarization vector based on polarization type
-        let eps = pol.get_pol(q, normal);
-
-        // Extract 2D components for our simulation
-        let q = array![q.x, q.y];
-        let eps = array![eps.0, eps.1];
-
-        Self { eps: eps, q: q, omega: omega, n_fock: n_fock }
-    }
-}
-
-/// Enum representing different polarization types for photons
-pub enum Polarization {
-    TE, // Transverse Electric
-    TM  // Transverse Magnetic
-}
-
-impl Polarization {
-    /// Gets the polarization vector for a given wavevector and normal vector
-    pub fn get_pol(&self, q: Vector3D, normal: Vector3D) -> (f64,f64) {
-        let te:Vector3D;
-        let tm:Vector3D;
-
-        // Handle special case when q is parallel to normal
-        if q.cross(&normal).normalize().magnitude() < 0.5 {
-            // Default polarization vectors when q is along z-axis
-            te = Vector3D::new(0.0, 1.0, 0.0);
-            tm = Vector3D::new(1.0, 0.0, 0.0);
-        }
-        else {
-            // Standard case: TE is perpendicular to both q and normal
-            te = q.cross(&normal).normalize();
-            // TM is perpendicular to both q and TE
-            tm = te.cross(&q).normalize();
-        }
-        
-        // Return x,y components of the polarization vector
-        match self {
-            Polarization::TE => (te.x, te.y),
-            Polarization::TM => (tm.x, tm.y),
-        }
-    }
-}
+use crate::utils::{PhotonMode, save_band_data};
 
 /// Stores matrix elements for light-matter interaction calculations
 pub struct LMMatrixElement {
@@ -1229,116 +1035,116 @@ impl PPIntHamiltonian {
     }
 }
 
-/// Main function demonstrating the use of the light-matter coupling framework
-fn main() {
-    // Create exciton configuration
-    let e_config = ExcitonConfig {
-        n_kappa: 11,                           // Number of k-points in Brillouin zone
-        a0: 9.0,                               // Lattice constant
-        v0: 0.01,                              // Potential strength
-        k: vec![0.0, 0.0],                     // Initial k-vector
-        m_e: 0.3,                              // Electron effective mass
-        m_h: 0.3,                              // Hole effective mass
-        verbose: false,                        // Verbose output flag
-        grid_size: 128,                        // Grid size for real-space calculations
-        box_size: 3.0,                         // Real-space box size
-        save_dir: PathBuf::from("saved_data_lm"), // Directory to save data
-        recalculate: false,                    // Whether to recalculate existing data
-        n_jobs: 2,                             // Number of parallel jobs
-        use_gpu: false,                        // Whether to use GPU acceleration
-        batch_size: 32,                        // Batch size for calculations
-    };
+// /// Main function demonstrating the use of the light-matter coupling framework
+// fn main() {
+//     // Create exciton configuration
+//     let e_config = ExcitonConfig {
+//         n_kappa: 11,                           // Number of k-points in Brillouin zone
+//         a0: 9.0,                               // Lattice constant
+//         v0: 0.01,                              // Potential strength
+//         k: vec![0.0, 0.0],                     // Initial k-vector
+//         m_e: 0.3,                              // Electron effective mass
+//         m_h: 0.3,                              // Hole effective mass
+//         verbose: false,                        // Verbose output flag
+//         grid_size: 128,                        // Grid size for real-space calculations
+//         box_size: 3.0,                         // Real-space box size
+//         save_dir: PathBuf::from("saved_data_lm"), // Directory to save data
+//         recalculate: false,                    // Whether to recalculate existing data
+//         n_jobs: 2,                             // Number of parallel jobs
+//         use_gpu: false,                        // Whether to use GPU acceleration
+//         batch_size: 32,                        // Batch size for calculations
+//     };
 
-    // Create the 2D exciton system
-    let a0 = (&e_config).a0;
-    let v0 = (&e_config).v0;
-    let exciton = Exciton2DGridSystem::from_config(e_config);
+//     // Create the 2D exciton system
+//     let a0 = (&e_config).a0;
+//     let v0 = (&e_config).v0;
+//     let exciton = Exciton2DGridSystem::from_config(e_config);
     
-    // Parameters for diagonalization
-    let n_rel = 16;      // Number of relative coordinate states
-    let n_ex_eig = 20;  // Number of exciton eigenstates
-    let parity = 0;      // Parity of states to consider
+//     // Parameters for diagonalization
+//     let n_rel = 16;      // Number of relative coordinate states
+//     let n_ex_eig = 20;  // Number of exciton eigenstates
+//     let parity = 0;      // Parity of states to consider
     
-    // Light-matter coupling parameters
-    let coupling = 0.03;  // Coupling strength
-    let omega_0 = 0.25;    // Photon frequency
+//     // Light-matter coupling parameters
+//     let coupling = 0.03;  // Coupling strength
+//     let omega_0 = 0.25;    // Photon frequency
     
-    // Define photon modes
-    let qx_values = vec![0.0,0.01,0.02,0.03, 0.04,0.05,0.06,0.07];
-    let qz = omega_0 / C;
-    let n_fock = 2;      // Dimension of Fock space
+//     // Define photon modes
+//     let qx_values = vec![0.0,0.01,0.02,0.03, 0.04,0.05,0.06,0.07];
+//     let qz = omega_0 / C;
+//     let n_fock = 2;      // Dimension of Fock space
     
-    // Create photon modes
-    let photon_modes: Vec<PhotonMode> = qx_values.iter().map(|qx| {
-            PhotonMode::new(Vector3D { x: *qx, y: 0.0, z: qz }, Polarization::TE, n_fock)
-        }).collect();
+//     // Create photon modes
+//     let photon_modes: Vec<PhotonMode> = qx_values.iter().map(|qx| {
+//             PhotonMode::new(Vector3D { x: *qx, y: 0.0, z: qz }, Polarization::TE, n_fock)
+//         }).collect();
     
-    // Create light-matter system
-    let light_matter = LightMatter::new(exciton.full_ham, photon_modes, coupling,
-                                    n_rel, n_ex_eig, parity);
+//     // Create light-matter system
+//     let light_matter = LightMatter::new(exciton.full_ham, photon_modes, coupling,
+//                                     n_rel, n_ex_eig, parity);
 
-    // Define high-symmetry points in k-space for band structure calculation
-    // Here we use Γ to X path (center to edge of Brillouin zone)
-    let sym_points = vec![ vec![0.0,0.0], vec![PI / a0, 0.0]];
-    let sym_labels = vec!["Γ".to_string(), "X".to_string()];
+//     // Define high-symmetry points in k-space for band structure calculation
+//     // Here we use Γ to X path (center to edge of Brillouin zone)
+//     let sym_points = vec![ vec![0.0,0.0], vec![PI / a0, 0.0]];
+//     let sym_labels = vec!["Γ".to_string(), "X".to_string()];
 
-    // Start timing the band structure calculation
-    let start_time = Instant::now();
+//     // Start timing the band structure calculation
+//     let start_time = Instant::now();
     
-    // Create band structure calculator
-    let band_structure = BandStructureCalculatorLM::new(
-        light_matter, a0, v0, "lm_data".to_string(), sym_points.clone());
+//     // Create band structure calculator
+//     let band_structure = BandStructureCalculatorLM::new(
+//         light_matter, a0, v0, "lm_data".to_string(), sym_points.clone());
     
-    // Calculate band structure with 60 points along the path
-    let n_k_points = 6;  // Number of k-points along the path
-    let (k_points, eigvals_list) = band_structure.calculate_lm_band_structure(n_k_points);
+//     // Calculate band structure with 60 points along the path
+//     let n_k_points = 6;  // Number of k-points along the path
+//     let (k_points, eigvals_list) = band_structure.calculate_lm_band_structure(n_k_points);
     
-    // End timing and print duration
-    let end_time = Instant::now();
-    let duration = end_time.duration_since(start_time);
-    println!("Calc dispersion in {:?}", duration);
+//     // End timing and print duration
+//     let end_time = Instant::now();
+//     let duration = end_time.duration_since(start_time);
+//     println!("Calc dispersion in {:?}", duration);
 
-    // Plot the band structure, showing 40 bands
-    let n_bands = 40;
-    plot_band_structure(
-        &k_points, sym_points, sym_labels, &eigvals_list, n_bands, a0, 
-        Some("disp_plot.png"), false, v0, coupling);
+//     // Plot the band structure, showing 40 bands
+//     let n_bands = 40;
+//     plot_band_structure(
+//         &k_points, sym_points, sym_labels, &eigvals_list, n_bands, a0, 
+//         Some("disp_plot.png"), false, v0, coupling);
 
-    // The following code is commented out but shows examples of building
-    // and timing individual components of the Hamiltonian
+//     // The following code is commented out but shows examples of building
+//     // and timing individual components of the Hamiltonian
     
-    // // Build and time exciton Hamiltonian
-    // let start_time = Instant::now();
-    // let (sorted_eigvals, _, _, _, _) 
-    //     = exciton.diagonalize_full_hamiltonian(n_rel, n_ex_eig, parity);
-    // let h_ex = Array2::from_diag(&sorted_eigvals);
-    // println!("Exciton Hamiltonian of size: {:?}", h_ex.shape());
-    // let end_time = Instant::now();
-    // let duration = end_time.duration_since(start_time);
-    // println!("Built Exciton Hamiltonian in {:?}", duration);
+//     // // Build and time exciton Hamiltonian
+//     // let start_time = Instant::now();
+//     // let (sorted_eigvals, _, _, _, _) 
+//     //     = exciton.diagonalize_full_hamiltonian(n_rel, n_ex_eig, parity);
+//     // let h_ex = Array2::from_diag(&sorted_eigvals);
+//     // println!("Exciton Hamiltonian of size: {:?}", h_ex.shape());
+//     // let end_time = Instant::now();
+//     // let duration = end_time.duration_since(start_time);
+//     // println!("Built Exciton Hamiltonian in {:?}", duration);
     
-    // // Build and time photonic Hamiltonian
-    // let start_time = Instant::now();
-    // let h_ph = light_matter.photon.get_h_ph();
-    // println!("Photonic Hamiltonian of size: {:?}", h_ph.shape());
-    // let end_time = Instant::now();
-    // let duration = end_time.duration_since(start_time);
-    // println!("Built Photonic Hamiltonian in {:?}", duration);
+//     // // Build and time photonic Hamiltonian
+//     // let start_time = Instant::now();
+//     // let h_ph = light_matter.photon.get_h_ph();
+//     // println!("Photonic Hamiltonian of size: {:?}", h_ph.shape());
+//     // let end_time = Instant::now();
+//     // let duration = end_time.duration_since(start_time);
+//     // println!("Built Photonic Hamiltonian in {:?}", duration);
 
-    // // Build and time interaction Hamiltonian
-    // let start_time = Instant::now();
-    // let h_int = light_matter.interaction.get_int_h();
-    // println!("Interaction Hamiltonian of size: {:?}", h_int.shape());
-    // let end_time = Instant::now();
-    // let duration = end_time.duration_since(start_time);
-    // println!("Built Interaction Hamiltonian in {:?}", duration);
+//     // // Build and time interaction Hamiltonian
+//     // let start_time = Instant::now();
+//     // let h_int = light_matter.interaction.get_int_h();
+//     // println!("Interaction Hamiltonian of size: {:?}", h_int.shape());
+//     // let end_time = Instant::now();
+//     // let duration = end_time.duration_since(start_time);
+//     // println!("Built Interaction Hamiltonian in {:?}", duration);
 
-    // // Build and time full Hamiltonian
-    // let start_time = Instant::now();
-    // let h = light_matter.build_lm_hamiltonian();
-    // println!("Full Hamiltonian of size: {:?}", h.shape());
-    // let end_time = Instant::now();
-    // let duration = end_time.duration_since(start_time);
-    // println!("Built Full Hamiltonian in {:?}", duration);
-}
+//     // // Build and time full Hamiltonian
+//     // let start_time = Instant::now();
+//     // let h = light_matter.build_lm_hamiltonian();
+//     // println!("Full Hamiltonian of size: {:?}", h.shape());
+//     // let end_time = Instant::now();
+//     // let duration = end_time.duration_since(start_time);
+//     // println!("Built Full Hamiltonian in {:?}", duration);
+// }
 
