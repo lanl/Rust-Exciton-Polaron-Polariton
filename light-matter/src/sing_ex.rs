@@ -7,7 +7,7 @@ use log::info;
 use plotters::prelude::*;
 use arpack::{Config, Operator}; 
 
-use crate::utils::{PhotonMode, LMMatrixElement};
+use crate::utils::{LMMatrixElement, LMMatrixElementArray, PhotonMode};
 
 pub fn kron_1d(a: &Array1<f64>, b: &Array1<f64>) -> Array1<f64> {
     a.iter().flat_map(|&x| b.iter().map(move |&y| x * y)).collect::<Array1<f64>>()
@@ -70,20 +70,22 @@ pub struct ExcitonicHamiltonian {
     pub e_vals: Option<Array1<f64>>,
     pub e_vecs: Option<Vec<Array1<f64>>>,
     pub r_vecs: Option<Array2<f64>>,
+    pub parities: Option<Array1<i32>>,
 }
 
 impl ExcitonicHamiltonian {
     pub fn new(exciton_ham: FullHamiltonian, n_ex_eig: usize, n_rel: usize, parity: i32) -> Self {
-        Self { exciton_ham, n_ex_eig, n_rel, parity, e_vals: None, e_vecs: None, r_vecs: None}
+        Self { exciton_ham, n_ex_eig, n_rel, parity, e_vals: None, e_vecs: None, r_vecs: None, parities: None}
     }
 
     pub fn compute_eigenstates(&mut self) {
-        let (exciton_energies, e_vecs, _, r_vecs, _) 
+        let (exciton_energies, e_vecs, _, r_vecs, parities) 
             = self.exciton_ham.diagonalize_full_hamiltonian(self.n_rel, self.n_ex_eig, self.parity);
         
         self.e_vals = Some(exciton_energies);
         self.e_vecs = Some(e_vecs);
         self.r_vecs = Some(r_vecs);
+        self.parities = Some(parities);
     }
 
     /// Calculates the center-of-mass momentum matrix element P·field_vec
@@ -334,8 +336,27 @@ impl ArrayOperator<f64> for PPOffHamiltonian<'_> {
         assert!(self.matrix_elements.is_some(), "Matrix elements not computed. Call calculate_matrix_elements() first.");
         let matrix_elements = self.matrix_elements.as_ref().unwrap();
 
+        let matrix_element_arrays = LMMatrixElementArray::new();
+        matrix_element_arrays.populate_mat_elements(matrix_elements, 
+            self.exciton.e_vecs.as_ref().unwrap(), 
+            self.exciton.parities.as_ref().unwrap(), 
+            self.exciton.exciton_ham.kappa_vectors.len());
+
         let n_ex = self.exciton.n_ex_eig;
         let n_ph = self.photon.photon_modes.len() + 1; // +1 for ground state
+
+        let mut p_cos: HashMap<i32, Array2<f64>> = HashMap::new();
+        (0 .. n_ph - 1).for_each(|i| {
+            let eps = &self.photon.photon_modes[i].eps;
+            let q_ind_key = i as i32;
+
+            if !p_cos.contains_key(&q_ind_key) {
+                p_cos.insert(q_ind_key, 
+                    self.exciton.get_p_com(eps, false)// P·q 
+                    .dot(matrix_element_arrays.cos_mat.get(&vec![q_ind_key]).unwrap()) // cos(qx/2) matrix element
+                );
+            }
+        });
 
         if self.phonon.is_none() {
             assert!(x.len() == n_ex * n_ph, 
@@ -349,22 +370,26 @@ impl ArrayOperator<f64> for PPOffHamiltonian<'_> {
                     let x_ex_ind = x_ind / n_ph;
                     let x_ph_ind = x_ind % n_ph;
 
-                    let x_mode = if x_ph_ind == 0 { None } else { Some(&self.photon.photon_modes[x_ph_ind - 1]) };
-
                     let mut res = 0.0;
 
                     if x_ph_ind == 0 && r_ph_ind > 0 {
-
                         // 2 P cos(qx/2) a† / 2 M term
-                        // res += {
-                        //     let q = &self.photon.photon_modes[r_ph_ind - 1].q;
-                        //     let p_com = self.exciton.get_p_com(q, false);
-                        //     let mat_val = matrix_elements.cos_mat.get(&(r_ex_ind, x_ex_ind, r_ph_ind - 1)).unwrap_or(&0.0);
-                        //     p_com[[r_ex_ind, x_ex_ind]] * (q[0] * self.exciton.exciton_ham.a0 / 2.0).cos() 
-                        //         / 2.0 / self.exciton.exciton_ham.m * val // a† = 1 for single photon states
-                        // }
+                        res += {
+                            p_cos.get(&(r_ph_ind as i32 - 1)).unwrap()[[r_ex_ind, x_ex_ind]]
+                                * self.coupling * 2.0 / self.exciton.exciton_ham.m * val // a† = 1 for single photon states
+                        };
 
+                        // 2 p sin(qx/2) a† / 2 mu term
+                        res += matrix_element_arrays.p_sin_mat.get(&vec![r_ph_ind as i32 - 1]).unwrap()[[r_ex_ind, x_ex_ind]]
+                            * self.coupling * 2.0 / self.exciton.exciton_ham.rel_ham.mu * val; // a† = 1 for single photon states
 
+                    }
+                    else if  x_ph_ind > 0 && r_ph_ind == 0{
+                        // 2 P cos(qx/2) a / 2 M term
+                        res += {
+                            p_cos.get(&(x_ph_ind as i32 - 1)).unwrap()[[r_ex_ind, x_ex_ind]]
+                                / 2.0 / self.exciton.exciton_ham.m * val // a = 1 for single photon states
+                        }
                     }
                     else if x_ph_ind == r_ph_ind && r_ph_ind > 0 {
                         // P·q (a† a) / 2 M term (off-diagonal terms only)

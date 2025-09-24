@@ -321,116 +321,122 @@ pub struct LMMatrixElementArray {
 }
 
 impl LMMatrixElementArray {
-    pub fn new(mat_els: &LMMatrixElement, e_vecs: &Vec<Array1<f64>>, parities: Array1<i32>, n_com: usize) -> Self {
-        let mut cos_mat:   HashMap<Vec<i32>, Array2<f64>> = HashMap::new();
-        let mut p_sin_mat: HashMap<Vec<i32>, Array2<f64>> = HashMap::new();
 
-        let n_eigs = e_vecs.len();
+        pub fn new() -> Self{
+        let   cos_mat: HashMap<Vec<i32>, Array2<f64>> = HashMap::new();
+        let p_sin_mat: HashMap<Vec<i32>, Array2<f64>> = HashMap::new();
 
-        // Order of the rel_vecs is even then odd
-        let mut n_rel_even: Option<usize> = None;
-        let mut n_rel_odd: Option<usize> = None;
-        let mut unique_parities = 0;
-
-        for (ind, &p) in parities.iter().enumerate() {
-            if p == 1 && n_rel_even.is_none() {
-                n_rel_even = Some(e_vecs[ind].len() / n_com);
-                unique_parities += 1;
-            }
-            else if p == -1 && n_rel_odd.is_none() {
-                n_rel_odd = Some(e_vecs[ind].len() / n_com);
-                unique_parities += 1;
-            }
-
-            if unique_parities == 2 {
-                break;
-            }
-        }
-
-        // Now unwrap the Options to get the values
-        let n_rel_par = vec![n_rel_even.unwrap_or(0), n_rel_odd.unwrap_or(0)];
-
-        if let Some(all_q_ind) = &mat_els.all_q_ind {
-            all_q_ind.iter().for_each(|q_inds| {
-                                
-                let mut mat_1 = Array2::zeros((n_eigs, n_eigs));
-                let mut mat_2 = Array2::zeros((n_eigs, n_eigs));
-
-                for idx1 in 0 .. n_eigs {
-                    for idx2 in 0 .. n_eigs {
-                    let vec1 = &e_vecs[idx1];
-                    let vec2 = &e_vecs[idx2];
-                    
-                    let idx1_par = (parities[idx1] as i32 - 1) / -2; // 0 for even, 1 for odd
-                    let idx2_par = (parities[idx2] as i32 - 1) / -2; // 0 for even, 1 for odd
-
-                    let mat_ij = (0..n_rel_par[idx1_par as usize]).flat_map(|rel_ind1| {
-                        (0 .. n_rel_par[idx2_par as usize]).flat_map(move |rel_ind2| {
-
-                            let r_ind1 = rel_ind1 + idx1_par as usize * n_rel_even.unwrap();
-                            let r_ind2 = rel_ind2 + idx2_par as usize * n_rel_even.unwrap();
-
-                            let mat_element1: &f64;
-                            let mat_element2: &f64;
-
-                            if q_inds.len() == 1 {
-                                mat_element1 = mat_els.cos_mat.get(&(r_ind1, r_ind2, q_inds.clone()))
-                                            .unwrap_or_else(|| panic!("Matrix element missing for i1 = {}, 
-                                            i2 = {}, q_ind = {:?}",r_ind1,r_ind2, q_inds));
-
-                                mat_element2 = mat_els.p_sin_mat.get(&(r_ind1, r_ind2, q_inds.clone()))
-                                            .unwrap_or_else(|| panic!("Matrix element missing for i1 = {}, 
-                                            i2 = {}, q_ind = {:?}",r_ind1,r_ind2, q_inds));
-                            }
-                            else {
-                                let q_ind1 = q_inds[0].max(q_inds[1]);
-                                let q_ind2 = q_inds[0].min(q_inds[1]);
-
-                                mat_element1 = mat_els.cos_mat.get(&(r_ind1, r_ind2, vec![ q_ind1, -q_ind2]))
-                                            .unwrap_or_else(|| panic!("Matrix element missing for i1 = {}, 
-                                            i2 = {}, q_inds = {:?}",r_ind1,r_ind2, vec![ q_ind1, -q_ind2]));
-
-                                mat_element2 = mat_els.cos_mat.get(&(r_ind1, r_ind2, vec![ q_ind1,  q_ind2]))
-                                            .unwrap_or_else(|| panic!("Matrix element missing for i1 = {}, 
-                                            i2 = {}, q_inds = {:?}",r_ind1,r_ind2, vec![ q_ind1,  q_ind2]));
-                            }
-                            
-                            (0 .. n_com).map(move |com_ind| {
-                                let i1 = n_com * rel_ind1 + com_ind;
-                                let i2 = n_com * rel_ind2 + com_ind;
-                                let a1 = vec1[i1];
-                                let a2 = vec2[i2];
-
-                                (a1 * a2 * mat_element1, a1 * a2 * mat_element2)
-                            })
-
-                        })
-                    }).collect::<Vec<(f64,f64)>>();
-
-                    (mat_1[[idx1,idx2]], mat_2[[idx1,idx2]]) = mat_ij.iter().fold((0.0, 0.0), |a, b| {
-                        (a.0 + b.0, a.1 + b.1)
-                    });
-
-                }};
-
-                if q_inds.len() == 1 {
-                    cos_mat  .insert(q_inds.clone(), mat_1);
-                    p_sin_mat.insert(q_inds.clone(), mat_2);
-                }
-                else if q_inds.len() == 2 {
-                    // Two-mode case
-                    let q_ind1 = q_inds[0].max(q_inds[1]);
-                    let q_ind2 = q_inds[0].min(q_inds[1]);
-
-                    cos_mat.insert(vec![ q_ind1, -q_ind2], mat_1);
-                    cos_mat.insert(vec![ q_ind1,  q_ind2], mat_2);
-                }
-            });
-        }
-
-        Self{cos_mat: cos_mat, p_sin_mat: p_sin_mat}
+        Self { cos_mat: cos_mat, p_sin_mat: p_sin_mat  }
+        
     }
 
+    pub fn populate_mat_elements(&self, mat_els: &LMMatrixElement, e_vecs: &Vec<Array1<f64>>, parities: &Array1<i32>, n_com: usize) -> Self {
+        // Find the number of even and odd parity states
+        let (n_rel_even, n_rel_odd) = parities.iter().enumerate()
+            .fold((None, None), |(even, odd), (idx, &p)| {
+                if p == 1 && even.is_none() {
+                    (Some(e_vecs[idx].len() / n_com), odd)
+                } else if p == -1 && odd.is_none() {
+                    (even, Some(e_vecs[idx].len() / n_com))
+                } else {
+                    (even, odd)
+                }
+            });
+        
+        let n_rel_even = n_rel_even.unwrap_or(0);
+        let n_rel_odd = n_rel_odd.unwrap_or(0);
+        let n_rel_par = [n_rel_even, n_rel_odd];
+        
+        let n_eigs = e_vecs.len();
+        
+        let mut cos_mat = HashMap::new();
+        let mut p_sin_mat = HashMap::new();
+        
+        if let Some(all_q_ind) = &mat_els.all_q_ind {
+            for q_inds in all_q_ind {
+                let mut matrix_1 = Array2::zeros((n_eigs, n_eigs));
+                let mut matrix_2 = Array2::zeros((n_eigs, n_eigs));
+                
+                for idx1 in 0..n_eigs {
+                    for idx2 in 0..n_eigs {
+                        let vec1 = &e_vecs[idx1];
+                        let vec2 = &e_vecs[idx2];
+                        
+                        let idx1_par = (parities[idx1] == -1) as usize;
+                        let idx2_par = (parities[idx2] == -1) as usize;
+                        
+                        // Calculate the matrix elements directly without collecting
+                        let (cos_sum, sin_sum) = (0..n_rel_par[idx1_par])
+                            .flat_map(|rel_ind1| {
+                                (0..n_rel_par[idx2_par]).flat_map(move |rel_ind2| {
+                                    let r_ind1 = rel_ind1 + idx1_par * n_rel_even;
+                                    let r_ind2 = rel_ind2 + idx2_par * n_rel_even;
+                                    
+                                    // Get matrix elements (simplified for clarity)
+                                    let (mat_element1, mat_element2) = self.get_matrix_elements(
+                                        mat_els, r_ind1, r_ind2, q_inds);
+                                    
+                                    (0..n_com).map(move |com_ind| {
+                                        let i1 = n_com * rel_ind1 + com_ind;
+                                        let i2 = n_com * rel_ind2 + com_ind;
+                                        let a1 = vec1[i1];
+                                        let a2 = vec2[i2];
+                                        
+                                        (a1 * a2 * mat_element1, a1 * a2 * mat_element2)
+                                    })
+                                })
+                            })
+                            .fold((0.0, 0.0), |acc, val| (acc.0 + val.0, acc.1 + val.1));
+                        
+                        matrix_1[[idx1, idx2]] = cos_sum;
+                        matrix_2[[idx1, idx2]] = sin_sum;
+                    }
+                }
+                
+                // Insert into the appropriate HashMaps
+                if q_inds.len() == 1 {
+                    cos_mat.  insert(q_inds.clone(), matrix_1);
+                    p_sin_mat.insert(q_inds.clone(), matrix_2);
+                } else if q_inds.len() == 2 {
+                    let q_ind1 = q_inds[0].max(q_inds[1]);
+                    let q_ind2 = q_inds[0].min(q_inds[1]);
+                    
+                    cos_mat.insert(vec![q_ind1, -q_ind2], matrix_1);
+                    cos_mat.insert(vec![q_ind1,  q_ind2], matrix_2);
+                }
+            }
+        }
+        
+        Self { cos_mat, p_sin_mat }
+    }
+
+    // Helper function to get matrix elements
+    fn get_matrix_elements(&self, mat_els: &LMMatrixElement, r_ind1: usize, r_ind2: usize, q_inds: &Vec<i32>) -> (f64, f64) {
+        if q_inds.len() == 1 {
+            let mat_element1 = mat_els.cos_mat.get(&(r_ind1, r_ind2, q_inds.clone()))
+                .unwrap_or_else(|| panic!("Matrix element missing for i1 = {}, i2 = {}, q_ind = {:?}", 
+                                        r_ind1, r_ind2, q_inds));
+            
+            let mat_element2 = mat_els.p_sin_mat.get(&(r_ind1, r_ind2, q_inds.clone()))
+                .unwrap_or_else(|| panic!("Matrix element missing for i1 = {}, i2 = {}, q_ind = {:?}", 
+                                        r_ind1, r_ind2, q_inds));
+            
+            (*mat_element1, *mat_element2)
+        } else {
+            let q_ind1 = q_inds[0].max(q_inds[1]);
+            let q_ind2 = q_inds[0].min(q_inds[1]);
+            
+            let mat_element1 = mat_els.cos_mat.get(&(r_ind1, r_ind2, vec![q_ind1, -q_ind2]))
+                .unwrap_or_else(|| panic!("Matrix element missing for i1 = {}, i2 = {}, q_inds = {:?}", 
+                                        r_ind1, r_ind2, vec![q_ind1, -q_ind2]));
+            
+            let mat_element2 = mat_els.cos_mat.get(&(r_ind1, r_ind2, vec![q_ind1, q_ind2]))
+                .unwrap_or_else(|| panic!("Matrix element missing for i1 = {}, i2 = {}, q_inds = {:?}", 
+                                        r_ind1, r_ind2, vec![q_ind1, q_ind2]));
+            
+            (*mat_element1, *mat_element2)
+        }
+    }
 
     pub fn get_cos_elements(&self, exciton: &FullHamiltonian,
         rel_vecs: &Array2<f64>, i1: usize, i2: usize, q: &Array1<f64>) -> f64{
