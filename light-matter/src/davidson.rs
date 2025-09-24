@@ -1,6 +1,7 @@
-use ndarray::{Array1, Array2, ArrayView1, ArrayView2, Axis};
+use ndarray::{Array1, Array2, s};
 use ndarray_linalg::{Eigh, UPLO};
 use std::fmt::Debug;
+use rand::prelude::*;
 
 /// Trait for applying a linear operator to a vector without explicitly building the matrix
 pub trait LinearOperator {
@@ -91,16 +92,16 @@ pub fn davidson<T: LinearOperator>(
                 }
                 
                 // Normalize
-                let norm = vj.dot(&vj).sqrt();
+                let norm = (vj.dot(&vj) as f64).sqrt();
                 if norm > 1e-10 {
                     vj /= norm;
                     basis.column_mut(j).assign(&vj);
                 } else {
                     // If linear dependence is detected, generate a random vector
-                    let mut rng = rand::thread_rng();
+                    let mut rng = rand::rng();
                     let mut random_vec = Array1::zeros(n);
                     for i in 0..n {
-                        random_vec[i] = rand::Rng::gen_range(&mut rng, -1.0..1.0);
+                        random_vec[i] = rng.random_range(-1.0..1.0);
                     }
                     
                     // Orthogonalize against previous vectors
@@ -111,7 +112,7 @@ pub fn davidson<T: LinearOperator>(
                     }
                     
                     // Normalize
-                    let norm = random_vec.dot(&random_vec).sqrt();
+                    let norm = (random_vec.dot(&random_vec) as f64).sqrt();
                     random_vec /= norm;
                     basis.column_mut(j).assign(&random_vec);
                 }
@@ -121,14 +122,13 @@ pub fn davidson<T: LinearOperator>(
         },
         None => {
             // Start with random orthogonal vectors
-            use rand::Rng;
-            let mut rng = rand::thread_rng();
+            let mut rng = rand::rng();
             
             let mut basis = Array2::zeros((n, k));
             for j in 0..k {
                 let mut vj = Array1::zeros(n);
                 for i in 0..n {
-                    vj[i] = rand::Rng::gen_range(&mut rng, -1.0..1.0);
+                    vj[i] = rng.random_range(-1.0..1.0);
                 }
                 
                 // Orthogonalize against previous vectors
@@ -139,7 +139,7 @@ pub fn davidson<T: LinearOperator>(
                 }
                 
                 // Normalize
-                let norm = vj.dot(&vj).sqrt();
+                let norm = (vj.dot(&vj) as f64).sqrt();
                 vj /= norm;
                 basis.column_mut(j).assign(&vj);
             }
@@ -163,6 +163,11 @@ pub fn davidson<T: LinearOperator>(
     while iteration < config.max_iter && !converged {
         let m = v_basis.shape()[1]; // Current subspace size
         
+        // Ensure subspace_matrix is correctly sized for the current subspace
+        if subspace_matrix.shape()[0] != m || subspace_matrix.shape()[1] != m {
+            subspace_matrix = Array2::zeros((m, m));
+        }
+        
         // Compute the projected subspace matrix H_ij = <v_i|A|v_j>
         for j in 0..m {
             let vj = v_basis.column(j);
@@ -177,9 +182,9 @@ pub fn davidson<T: LinearOperator>(
         }
         
         // Solve the eigenvalue problem in the subspace
-        let subspace_eig = subspace_matrix.slice(s![0..m, 0..m]).eigh(UPLO::Upper).unwrap();
-        let theta = subspace_eig.eigenvalues.slice(s![..k]).to_owned();
-        let s = subspace_eig.eigenvectors.slice(s![..m, ..k]).to_owned();
+        let (eigenvalues, eigenvectors) = subspace_matrix.eigh(UPLO::Upper).unwrap();
+        let theta = eigenvalues.slice(s![..k]).to_owned();
+        let s = eigenvectors.slice(s![..m, ..k]).to_owned();
         
         // Compute Ritz vectors: y_i = V * s_i
         let y = v_basis.dot(&s);
@@ -194,7 +199,7 @@ pub fn davidson<T: LinearOperator>(
             let ri = &av - &(&yi * theta[i]);
             residuals.column_mut(i).assign(&ri);
             
-            let r_norm = ri.dot(&ri).sqrt();
+            let r_norm = (ri.dot(&ri) as f64).sqrt();
             residual_norms[i] = r_norm;
         }
         
@@ -241,7 +246,7 @@ pub fn davidson<T: LinearOperator>(
                 }
                 
                 // Normalize the new vector
-                let norm = qi.dot(&qi).sqrt();
+                let norm = (qi.dot(&qi) as f64).sqrt();
                 if norm > 1e-10 {
                     qi /= norm;
                     new_vectors.push(qi);
@@ -298,7 +303,7 @@ pub fn davidson<T: LinearOperator>(
                 }
                 
                 // Normalize
-                let norm = vj.dot(&vj).sqrt();
+                let norm = (vj.dot(&vj) as f64).sqrt();
                 if norm > 1e-10 {
                     vj /= norm;
                     new_basis.column_mut(j).assign(&vj);
@@ -307,7 +312,7 @@ pub fn davidson<T: LinearOperator>(
             
             v_basis = new_basis;
             
-            // Resize the subspace matrix
+            // Resize the subspace matrix for the new basis size
             subspace_matrix = Array2::zeros((config.min_subspace_size, config.min_subspace_size));
         }
         
@@ -317,9 +322,28 @@ pub fn davidson<T: LinearOperator>(
     // If we reach here, we've hit the maximum number of iterations without converging
     // Compute the final Ritz vectors and return
     let m = v_basis.shape()[1];
-    let subspace_eig = subspace_matrix.slice(s![0..m, 0..m]).eigh(UPLO::Upper).unwrap();
-    let theta = subspace_eig.eigenvalues.slice(s![..k]).to_owned();
-    let s = subspace_eig.eigenvectors.slice(s![..m, ..k]).to_owned();
+    
+    // Ensure subspace_matrix is correctly sized for the final computation
+    if subspace_matrix.shape()[0] != m || subspace_matrix.shape()[1] != m {
+        subspace_matrix = Array2::zeros((m, m));
+        
+        // Recompute the subspace matrix
+        for j in 0..m {
+            let vj = v_basis.column(j);
+            operator.apply(&vj.to_owned(), &mut av);
+            
+            for i in 0..=j {
+                let vi = v_basis.column(i);
+                let h_ij = vi.dot(&av);
+                subspace_matrix[(i, j)] = h_ij;
+                subspace_matrix[(j, i)] = h_ij;
+            }
+        }
+    }
+    
+    let (eigenvalues, eigenvectors) = subspace_matrix.eigh(UPLO::Upper).unwrap();
+    let theta = eigenvalues.slice(s![..k]).to_owned();
+    let s = eigenvectors.slice(s![..m, ..k]).to_owned();
     let y = v_basis.dot(&s);
     
     DavidsonResult {
@@ -330,6 +354,7 @@ pub fn davidson<T: LinearOperator>(
         max_residual,
     }
 }
+
 
 // Example implementation of LinearOperator for a simple test case
 struct MatrixFreeOperator {
@@ -372,14 +397,14 @@ impl LinearOperator for MatrixFreeOperator {
 }
 
 // Example usage
-fn main() {
+pub fn davidson_test() {
     // Create a tridiagonal operator
     let dim = 1000;
     let operator = MatrixFreeOperator::new(dim, 2.0, -1.0);
     
     // Configure Davidson algorithm
     let config = DavidsonConfig {
-        max_iter: 100,
+        max_iter: 1000,
         max_subspace_size: 30,
         min_subspace_size: 15,
         tolerance: 1e-8,

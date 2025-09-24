@@ -1,5 +1,5 @@
-use exciton_2d::{utils::fast_matrix_element_calc, FullHamiltonian};
-use std::{collections::HashMap, f64::consts::PI, usize};
+use exciton_2d:: FullHamiltonian;
+use std::{collections::HashMap, usize};
 use ndarray::{arr1, Array1, Array2, s};
 use std::path::Path;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -8,176 +8,10 @@ use plotters::prelude::*;
 use sprs::{kronecker_product as kron, smmp::mul_csr_csr, CsMat, CsMatBase, TriMat};
 use arpack::{Config, Operator}; 
 
-use crate::utils::{PhotonMode, save_band_data};
+use crate::utils::{PhotonMode, save_band_data, LMMatrixElement};
 
-/// Stores matrix elements for light-matter interaction calculations
-pub struct LMMatrixElement {
-    pub   cos_mat: HashMap<(usize,usize, Vec<i32>), f64>, // Cosine matrix elements
-    pub p_sin_mat: HashMap<(usize,usize, Vec<i32>), f64>, // Momentum-sine matrix elements
-}
 
-impl LMMatrixElement {
-    pub fn populate_mat_elements(&self, rel_vecs: &Array2<f64>, modes: &Vec<PhotonMode>, exciton: &FullHamiltonian) -> Self{
-        let n_rel = rel_vecs.shape()[1];
-        
-        // Generate single-mode indices
-        let sing_q_ind: Vec<Vec<i32>> = (0 .. modes.len()).map(|ind| vec![ind as i32]).collect();
 
-        // Generate two-mode indices
-        let doub_q_ind: Vec<Vec<i32>> = (0..modes.len()).flat_map(|ind1| {
-            (0..modes.len()).map(|ind2| vec![ind1.clone() as i32, ind2 as i32]).collect::<Vec<Vec<i32>>>()
-        }).collect();
-
-        // Combine all indices
-        let all_q_ind = [sing_q_ind,doub_q_ind].concat();
-
-        // Initialize matrix element storage
-        let mut  cos_mat: HashMap<(usize,usize, Vec<i32>), f64> = HashMap::new();
-        let mut p_sin_mat: HashMap<(usize,usize, Vec<i32>), f64> = HashMap::new();
-
-        // Define helper functions to calculate matrix elements
-        let get_cos = |i1: usize, i2: usize, q: &Array1<f64>| -> f64 { 
-            self.get_cos_elements(exciton, rel_vecs, i1, i2, q)
-        };
-
-        let get_p_sin = |i1: usize, i2: usize, q: &Array1<f64>| -> f64 {
-            self.get_psin_elements(exciton, rel_vecs, i1, i2, q)
-        };
-
-        // Populate matrix elements for all mode combinations
-        all_q_ind.iter().for_each(|q_inds| 
-            for i1 in 0 .. n_rel {
-                for i2 in 0 .. n_rel {
-                    if q_inds.len() == 1 {
-                        // Single-mode case
-                        let q = &modes[q_inds[0] as usize].q;
-
-                        // Calculate and store cosine matrix element
-                        cos_mat.entry((i1,i2,q_inds.clone()))
-                            .or_insert_with(|| get_cos(i1, i2, q));
-
-                        // Calculate and store momentum-sine matrix element
-                        p_sin_mat.entry((i1,i2,q_inds.clone()))
-                            .or_insert_with(|| get_p_sin(i1, i2, q));
-                        
-                    }
-                    else if q_inds.len() == 2 {
-                        // Two-mode case
-                        let q_ind1 = q_inds[0].max(q_inds[1]);
-                        let q_ind2 = q_inds[0].min(q_inds[1]);
-                        let q_1 = &modes[q_ind1 as usize].q;
-                        let q_2 = &modes[q_ind2 as usize].q;
-                        let q_diff = q_1 - q_2;
-                        let q_sum = q_1 + q_2;
-
-                        // Calculate and store difference matrix element
-                        cos_mat.entry((i1,i2,vec![ q_ind1, -q_ind2]))
-                            .or_insert_with(|| get_cos(i1, i2, &q_diff));
-
-                        // Calculate and store sum matrix element
-                        cos_mat.entry((i1,i2,q_inds.clone()))
-                            .or_insert_with(|| get_cos(i1, i2, &q_sum));
-                    }
-                }
-            }
-        );
-
-        Self{cos_mat: cos_mat, p_sin_mat: p_sin_mat}
-    }
-
-    pub fn new() -> Self{
-        let   cos_mat: HashMap<(usize,usize, Vec<i32>), f64> = HashMap::new();
-        let p_sin_mat: HashMap<(usize,usize, Vec<i32>), f64> = HashMap::new();
-
-        Self { cos_mat: cos_mat, p_sin_mat: p_sin_mat }
-    }
-
-    pub fn get_cos_elements(&self, exciton: &FullHamiltonian,
-        rel_vecs: &Array2<f64>, i1: usize, i2: usize, q: &Array1<f64>) -> f64{
-        
-        let x_grid = &exciton.rel_ham.grid.x;
-        let y_grid = &exciton.rel_ham.grid.y;
-        let eigvecs = &rel_vecs;
-        let grid_size = exciton.rel_ham.grid.grid_size;
-
-        // Get the eigenvectors for states i and j
-        let psi_i: Array2<f64> = eigvecs.column(i1)
-            .to_shape((grid_size, grid_size)).unwrap().to_owned();
-        let psi_j = eigvecs.column(i2)
-            .to_shape((grid_size, grid_size)).unwrap().to_owned();
-        
-        // Calculate the cosine term
-        let mut q_x = Array2::zeros((grid_size, 1));
-        let mut q_y = Array2::zeros((1, grid_size));
-        
-        for i in 0..grid_size {
-            q_x[[i, 0]] = x_grid[i] * q[0] / 2.0;
-            q_y[[0, i]] = y_grid[i] * q[1] / 2.0;
-        }
-        
-        let cos_term = (q_x + q_y).cos();
-        
-        // Calculate matrix element using fast implementation
-        fast_matrix_element_calc(
-            &psi_i, 
-            &psi_j, 
-            &cos_term, exciton.rel_ham.grid.dx
-        )
-    }
-
-    fn get_psin_elements(&self, exciton: &FullHamiltonian,
-        rel_vecs: &Array2<f64>, i1: usize, i2: usize, q: &Array1<f64>) -> f64{
-        let x_grid =  &exciton.rel_ham.grid.x;
-        let y_grid =  &exciton.rel_ham.grid.y;
-        let eigvecs = rel_vecs;
-        let grid_size = exciton.rel_ham.grid.grid_size;
-        let dx = exciton.rel_ham.grid.dx;
-
-        // Get the eigenvectors for states i and j
-        let psi_i = eigvecs.column(i1)
-            .to_shape((grid_size, grid_size)).unwrap().to_owned();
-        let psi_j = eigvecs.column(i2)
-            .to_shape((grid_size, grid_size)).unwrap().to_owned();
-        
-        // Calculate the sine term
-        let mut q_x = Array2::zeros((grid_size, 1));
-        let mut q_y = Array2::zeros((1, grid_size));
-        
-        for i in 0..grid_size {
-            q_x[[i, 0]] = x_grid[i] * q[0] / 2.0;
-            q_y[[0, i]] = y_grid[i] * q[1] / 2.0;
-        }
-        
-        let sin_term = (q_x + q_y).sin();
-        
-        // Calculate momentum operator in sinc-DVR basis
-        let p = self.compute_sinc_dvr_rel(exciton);
-        
-        // Calculate p·sin + sin·p term
-        let p_sin = &p.dot(&sin_term) + &sin_term.dot(&p);
-        
-        // Calculate matrix element
-        (psi_i * p_sin * psi_j).sum() * dx * dx
-    }
-
-    fn compute_sinc_dvr_rel(&self, exciton: &FullHamiltonian) -> Array2<f64> {
-        let dx = exciton.rel_ham.grid.dx;
-        let nx = exciton.rel_ham.grid.grid_size;
-
-        // Create momentum operator matrix using sinc-DVR formula
-        Array2::from_shape_fn((nx,nx), |(i, j)| {
-            if i == j {
-                // Diagonal elements
-                PI.powi(2) / 3.0 / dx*dx
-            }
-            else {
-                // Off-diagonal elements
-                let diff: f64 = i as f64 - j as f64;
-                (-1.0 as f64).powf(diff) / (diff + f64::EPSILON) / dx 
-            }
-        })
-    }
-}
 
 /// Represents the photonic part of the Hamiltonian
 pub struct PhotonicHamiltonian {
@@ -586,8 +420,8 @@ impl LightMatter {
         
         // Configure ARPACK
         let config = Config::new()
-            .which(arpack::Which::SA)  // Smallest algebraic eigenvalues
-            .tol(1e-8)                // Tolerance
+            .which(arpack::Which::SR)  // Smallest algebraic eigenvalues
+            .tol(1e-10)                // Tolerance
             .max_iter(1000);          // Maximum iterations
         
         // Solve eigenvalue problem
@@ -825,8 +659,8 @@ impl PolaronPolariton {
         
         // Configure ARPACK
         let config = Config::new()
-            .which(arpack::Which::SA)  // Smallest algebraic eigenvalues
-            .tol(1e-8)                // Tolerance
+            .which(arpack::Which::SR)  // Smallest real-part eigenvalues
+            .tol(1e-10)                // Tolerance
             .max_iter(1000);          // Maximum iterations
         
         // Solve eigenvalue problem

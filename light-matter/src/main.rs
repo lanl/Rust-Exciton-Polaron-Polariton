@@ -8,6 +8,8 @@ pub use sparse_methods::*;
 pub mod utils;
 pub use utils::{Vector3D, PhotonMode, Polarization};
 
+pub mod sing_ex;
+
 pub mod dense_methods;
 
 // Speed of light in atomic units
@@ -35,12 +37,12 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     let omega_0 = 0.25;    // Photon frequency
     
     // Define photon modes
-    let qx_values = vec![0.0,0.01,0.02,0.03]; // Photon wavevectors along x
+    let qx_values = vec![0.0,0.01,0.02]; // Photon wavevectors along x
     let qz = omega_0 / C;
     let n_fock = 2;      // Dimension of Fock space
 
     let n_k_points = 300;  // Number of k-points along the path
-    let n_bands = 40;
+    let n_bands = 64;
     
     // Create photon modes
     let photon_modes: Vec<PhotonMode> = qx_values.iter().map(|qx| {
@@ -140,6 +142,7 @@ fn main() {
         use_gpu: false,                        // Whether to use GPU acceleration
         batch_size: 32,                        // Batch size for calculations
     };
+    // davidson::davidson_test();
 
     run_bandstructure(Method::Sparse, e_config.clone());
     run_bandstructure(Method::Dense, e_config.clone());
