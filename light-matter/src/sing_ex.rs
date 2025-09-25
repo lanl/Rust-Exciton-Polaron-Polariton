@@ -1,10 +1,6 @@
 use exciton_2d:: FullHamiltonian;
 use std::{collections::HashMap, usize};
-use ndarray::{arr1, Array1, Array2, s};
-use std::path::Path;
-use indicatif::{ProgressBar, ProgressStyle};
-use log::info;
-use plotters::prelude::*;
+use ndarray::{arr1, Array1, Array2};
 use arpack::{Config, Operator}; 
 
 use crate::utils::{LMMatrixElement, LMMatrixElementArray, PhotonMode};
@@ -177,21 +173,21 @@ impl DiagOperator<f64> for PhononHamiltonian {
 }
 
 pub struct PPDiagHamiltonian<'a> {
-    pub exciton: &'a ExcitonicHamiltonian,
+    pub exciton: Rc<ExcitonicHamiltonian>,
     pub photon: &'a PhotonicHamiltonian,
     pub phonon: Option<&'a PhononHamiltonian>,
-    pub k: f64,
+    pub k: &'a Vec<f64>,
     pub int_array: Option<Array1<f64>>,
-    pub coupling: f64
+    pub lm_coupling: f64
 }
 
 impl<'a> PPDiagHamiltonian<'a> {
     pub fn new(
-        exciton: &'a ExcitonicHamiltonian, 
+        exciton: Rc<ExcitonicHamiltonian>, 
         photon: &'a PhotonicHamiltonian,
         phonon: Option<&'a PhononHamiltonian>, 
-        k: f64,
-        coupling: f64
+        k: &'a Vec<f64>,
+        lm_coupling: f64
     ) -> Self {
         Self { 
             exciton, 
@@ -199,7 +195,7 @@ impl<'a> PPDiagHamiltonian<'a> {
             phonon, 
             k, 
             int_array: None,
-            coupling
+            lm_coupling
         }
     }
 
@@ -221,7 +217,7 @@ impl<'a> PPDiagHamiltonian<'a> {
                 p_com[[ex_ind,0]] / 2.0 / self.exciton.exciton_ham.m // (a† a) = 1 for single photon states
 
                 // Diamagnetic A^2 term (diagonal terms only)
-                + 2.0 * self.coupling * self.coupling  // A^2 term scales with coupling squared
+                + 2.0 * self.lm_coupling * self.lm_coupling  // A^2 term scales with coupling squared
 
                 // q^2 (a† a)^2 term
                 + q.dot(q) / 2.0 / self.exciton.exciton_ham.m   // (a† a)^2 = 1 for single photon states
@@ -289,7 +285,7 @@ impl ArrayOperator<f64> for PPDiagHamiltonian<'_> {
 }
 
 pub struct PPOffHamiltonian<'a> {
-    pub exciton: &'a ExcitonicHamiltonian,
+    pub exciton: Rc<ExcitonicHamiltonian>,
     pub photon: &'a PhotonicHamiltonian,
     pub phonon: Option<&'a PhononHamiltonian>,
     pub lm_coupling: f64,
@@ -300,11 +296,12 @@ pub struct PPOffHamiltonian<'a> {
 
 impl<'a> PPOffHamiltonian<'a> {
     pub fn new(
-        exciton: &'a ExcitonicHamiltonian, 
+        exciton: Rc<ExcitonicHamiltonian>, 
         photon: &'a PhotonicHamiltonian,
         phonon: Option<&'a PhononHamiltonian>, 
         lm_coupling: f64,
-        pn_coupling: f64
+        pn_coupling: f64,
+        matrix_element_arrays: Option<LMMatrixElementArray>,
     ) -> Self {
         Self { 
             exciton, 
@@ -312,7 +309,7 @@ impl<'a> PPOffHamiltonian<'a> {
             phonon, 
             lm_coupling,
             pn_coupling,
-            matrix_element_arrays: None,
+            matrix_element_arrays,
             p_cos: None
         }
     }
@@ -328,18 +325,12 @@ impl<'a> PPOffHamiltonian<'a> {
 
     }
 
-    pub fn calc_matrix_element_arrays(&mut self) {
-        let matrix_elements = &self.calculate_matrix_elements();
-
-        let matrix_element_arrays = LMMatrixElementArray::new();
-        matrix_element_arrays.populate_mat_elements(matrix_elements, 
-            self.exciton.e_vecs.as_ref().unwrap(), 
-            self.exciton.parities.as_ref().unwrap(), 
-            self.exciton.exciton_ham.kappa_vectors.len());
-
-
+    pub fn calc_p_cos_hash(&mut self) {
+        
         let n_ph = self.photon.photon_modes.len() + 1; // +1 for ground state
 
+        let cos_mat = &self.matrix_element_arrays.as_ref().unwrap().cos_mat;
+        
         let mut p_cos: HashMap<i32, Array2<f64>> = HashMap::new();
         (0 .. n_ph - 1).for_each(|i| {
             let eps = &self.photon.photon_modes[i].eps;
@@ -348,12 +339,23 @@ impl<'a> PPOffHamiltonian<'a> {
             if !p_cos.contains_key(&q_ind_key) {
                 p_cos.insert(q_ind_key, 
                     self.exciton.get_p_com(eps, false)// P·q 
-                    .dot(matrix_element_arrays.cos_mat.get(&vec![q_ind_key]).unwrap()) // cos(qx/2) matrix element
+                    .dot(cos_mat.get(&vec![q_ind_key]).unwrap()) // cos(qx/2) matrix element
                 );
             }
         });
 
         self.p_cos = Some(p_cos);
+    }
+
+    pub fn calc_matrix_element_arrays(&mut self) {
+        let matrix_elements = &self.calculate_matrix_elements();
+
+        let matrix_element_arrays = LMMatrixElementArray::new();
+        matrix_element_arrays.populate_mat_elements(matrix_elements, 
+            self.exciton.e_vecs.as_ref().unwrap(), 
+            self.exciton.parities.as_ref().unwrap(), 
+            self.exciton.exciton_ham.kappa_vectors.len());
+        
         self.matrix_element_arrays = Some(matrix_element_arrays);
     }
 
@@ -418,9 +420,7 @@ impl<'a> PPOffHamiltonian<'a> {
 
         res
     }
-
-
-    
+   
 }
 
 impl ArrayOperator<f64> for PPOffHamiltonian<'_> {
@@ -503,39 +503,112 @@ impl ArrayOperator<f64> for PPOffHamiltonian<'_> {
     }
 }
 
-
+use std::rc::Rc;
 
 pub struct PolaronPolariton<'a> {
-    pub exciton: &'a ExcitonicHamiltonian,
-    pub photon: &'a PhotonicHamiltonian,
-    pub phonon: Option<&'a PhononHamiltonian>,
-    pub coupling: f64,
-    pub n_rel: usize,
-    pub n_ex_eig: usize,
-    pub parity: i32,
-    pub matrix_elements: Option<LMMatrixElement>,
+    pub k: &'a Vec<f64>,
+    pub pp_off_ham:  PPOffHamiltonian<'a>,
+    pub pp_diag_ham: PPDiagHamiltonian<'a>,
+    pub exciton: Rc<ExcitonicHamiltonian>,
 }
 
 impl<'a> PolaronPolariton<'a> {
     pub fn new(
-        exciton: &'a ExcitonicHamiltonian, 
+        exciton: Rc<ExcitonicHamiltonian>,
         photon: &'a PhotonicHamiltonian,
         phonon: Option<&'a PhononHamiltonian>, 
-        coupling: f64,
-        n_rel: usize,
-        n_ex_eig: usize,
-        parity: i32
+        k: &'a Vec<f64>,
+        lm_coupling: f64,
+        pn_coupling: f64,
     ) -> Self {
+
+        let mut pp_off_ham = PPOffHamiltonian::new(Rc::clone(&exciton), photon, phonon, lm_coupling, pn_coupling, None);
+        pp_off_ham.calc_matrix_element_arrays();
+        pp_off_ham.calc_p_cos_hash();
+
+        let mut pp_diag_ham = PPDiagHamiltonian::new(Rc::clone(&exciton), photon, phonon, k, lm_coupling);
+        pp_diag_ham.calculate_interaction_array();
+
         Self { 
-            exciton, 
-            photon, 
-            phonon, 
-            coupling, 
-            n_rel, 
-            n_ex_eig, 
-            parity,
-            matrix_elements: None  // Also fixed this to use the parameter
+            k,
+            pp_off_ham:  pp_off_ham,
+            pp_diag_ham: pp_diag_ham,
+            exciton
         }
     }
 
+
+    pub fn update_k(&mut self, new_k: &'a Vec<f64>) {
+        self.k = new_k;
+
+        // Create a new ExcitonicHamiltonian
+        let mut ex_ham = self.exciton.exciton_ham.clone();
+        ex_ham.k = new_k.clone();
+        let mut new_exciton = ExcitonicHamiltonian::new(
+            ex_ham, 
+            self.exciton.n_ex_eig, 
+            self.exciton.n_rel, 
+            self.exciton.parity
+        );
+        new_exciton.compute_eigenstates();
+        
+        // Update the exciton
+        self.exciton = Rc::new(new_exciton);
+        
+        // Update Mat-Vec Hamiltonians with references to the updated exciton
+        self.pp_diag_ham.exciton = self.exciton.clone();
+        self.pp_diag_ham.k = new_k;
+        self.pp_diag_ham.calculate_interaction_array();
+
+
+        self.pp_off_ham.exciton = self.exciton.clone();
+        self.pp_off_ham.calc_p_cos_hash();
+    }
+
 }
+
+impl Operator<f64> for PolaronPolariton<'_> {
+    fn apply(&self, x: &[f64], y: &mut [f64]) {
+        let x_arr = Array1::from(x.to_vec());
+
+        let diag_part = self.pp_diag_ham.apply(&x_arr);
+        let off_part = self.pp_off_ham.apply(&x_arr);
+
+        for i in 0..y.len() {
+            y[i] = diag_part[i] + off_part[i];
+        }
+    }
+}
+
+pub fn diagonalize_pp_sing_ex(pp: PolaronPolariton, n_eig: usize) -> (Array1<f64>, Array2<f64>) {
+
+    // Configure ARPACK
+    let config = Config::new()
+        .which(arpack::Which::SR)  // Smallest algebraic eigenvalues
+        .tol(1e-10)                // Tolerance
+        .max_iter(1000);          // Maximum iterations
+    
+    let n_ph = pp.pp_diag_ham.photon.photon_modes.len() + 1;
+    let n_pn = if let Some(phonon) = pp.pp_diag_ham.phonon {
+            phonon.phonon_mode.n_fock
+        } else {1};
+    let n = pp.exciton.n_ex_eig * n_ph * n_pn;
+
+    // Solve eigenvalue problem
+    let result = arpack::eigs(pp, n,n_eig, config).unwrap();
+        
+    // Convert to ndarray format
+    let eigenvalues = Array1::from_vec(result.values);
+    
+    // Convert eigenvectors to ndarray format
+    let n = result.vectors.len() / n_eig;
+    let mut eigenvectors = Array2::zeros((n, n_eig));
+    
+    for i in 0..n_eig {
+        for j in 0..n {
+            eigenvectors[[j, i]] = result.vectors[i * n + j];
+        }
+    }
+        
+    (eigenvalues, eigenvectors)
+}  
