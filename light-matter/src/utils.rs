@@ -1,6 +1,5 @@
 use std::{usize};
 use ndarray::{array, linalg::kron, Array1, Array2};
-use rayon::vec;
 use serde::{Serialize, Deserialize};
 use std::path::Path;
 use bincode::{self};
@@ -440,89 +439,91 @@ impl LMMatrixElementArray {
         }
     }
 
-    pub fn get_cos_elements(&self, exciton: &FullHamiltonian,
-        rel_vecs: &Array2<f64>, i1: usize, i2: usize, q: &Array1<f64>) -> f64{
+    // pub fn _get_cos_elements(&self, exciton: &FullHamiltonian,
+    //     rel_vecs: &Array2<f64>, i1: usize, i2: usize, q: &Array1<f64>) -> f64{
         
-        let x_grid = &exciton.rel_ham.grid.x;
-        let y_grid = &exciton.rel_ham.grid.y;
-        let eigvecs = &rel_vecs;
-        let grid_size = exciton.rel_ham.grid.grid_size;
+    //     let x_grid = &exciton.rel_ham.grid.x;
+    //     let y_grid = &exciton.rel_ham.grid.y;
+    //     let eigvecs = &rel_vecs;
+    //     let grid_size = exciton.rel_ham.grid.grid_size;
 
-        // Get the eigenvectors for states i and j
-        let psi_i: Array2<f64> = eigvecs.column(i1)
-            .to_shape((grid_size, grid_size)).unwrap().to_owned();
-        let psi_j = eigvecs.column(i2)
-            .to_shape((grid_size, grid_size)).unwrap().to_owned();
+    //     // Get the eigenvectors for states i and j
+    //     let psi_i: Array2<f64> = eigvecs.column(i1)
+    //         .to_shape((grid_size, grid_size)).unwrap().to_owned();
+    //     let psi_j = eigvecs.column(i2)
+    //         .to_shape((grid_size, grid_size)).unwrap().to_owned();
         
-        // Calculate the cosine term
-        let mut q_x = Array2::zeros((grid_size, 1));
-        let mut q_y = Array2::zeros((1, grid_size));
+    //     // Calculate the cosine term
+    //     let mut q_x = Array2::zeros((grid_size, 1));
+    //     let mut q_y = Array2::zeros((1, grid_size));
         
-        for i in 0..grid_size {
-            q_x[[i, 0]] = x_grid[i] * q[0] / 2.0;
-            q_y[[0, i]] = y_grid[i] * q[1] / 2.0;
-        }
+    //     for i in 0..grid_size {
+    //         q_x[[i, 0]] = x_grid[i] * q[0] / 2.0;
+    //         q_y[[0, i]] = y_grid[i] * q[1] / 2.0;
+    //     }
         
-        let cos_term = (q_x + q_y).cos();
+    //     let cos_term = (q_x + q_y).cos();
         
-        // Calculate matrix element using fast implementation
-        fast_matrix_element_calc(
-            &psi_i, 
-            &psi_j, 
-            &cos_term, exciton.rel_ham.grid.dx
-        )
-    }
+    //     // Calculate matrix element using fast implementation
+    //     fast_matrix_element_calc(
+    //         &psi_i, 
+    //         &psi_j, 
+    //         &cos_term, exciton.rel_ham.grid.dx
+    //     )
+    // }
 
-    fn get_psin_elements(&self, exciton: &FullHamiltonian,
-        rel_vecs: &Array2<f64>, i1: usize, i2: usize, q: &Array1<f64>) -> f64{
-        let x_grid =  &exciton.rel_ham.grid.x;
-        let y_grid =  &exciton.rel_ham.grid.y;
-        let eigvecs = rel_vecs;
-        let grid_size = exciton.rel_ham.grid.grid_size;
-        let dx = exciton.rel_ham.grid.dx;
+    // fn get_psin_elements(&self, exciton: &FullHamiltonian,
+    //     rel_vecs: &Array2<f64>, i1: usize, i2: usize, q: &Array1<f64>, eps: &Array1<f64>) -> f64{
+    //     let x_grid =  &exciton.rel_ham.grid.x;
+    //     let y_grid =  &exciton.rel_ham.grid.y;
+    //     let eigvecs = rel_vecs;
+    //     let grid_size = exciton.rel_ham.grid.grid_size;
+    //     let dx = exciton.rel_ham.grid.dx;
 
-        // Get the eigenvectors for states i and j
-        let psi_i = eigvecs.column(i1)
-            .to_shape((grid_size, grid_size)).unwrap().to_owned();
-        let psi_j = eigvecs.column(i2)
-            .to_shape((grid_size, grid_size)).unwrap().to_owned();
+    //     // Get the eigenvectors for states i and j
+    //     let psi_i = eigvecs.column(i1);
+    //     let psi_j = eigvecs.column(i2);
         
-        // Calculate the sine term
-        let mut q_x = Array2::zeros((grid_size, 1));
-        let mut q_y = Array2::zeros((1, grid_size));
+    //     // Calculate the sine term
+    //     let mut q_x = Array2::zeros((grid_size, 1));
+    //     let mut q_y = Array2::zeros((1, grid_size));
         
-        for i in 0..grid_size {
-            q_x[[i, 0]] = x_grid[i] * q[0] / 2.0;
-            q_y[[0, i]] = y_grid[i] * q[1] / 2.0;
-        }
+    //     for i in 0..grid_size {
+    //         q_x[[i, 0]] = x_grid[i] * q[0] / 2.0;
+    //         q_y[[0, i]] = y_grid[i] * q[1] / 2.0;
+    //     }
         
-        let sin_term = (q_x + q_y).sin();
+    //     let sin_term = (q_x + q_y).sin();
+    //     let sin: Array2<f64> = Array2::from_diag(&sin_term.flatten());
         
-        // Calculate momentum operator in sinc-DVR basis
-        let p = self.compute_sinc_dvr_rel(exciton);
-        
-        // Calculate p·sin + sin·p term
-        let p_sin = &p.dot(&sin_term) + &sin_term.dot(&p);
-        
-        // Calculate matrix element
-        (psi_i * p_sin * psi_j).sum() * dx * dx
-    }
+    //     // Calculate momentum operator in sinc-DVR basis
+    //     let p_1d = self.compute_sinc_dvr_rel(exciton);
 
-    fn compute_sinc_dvr_rel(&self, exciton: &FullHamiltonian) -> Array2<f64> {
-        let dx = exciton.rel_ham.grid.dx;
-        let nx = exciton.rel_ham.grid.grid_size;
+    //     let p = kron(&(eps[0] * &p_1d), &Array2::eye(grid_size)) 
+    //         + kron(&Array2::eye(grid_size), &(eps[1] * &p_1d));
+        
+    //     // Calculate p·sin + sin·p term
+    //     let p_sin = &p.dot(&sin) + &sin.dot(&p);
+        
+    //     // Calculate matrix element
+    //     psi_i.dot(&p_sin.dot(&psi_j)) * dx * dx
+    // }
 
-        // Create momentum operator matrix using sinc-DVR formula
-        Array2::from_shape_fn((nx,nx), |(i, j)| {
-            if i == j {
-                // Diagonal elements
-                PI.powi(2) / 3.0 / dx*dx
-            }
-            else {
-                // Off-diagonal elements
-                let diff: f64 = i as f64 - j as f64;
-                (-1.0 as f64).powf(diff) / (diff + f64::EPSILON) / dx 
-            }
-        })
-    }
+    // fn compute_sinc_dvr_rel(&self, exciton: &FullHamiltonian) -> Array2<f64> {
+    //     let dx = exciton.rel_ham.grid.dx;
+    //     let nx = exciton.rel_ham.grid.grid_size;
+
+    //     // Create momentum operator matrix using sinc-DVR formula
+    //     Array2::from_shape_fn((nx,nx), |(i, j)| {
+    //         if i == j {
+    //             // Diagonal elements
+    //             PI.powi(2) / 3.0 / dx*dx
+    //         }
+    //         else {
+    //             // Off-diagonal elements
+    //             let diff: f64 = i as f64 - j as f64;
+    //             (-1.0 as f64).powf(diff) / (diff + f64::EPSILON) / dx 
+    //         }
+    //     })
+    // }
 }
