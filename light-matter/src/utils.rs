@@ -154,21 +154,46 @@ pub struct LMMatrixElement {
 impl LMMatrixElement {
     pub fn populate_mat_elements(&self, rel_vecs: &Array2<f64>, modes: &Vec<PhotonMode>, exciton: &FullHamiltonian) -> Self{
         let n_rel = rel_vecs.shape()[1];
+        let n_modes = modes.len();
+        
+        // Use capacity hints for collections
+        let mut sing_q_ind = Vec::with_capacity(n_modes);
+        let mut doub_q_ind = Vec::with_capacity(n_modes * n_modes);
         
         // Generate single-mode indices
-        let sing_q_ind: Vec<Vec<i32>> = (0 .. modes.len()).map(|ind| vec![ind as i32]).collect();
+        for ind in 0..n_modes {
+            sing_q_ind.push(vec![ind as i32]);
+        }
 
         // Generate two-mode indices
-        let doub_q_ind: Vec<Vec<i32>> = (0..modes.len()).flat_map(|ind1| {
-            (0..modes.len()).map(|ind2| vec![ind1.clone() as i32, ind2 as i32]).collect::<Vec<Vec<i32>>>()
-        }).collect();
+        for ind1 in 0..n_modes {
+            for ind2 in 0..n_modes {
+                doub_q_ind.push(vec![ind1 as i32, ind2 as i32]);
+            }
+        }
 
         // Combine all indices
-        let all_q_ind = [sing_q_ind,doub_q_ind].concat();
+        let mut all_q_ind = Vec::with_capacity(sing_q_ind.len() + doub_q_ind.len());
+        all_q_ind.extend(sing_q_ind);
+        all_q_ind.extend(doub_q_ind);
 
-        // Initialize matrix element storage
-        let mut  cos_mat: HashMap<(usize,usize, Vec<i32>), f64> = HashMap::new();
-        let mut p_sin_mat: HashMap<(usize,usize, Vec<i32>), f64> = HashMap::new();
+        // Initialize matrix element storage with capacity hints
+        let estimated_elements = n_rel * n_rel * all_q_ind.len();
+        let mut cos_mat = HashMap::with_capacity(estimated_elements);
+        let mut p_sin_mat = HashMap::with_capacity(n_rel * n_rel * n_modes);
+
+        // Cache q_diff and q_sum calculations
+        let mut q_diff_cache = HashMap::with_capacity(n_modes * n_modes);
+        let mut q_sum_cache = HashMap::with_capacity(n_modes * n_modes);
+        
+        for ind1 in 0..n_modes {
+            for ind2 in 0..n_modes {
+                let q_1 = &modes[ind1].q;
+                let q_2 = &modes[ind2].q;
+                q_diff_cache.insert((ind1, ind2), q_1 - q_2);
+                q_sum_cache.insert((ind1, ind2), q_1 + q_2);
+            }
+        }
 
         // Define helper functions to calculate matrix elements
         let get_cos = |i1: usize, i2: usize, q: &Array1<f64>| -> f64 { 
@@ -179,46 +204,50 @@ impl LMMatrixElement {
             self.get_psin_elements(exciton, rel_vecs, i1, i2, q, eps)
         };
 
-        // Populate matrix elements for all mode combinations
-        all_q_ind.iter().for_each(|q_inds| 
-            for i1 in 0 .. n_rel {
-                for i2 in 0 .. n_rel {
+        // Use iterators for the main computation
+        for q_inds in &all_q_ind {
+            for i1 in 0..n_rel {
+                for i2 in 0..n_rel {
                     if q_inds.len() == 1 {
                         // Single-mode case
-                        let q = &modes[q_inds[0] as usize].q;
+                        let mode_idx = q_inds[0] as usize;
+                        let q = &modes[mode_idx].q;
+                        let eps = &modes[mode_idx].eps;
 
                         // Calculate and store cosine matrix element
-                        cos_mat.entry((i1,i2,q_inds.clone()))
+                        cos_mat.entry((i1, i2, q_inds.clone()))
                             .or_insert_with(|| get_cos(i1, i2, q));
 
                         // Calculate and store momentum-sine matrix element
-                        p_sin_mat.entry((i1,i2,q_inds.clone()))
-                            .or_insert_with(|| get_p_sin(i1, i2, q, &modes[q_inds[0] as usize].eps));
-                        
+                        p_sin_mat.entry((i1, i2, q_inds.clone()))
+                            .or_insert_with(|| get_p_sin(i1, i2, q, eps));
                     }
                     else if q_inds.len() == 2 {
                         // Two-mode case
-                        let q_ind1 = q_inds[0].max(q_inds[1]);
-                        let q_ind2 = q_inds[0].min(q_inds[1]);
-                        let q_1 = &modes[q_ind1 as usize].q;
-                        let q_2 = &modes[q_ind2 as usize].q;
-                        let q_diff = q_1 - q_2;
-                        let q_sum = q_1 + q_2;
+                        let q_ind1 = q_inds[0] as usize;
+                        let q_ind2 = q_inds[1] as usize;
+                        let max_ind = q_ind1.max(q_ind2);
+                        let min_ind = q_ind1.min(q_ind2);
+                        
+                        // Use cached difference and sum
+                        let q_diff = &q_diff_cache[&(max_ind, min_ind)];
+                        let q_sum = &q_sum_cache[&(q_ind1, q_ind2)];
 
                         // Calculate and store difference matrix element
-                        cos_mat.entry((i1,i2,vec![ q_ind1, -q_ind2]))
-                            .or_insert_with(|| get_cos(i1, i2, &q_diff));
+                        cos_mat.entry((i1, i2, vec![max_ind as i32, -(min_ind as i32)]))
+                            .or_insert_with(|| get_cos(i1, i2, q_diff));
 
                         // Calculate and store sum matrix element
-                        cos_mat.entry((i1,i2,vec![ q_ind1,  q_ind2]))
-                            .or_insert_with(|| get_cos(i1, i2, &q_sum));
+                        cos_mat.entry((i1, i2, vec![q_ind1 as i32, q_ind2 as i32]))
+                            .or_insert_with(|| get_cos(i1, i2, q_sum));
                     }
                 }
             }
-        );
+        }
 
-        Self{cos_mat: cos_mat, p_sin_mat: p_sin_mat, all_q_ind: Some(all_q_ind)  }
+        Self{cos_mat, p_sin_mat, all_q_ind: Some(all_q_ind)}
     }
+
 
     pub fn new() -> Self{
         let   cos_mat: HashMap<(usize,usize, Vec<i32>), f64> = HashMap::new();
@@ -228,37 +257,38 @@ impl LMMatrixElement {
     }
 
     pub fn get_cos_elements(&self, exciton: &FullHamiltonian,
-        rel_vecs: &Array2<f64>, i1: usize, i2: usize, q: &Array1<f64>) -> f64{
+        rel_vecs: &Array2<f64>, i1: usize, i2: usize, q: &Array1<f64>) -> f64 {
         
         let x_grid = &exciton.rel_ham.grid.x;
         let y_grid = &exciton.rel_ham.grid.y;
-        let eigvecs = &rel_vecs;
         let grid_size = exciton.rel_ham.grid.grid_size;
+        let dx = exciton.rel_ham.grid.dx;
 
         // Get the eigenvectors for states i and j
-        let psi_i: Array2<f64> = eigvecs.column(i1)
+        let psi_i: Array2<f64> = rel_vecs.column(i1)
             .to_shape((grid_size, grid_size)).unwrap().to_owned();
-        let psi_j = eigvecs.column(i2)
+        let psi_j = rel_vecs.column(i2)
             .to_shape((grid_size, grid_size)).unwrap().to_owned();
         
-        // Calculate the cosine term
+        // Precompute constants for efficiency
+        let half_q0 = q[0] / 2.0;
+        let half_q1 = q[1] / 2.0;
+        
+        // Calculate the cosine term more efficiently
         let mut q_x = Array2::zeros((grid_size, 1));
         let mut q_y = Array2::zeros((1, grid_size));
         
         for i in 0..grid_size {
-            q_x[[i, 0]] = x_grid[i] * q[0] / 2.0;
-            q_y[[0, i]] = y_grid[i] * q[1] / 2.0;
+            q_x[[i, 0]] = x_grid[i] * half_q0;
+            q_y[[0, i]] = y_grid[i] * half_q1;
         }
         
         let cos_term = (q_x + q_y).cos();
         
         // Calculate matrix element using fast implementation
-        fast_matrix_element_calc(
-            &psi_i, 
-            &psi_j, 
-            &cos_term, exciton.rel_ham.grid.dx
-        )
+        fast_matrix_element_calc(&psi_i, &psi_j, &cos_term, dx)
     }
+
 
     fn get_psin_elements(&self, exciton: &FullHamiltonian,
         rel_vecs: &Array2<f64>, i1: usize, i2: usize, q: &Array1<f64>, eps: &Array1<f64>) -> f64{
@@ -332,48 +362,63 @@ impl LMMatrixElementArray {
     }
 
     pub fn populate_mat_elements(&self, mat_els: &LMMatrixElement, e_vecs: &Vec<Array1<f64>>, parities: &Array1<i32>, n_com: usize) -> Self {
-        // Find the number of even and odd parity states
-        let (n_rel_even, n_rel_odd) = parities.iter().enumerate()
-            .fold((None, None), |(even, odd), (idx, &p)| {
-                if p == 1 && even.is_none() {
-                    (Some(e_vecs[idx].len() / n_com), odd)
-                } else if p == -1 && odd.is_none() {
-                    (even, Some(e_vecs[idx].len() / n_com))
-                } else {
-                    (even, odd)
-                }
-            });
+        // Find the number of even and odd parity states more efficiently
+        let mut n_rel_even = 0;
+        let mut n_rel_odd = 0;
         
-        let n_rel_even = n_rel_even.unwrap_or(0);
-        let n_rel_odd = n_rel_odd.unwrap_or(0);
+        for (idx, &parity) in parities.iter().enumerate() {
+            if parity == 1 && n_rel_even == 0 {
+                n_rel_even = e_vecs[idx].len() / n_com;
+            } else if parity == -1 && n_rel_odd == 0 {
+                n_rel_odd = e_vecs[idx].len() / n_com;
+            }
+            
+            // Break early if we've found both
+            if n_rel_even > 0 && n_rel_odd > 0 {
+                break;
+            }
+        }
+        
         let n_rel_par = [n_rel_even, n_rel_odd];
-        
         let n_eigs = e_vecs.len();
         
-        let mut cos_mat = HashMap::new();
-        let mut p_sin_mat = HashMap::new();
+        // Use capacity hints for HashMaps
+        let estimated_capacity = if let Some(all_q_ind) = &mat_els.all_q_ind {
+            all_q_ind.len()
+        } else {
+            16 // Default capacity if all_q_ind is None
+        };
+        
+        let mut cos_mat = HashMap::with_capacity(estimated_capacity);
+        let mut p_sin_mat = HashMap::with_capacity(estimated_capacity);
+        
+        // Pre-calculate parity indices for all eigenvectors
+        let parity_indices: Vec<usize> = parities.iter()
+            .map(|&p| (p == -1) as usize)
+            .collect();
         
         if let Some(all_q_ind) = &mat_els.all_q_ind {
             for q_inds in all_q_ind {
                 let mut matrix_1 = Array2::zeros((n_eigs, n_eigs));
                 let mut matrix_2 = Array2::zeros((n_eigs, n_eigs));
                 
+                // Keep using iterators for the main computation
                 for idx1 in 0..n_eigs {
                     for idx2 in 0..n_eigs {
                         let vec1 = &e_vecs[idx1];
                         let vec2 = &e_vecs[idx2];
                         
-                        let idx1_par = (parities[idx1] == -1) as usize;
-                        let idx2_par = (parities[idx2] == -1) as usize;
+                        let idx1_par = parity_indices[idx1];
+                        let idx2_par = parity_indices[idx2];
                         
-                        // Calculate the matrix elements directly without collecting
+                        // Calculate the matrix elements using iterators
                         let (cos_sum, sin_sum) = (0..n_rel_par[idx1_par])
                             .flat_map(|rel_ind1| {
                                 (0..n_rel_par[idx2_par]).flat_map(move |rel_ind2| {
                                     let r_ind1 = rel_ind1 + idx1_par * n_rel_even;
                                     let r_ind2 = rel_ind2 + idx2_par * n_rel_even;
                                     
-                                    // Get matrix elements (simplified for clarity)
+                                    // Get matrix elements
                                     let (mat_element1, mat_element2) = self.get_matrix_elements(
                                         mat_els, r_ind1, r_ind2, q_inds);
                                     
@@ -396,14 +441,14 @@ impl LMMatrixElementArray {
                 
                 // Insert into the appropriate HashMaps
                 if q_inds.len() == 1 {
-                    cos_mat.  insert(q_inds.clone(), matrix_1);
+                    cos_mat.insert(q_inds.clone(), matrix_1);
                     p_sin_mat.insert(q_inds.clone(), matrix_2);
                 } else if q_inds.len() == 2 {
                     let q_ind1 = q_inds[0].max(q_inds[1]);
                     let q_ind2 = q_inds[0].min(q_inds[1]);
                     
                     cos_mat.insert(vec![q_ind1, -q_ind2], matrix_1);
-                    cos_mat.insert(vec![q_ind1,  q_ind2], matrix_2);
+                    cos_mat.insert(vec![q_ind1, q_ind2], matrix_2);
                 }
             }
         }
@@ -414,30 +459,29 @@ impl LMMatrixElementArray {
     // Helper function to get matrix elements
     fn get_matrix_elements(&self, mat_els: &LMMatrixElement, r_ind1: usize, r_ind2: usize, q_inds: &Vec<i32>) -> (f64, f64) {
         if q_inds.len() == 1 {
-            let mat_element1 = mat_els.cos_mat.get(&(r_ind1, r_ind2, q_inds.clone()))
-                .unwrap_or_else(|| panic!("Matrix element missing for i1 = {}, i2 = {}, q_ind = {:?}", 
-                                        r_ind1, r_ind2, q_inds));
+            // Use pattern matching to avoid redundant lookups
+            let key = (r_ind1, r_ind2, q_inds.clone());
             
-            let mat_element2 = mat_els.p_sin_mat.get(&(r_ind1, r_ind2, q_inds.clone()))
-                .unwrap_or_else(|| panic!("Matrix element missing for i1 = {}, i2 = {}, q_ind = {:?}", 
-                                        r_ind1, r_ind2, q_inds));
-            
-            (*mat_element1, *mat_element2)
+            match (mat_els.cos_mat.get(&key), mat_els.p_sin_mat.get(&key)) {
+                (Some(&mat_element1), Some(&mat_element2)) => (mat_element1, mat_element2),
+                _ => panic!("Matrix element missing for i1 = {}, i2 = {}, q_ind = {:?}", 
+                        r_ind1, r_ind2, q_inds)
+            }
         } else {
             let q_ind1 = q_inds[0].max(q_inds[1]);
             let q_ind2 = q_inds[0].min(q_inds[1]);
             
-            let mat_element1 = mat_els.cos_mat.get(&(r_ind1, r_ind2, vec![q_ind1, -q_ind2]))
-                .unwrap_or_else(|| panic!("Matrix element missing for i1 = {}, i2 = {}, q_inds = {:?}", 
-                                        r_ind1, r_ind2, vec![q_ind1, -q_ind2]));
+            let key1 = (r_ind1, r_ind2, vec![q_ind1, -q_ind2]);
+            let key2 = (r_ind1, r_ind2, vec![q_ind1, q_ind2]);
             
-            let mat_element2 = mat_els.cos_mat.get(&(r_ind1, r_ind2, vec![q_ind1, q_ind2]))
-                .unwrap_or_else(|| panic!("Matrix element missing for i1 = {}, i2 = {}, q_inds = {:?}", 
-                                        r_ind1, r_ind2, vec![q_ind1, q_ind2]));
-            
-            (*mat_element1, *mat_element2)
+            match (mat_els.cos_mat.get(&key1), mat_els.cos_mat.get(&key2)) {
+                (Some(&mat_element1), Some(&mat_element2)) => (mat_element1, mat_element2),
+                _ => panic!("Matrix element missing for i1 = {}, i2 = {}, q_inds = {:?}/{:?}", 
+                        r_ind1, r_ind2, vec![q_ind1, -q_ind2], vec![q_ind1, q_ind2])
+            }
         }
     }
+
 
     // pub fn _get_cos_elements(&self, exciton: &FullHamiltonian,
     //     rel_vecs: &Array2<f64>, i1: usize, i2: usize, q: &Array1<f64>) -> f64{

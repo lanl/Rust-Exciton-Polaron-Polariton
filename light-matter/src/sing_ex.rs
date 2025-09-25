@@ -101,17 +101,14 @@ impl ExcitonicHamiltonian {
         // Convert k to Array1 once for efficiency
         let k_arr = arr1(&k);
         
-        // Precompute p_dot_unit for each component
+        // Precompute p_dot_unit for each component - avoid unnecessary cloning
         let p_dot_unit_cache: Vec<f64> = kappas.iter()
             .map(|kappa| {
-                let _test = kappa.clone();
-                let _test1 = [field_vec[0], field_vec[1]];
-                let _test2 = [k_arr[0], k_arr[1]];
-                // Calculate (k + kappa)·field_vec for each kappa point
-                (k_arr.clone() + arr1(kappa)).dot(field_vec)
+                // Calculate (k + kappa)·field_vec for each kappa point more efficiently
+                (k_arr[0] + kappa[0]) * field_vec[0] + (k_arr[1] + kappa[1]) * field_vec[1]
             })
             .collect();
-        
+            
         if diag {
             Array2::from_shape_fn((n_eig,1), |(idx1,_)| {
                 // For each eigenvector
@@ -360,63 +357,68 @@ impl<'a> PPOffHamiltonian<'a> {
         self.matrix_element_arrays = Some(matrix_element_arrays);
     }
 
-    fn apply_lm_int(&self, x_ph_ind: usize, r_ph_ind: usize, x_ex_ind: usize ,r_ex_ind: usize, val: f64) -> f64{
+    fn apply_lm_int(&self, x_ph_ind: usize, r_ph_ind: usize, x_ex_ind: usize, r_ex_ind: usize, val: f64) -> f64 {
         let mut res = 0.0;
+        
+        // Cache these references to avoid repeated unwrapping
+        let p_cos_ref = self.p_cos.as_ref().unwrap();
+        let matrix_element_arrays_ref = self.matrix_element_arrays.as_ref().unwrap();
+        let m = self.exciton.exciton_ham.m;
+        let mu = self.exciton.exciton_ham.rel_ham.mu;
+        let lm_coupling = self.lm_coupling;
 
         if x_ph_ind == 0 && r_ph_ind > 0 {
             // 2 P cos(qx/2) a† / M term
-            res += {
-                &self.p_cos.as_ref().unwrap().get(&(r_ph_ind as i32 - 1)).unwrap()[[r_ex_ind, x_ex_ind]]
-                    * self.lm_coupling * 2.0 / self.exciton.exciton_ham.m * val // a† = 1 for single photon states
-            };
+            let r_ph_ind_i32 = r_ph_ind as i32 - 1;
+            if let Some(p_cos_matrix) = p_cos_ref.get(&r_ph_ind_i32) {
+                res += p_cos_matrix[[r_ex_ind, x_ex_ind]] * lm_coupling * 2.0 / m * val;
+            }
 
             // 2 p sin(qx/2) a† / mu term
-            res += &self.matrix_element_arrays.as_ref().unwrap().p_sin_mat.get(&vec![r_ph_ind as i32 - 1]).unwrap()[[r_ex_ind, x_ex_ind]]
-                * self.lm_coupling * 2.0 / self.exciton.exciton_ham.rel_ham.mu * val; // a† = 1 for single photon states
-
+            if let Some(p_sin_matrix) = matrix_element_arrays_ref.p_sin_mat.get(&vec![r_ph_ind_i32]) {
+                res += p_sin_matrix[[r_ex_ind, x_ex_ind]] * lm_coupling * 2.0 / mu * val;
+            }
         }
-        else if  x_ph_ind > 0 && r_ph_ind == 0{
+        else if x_ph_ind > 0 && r_ph_ind == 0 {
             // 2 P cos(qx/2) a / M term
-            res += {
-                &self.p_cos.as_ref().unwrap().get(&(x_ph_ind as i32 - 1)).unwrap()[[r_ex_ind, x_ex_ind]]
-                    * self.lm_coupling * 2.0 / self.exciton.exciton_ham.m * val // a = 1 for single photon states
-            };
+            let x_ph_ind_i32 = x_ph_ind as i32 - 1;
+            if let Some(p_cos_matrix) = p_cos_ref.get(&x_ph_ind_i32) {
+                res += p_cos_matrix[[r_ex_ind, x_ex_ind]] * lm_coupling * 2.0 / m * val;
+            }
 
             // 2 p sin(qx/2) a / mu term
-            res += &self.matrix_element_arrays.as_ref().unwrap().p_sin_mat.get(&vec![x_ph_ind as i32 - 1]).unwrap()[[r_ex_ind, x_ex_ind]]
-                * self.lm_coupling / 2.0 / self.exciton.exciton_ham.rel_ham.mu * val; // a† = 1 for single photon states
+            if let Some(p_sin_matrix) = matrix_element_arrays_ref.p_sin_mat.get(&vec![x_ph_ind_i32]) {
+                res += p_sin_matrix[[r_ex_ind, x_ex_ind]] * lm_coupling / 2.0 / mu * val;
+            }
         }
-        else if x_ph_ind == r_ph_ind && r_ph_ind > 0 {
+        else if x_ph_ind == r_ph_ind && r_ph_ind > 0 && r_ex_ind != x_ex_ind {
             // P·q (a† a) / 2 M term (off-diagonal terms only)
-            res += if r_ex_ind != x_ex_ind {
-                let q = &self.photon.photon_modes[r_ph_ind - 1].q;
-                let p_com = self.exciton.get_p_com(q, false);
-                p_com[[r_ex_ind, x_ex_ind]] / 2.0 / self.exciton.exciton_ham.m * val // (a† a) = 1 for single photon states
-            } else { 0.0 };
+            let q = &self.photon.photon_modes[r_ph_ind - 1].q;
+            let p_com = self.exciton.get_p_com(q, false);
+            res += p_com[[r_ex_ind, x_ex_ind]] / 2.0 / m * val;
         }
-        else if x_ph_ind == r_ph_ind && r_ph_ind == 0 {
-            res = 0.0;
-        }
-        else {
+        else if x_ph_ind != r_ph_ind && x_ph_ind > 0 && r_ph_ind > 0 {
             // A A cos((q - q') x / 2) a†_q a_q'
-            res += {
-                let q_x = x_ph_ind as i32 - 1;
-                let q_r = r_ph_ind as i32 - 1;
+            let q_x = x_ph_ind as i32 - 1;
+            let q_r = r_ph_ind as i32 - 1;
+            let q_ind1 = q_x.max(q_r);
+            let q_ind2 = q_x.min(q_r);
+            let q_ind_key = vec![q_ind1, -q_ind2];
 
+            if let Some(cos_matrix) = matrix_element_arrays_ref.cos_mat.get(&q_ind_key) {
                 let eps_x = &self.photon.photon_modes[x_ph_ind - 1].eps;
                 let eps_r = &self.photon.photon_modes[r_ph_ind - 1].eps;
-
-                let q_ind1 = q_x.max(q_r);
-                let q_ind2 = q_x.min(q_r);
-
-                let q_ind_key = vec![q_ind1, -q_ind2];
-                &self.matrix_element_arrays.as_ref().unwrap().cos_mat.get(&q_ind_key).unwrap()[[r_ex_ind, x_ex_ind]]
-                    * self.lm_coupling * self.lm_coupling * eps_r.dot(eps_x) * val // a†_q a_q' = 1 for single photon states
-            };
+                
+                // Calculate dot product directly
+                let eps_dot = eps_r[0] * eps_x[0] + eps_r[1] * eps_x[1];
+                
+                res += cos_matrix[[r_ex_ind, x_ex_ind]] * lm_coupling * lm_coupling * eps_dot * val;
+            }
         }
 
         res
     }
+
 
     
 }
