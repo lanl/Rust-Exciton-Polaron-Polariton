@@ -1,5 +1,5 @@
 use std::{usize};
-use ndarray::{array, Array1, Array2};
+use ndarray::{array, linalg::kron, Array1, Array2};
 use rayon::vec;
 use serde::{Serialize, Deserialize};
 use std::path::Path;
@@ -176,8 +176,8 @@ impl LMMatrixElement {
             self.get_cos_elements(exciton, rel_vecs, i1, i2, q)
         };
 
-        let get_p_sin = |i1: usize, i2: usize, q: &Array1<f64>| -> f64 {
-            self.get_psin_elements(exciton, rel_vecs, i1, i2, q)
+        let get_p_sin = |i1: usize, i2: usize, q: &Array1<f64>, eps: &Array1<f64>| -> f64 {
+            self.get_psin_elements(exciton, rel_vecs, i1, i2, q, eps)
         };
 
         // Populate matrix elements for all mode combinations
@@ -194,7 +194,7 @@ impl LMMatrixElement {
 
                         // Calculate and store momentum-sine matrix element
                         p_sin_mat.entry((i1,i2,q_inds.clone()))
-                            .or_insert_with(|| get_p_sin(i1, i2, q));
+                            .or_insert_with(|| get_p_sin(i1, i2, q, &modes[q_inds[0] as usize].eps));
                         
                     }
                     else if q_inds.len() == 2 {
@@ -262,7 +262,7 @@ impl LMMatrixElement {
     }
 
     fn get_psin_elements(&self, exciton: &FullHamiltonian,
-        rel_vecs: &Array2<f64>, i1: usize, i2: usize, q: &Array1<f64>) -> f64{
+        rel_vecs: &Array2<f64>, i1: usize, i2: usize, q: &Array1<f64>, eps: &Array1<f64>) -> f64{
         let x_grid =  &exciton.rel_ham.grid.x;
         let y_grid =  &exciton.rel_ham.grid.y;
         let eigvecs = rel_vecs;
@@ -270,10 +270,8 @@ impl LMMatrixElement {
         let dx = exciton.rel_ham.grid.dx;
 
         // Get the eigenvectors for states i and j
-        let psi_i = eigvecs.column(i1)
-            .to_shape((grid_size, grid_size)).unwrap().to_owned();
-        let psi_j = eigvecs.column(i2)
-            .to_shape((grid_size, grid_size)).unwrap().to_owned();
+        let psi_i = eigvecs.column(i1);
+        let psi_j = eigvecs.column(i2);
         
         // Calculate the sine term
         let mut q_x = Array2::zeros((grid_size, 1));
@@ -285,15 +283,19 @@ impl LMMatrixElement {
         }
         
         let sin_term = (q_x + q_y).sin();
+        let sin: Array2<f64> = Array2::from_diag(&sin_term.flatten());
         
         // Calculate momentum operator in sinc-DVR basis
-        let p = self.compute_sinc_dvr_rel(exciton);
+        let p_1d = self.compute_sinc_dvr_rel(exciton);
+
+        let p = kron(&(eps[0] * &p_1d), &Array2::eye(grid_size)) 
+            + kron(&Array2::eye(grid_size), &(eps[1] * &p_1d));
         
         // Calculate p·sin + sin·p term
-        let p_sin = &p.dot(&sin_term) + &sin_term.dot(&p);
+        let p_sin = &p.dot(&sin) + &sin.dot(&p);
         
         // Calculate matrix element
-        (psi_i * p_sin * psi_j).sum() * dx * dx
+        psi_i.dot(&p_sin.dot(&psi_j)) * dx * dx
     }
 
     fn compute_sinc_dvr_rel(&self, exciton: &FullHamiltonian) -> Array2<f64> {
