@@ -3,10 +3,12 @@ use std::{f64::consts::PI, path::PathBuf};
 use std::time::Instant;
 
 pub mod sparse_methods;
-pub use sparse_methods::*;
 
 pub mod utils;
 pub use utils::{Vector3D, PhotonMode, Polarization};
+
+pub mod visualization;
+pub use visualization::plot_band_structure;
 
 pub mod sing_ex;
 
@@ -18,6 +20,7 @@ const C: f64 = 137.036;
 enum Method {
     Sparse,
     Dense,
+    SingEx,
 }
 
 fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
@@ -52,74 +55,81 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     match method {
         Method::Sparse => {
 
-        println!("Using sparse methods for light-matter coupling.");
+            println!("Using sparse methods for light-matter coupling.");
 
-        // Create light-matter system
-        let light_matter = LightMatter::new(exciton.full_ham, photon_modes, coupling,
-                                        n_rel, n_ex_eig, parity);
+            // Create light-matter system
+            let light_matter = sparse_methods::LightMatter::new(exciton.full_ham, photon_modes, coupling,
+                                            n_rel, n_ex_eig, parity);
 
-        // Define high-symmetry points in k-space for band structure calculation
-        // Here we use Γ to X path (center to edge of Brillouin zone)
-        let sym_points = vec![ vec![0.0,0.0], vec![PI / a0, 0.0]];
-        let sym_labels = vec!["Γ".to_string(), "X".to_string()];
+            // Define high-symmetry points in k-space for band structure calculation
+            // Here we use Γ to X path (center to edge of Brillouin zone)
+            let sym_points = vec![ vec![0.0,0.0], vec![PI / a0, 0.0]];
+            let sym_labels = vec!["Γ".to_string(), "X".to_string()];
 
-        // Start timing the band structure calculation
-        let start_time = Instant::now();
-        
-        // Create band structure calculator
-        let band_structure = BandStructureCalculatorLM::new(
-            light_matter, a0, v0, "lm_data".to_string(), sym_points.clone());
-        
-        let n_bands_calc = (n_bands as f64 * 1.1).ceil() as usize; // Calculate a few extra bands to ensure accuracy
+            // Start timing the band structure calculation
+            let start_time = Instant::now();
+            
+            // Create band structure calculator
+            let band_structure = sparse_methods::BandStructureCalculatorLM::new(
+                light_matter, a0, v0, "lm_data".to_string(), sym_points.clone());
+            
+            let n_bands_calc = (n_bands as f64 * 1.1).ceil() as usize; // Calculate a few extra bands to ensure accuracy
 
-        // Using sparse matrices and ARPACK to calculate eigenvalues
-        let (k_points, eigvals_list) = band_structure.calculate_lm_band_structure_sparse(n_k_points, n_bands_calc);
-        
-        // End timing and print duration
-        let end_time = Instant::now();
-        let duration = end_time.duration_since(start_time);
-        println!("Calc dispersion in {:?}", duration);
+            // Using sparse matrices and ARPACK to calculate eigenvalues
+            let (k_points, eigvals_list) = band_structure.calculate_lm_band_structure_sparse(n_k_points, n_bands_calc);
+            
+            // End timing and print duration
+            let end_time = Instant::now();
+            let duration = end_time.duration_since(start_time);
+            println!("Calc dispersion in {:?}", duration);
 
-        // Plot the band structure
-        plot_band_structure(
-            &k_points, sym_points, sym_labels, &eigvals_list, n_bands, a0, 
-            Some("disp_plot.png"), false, v0, coupling);
+            // Plot the band structure
+            plot_band_structure(
+                &k_points, sym_points, sym_labels, &eigvals_list, n_bands, a0, 
+                Some("disp_plot.png"), false, v0, coupling);
 
         },
         Method::Dense => {
             
-        println!("Using dense methods for light-matter coupling.");
+            println!("Using dense methods for light-matter coupling.");
 
-        // Create light-matter system
-        let light_matter = dense_methods::LightMatter::new(exciton.full_ham, photon_modes, coupling,
-                                        n_rel, n_ex_eig, parity);
+            // Create light-matter system
+            let light_matter = dense_methods::LightMatter::new(exciton.full_ham, photon_modes, coupling,
+                                            n_rel, n_ex_eig, parity);
 
-        // Define high-symmetry points in k-space for band structure calculation
-        // Here we use Γ to X path (center to edge of Brillouin zone)
-        let sym_points = vec![ vec![0.0,0.0], vec![PI / a0, 0.0]];
-        let sym_labels = vec!["Γ".to_string(), "X".to_string()];
+            // Define high-symmetry points in k-space for band structure calculation
+            // Here we use Γ to X path (center to edge of Brillouin zone)
+            let sym_points = vec![ vec![0.0,0.0], vec![PI / a0, 0.0]];
+            let sym_labels = vec!["Γ".to_string(), "X".to_string()];
 
-        // Start timing the band structure calculation
-        let start_time = Instant::now();
-        
-        // Create band structure calculator
-        let band_structure = dense_methods::BandStructureCalculatorLM::new(
-            light_matter, a0, v0, "lm_data".to_string(), sym_points.clone());
-        
-        // Using sparse matrices and ARPACK to calculate 40 lowest eigenvalues
-        let (k_points, eigvals_list) = band_structure.calculate_lm_band_structure(n_k_points);
-        
-        // End timing and print duration
-        let end_time = Instant::now();
-        let duration = end_time.duration_since(start_time);
-        println!("Calc dispersion in {:?}", duration);
+            // Start timing the band structure calculation
+            let start_time = Instant::now();
+            
+            // Create band structure calculator
+            let band_structure = dense_methods::BandStructureCalculatorLM::new(
+                light_matter, a0, v0, "lm_data".to_string(), sym_points.clone());
+            
+            // Using sparse matrices and ARPACK to calculate 40 lowest eigenvalues
+            let (k_points, eigvals_list) = band_structure.calculate_lm_band_structure(n_k_points);
+            
+            // End timing and print duration
+            let end_time = Instant::now();
+            let duration = end_time.duration_since(start_time);
+            println!("Calc dispersion in {:?}", duration);
 
-        // Plot the band structure
-        dense_methods::plot_band_structure(
-            &k_points, sym_points, sym_labels, &eigvals_list, n_bands, a0, 
-            Some("disp_plot.png"), false, v0, coupling);
+            // Plot the band structure
+            plot_band_structure(
+                &k_points, sym_points, sym_labels, &eigvals_list, n_bands, a0, 
+                Some("disp_plot.png"), false, v0, coupling);
 
-        },        
+        },   
+
+        Method::SingEx => {
+
+            println!("Using Mat-Vec methods for light-matter coupling in single photon limit.");
+
+
+        }     
     }
 }
 
