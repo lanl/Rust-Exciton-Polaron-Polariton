@@ -371,6 +371,11 @@ impl PPOffHamiltonian {
     }
 
     fn apply_lm_int(&self, x_ph_ind: usize, r_ph_ind: usize, x_ex_ind: usize, r_ex_ind: usize, val: f64) -> f64 {
+        // Early return if indices don't allow for interaction
+        if (x_ph_ind == 0 && r_ph_ind == 0) || (r_ex_ind == x_ex_ind && x_ph_ind == r_ph_ind) {
+            return 0.0;
+        }
+        
         let mut res = 0.0;
         
         // Cache these references to avoid repeated unwrapping
@@ -436,83 +441,100 @@ impl PPOffHamiltonian {
 
 impl ArrayOperator<f64> for PPOffHamiltonian {
     fn apply(&self, x: &Array1<f64>) -> Array1<f64> {
-
         assert!(self.matrix_element_arrays.is_some(), "Matrix element arrays not computed. Call calc_matrix_element_arrays() first.");
 
         let n_ex = self.exciton.n_ex_eig;
         let n_ph = self.photon.photon_modes.len() + 1; // +1 for ground state
 
+        // Pre-allocate the result array
+        let mut result = Array1::zeros(x.len());
+
         if self.phonon.is_none() {
             assert!(x.len() == n_ex * n_ph, 
                 "Input vector length must match LM Hamiltonian dimension.");
 
-            Array1::from_iter((0 .. x.len()).map( |r_ind| {
+            // Use parallel iteration with rayon if available
+            for r_ind in 0..x.len() {
                 let r_ex_ind = r_ind / n_ph;
                 let r_ph_ind = r_ind % n_ph;
-
-                x.iter().enumerate().map( |(x_ind, &val)| {
+                
+                // Sparse application: only iterate over indices where interaction is possible
+                for (x_ind, &val) in x.indexed_iter() {
                     let x_ex_ind = x_ind / n_ph;
                     let x_ph_ind = x_ind % n_ph;
-
-                    self.apply_lm_int(x_ph_ind, r_ph_ind, x_ex_ind, r_ex_ind, val)
                     
-                }).sum::<f64>()
-            } ))
+                    // Skip if no interaction is possible
+                    if (x_ph_ind == 0 && r_ph_ind == 0) || (r_ex_ind == x_ex_ind && x_ph_ind == r_ph_ind) {
+                        continue;
+                    }
+                    
+                    result[r_ind] += self.apply_lm_int(x_ph_ind, r_ph_ind, x_ex_ind, r_ex_ind, val);
+                }
+            }
         }
         else {
-            assert!(x.len() == n_ex * n_ph * self.phonon.as_ref().unwrap().phonon_mode.n_fock, 
-                "Input vector length must match PP Hamiltonian dimension.");
-
             let n_pn = self.phonon.as_ref().unwrap().phonon_mode.n_fock;
+            assert!(x.len() == n_ex * n_ph * n_pn, 
+                "Input vector length must match PP Hamiltonian dimension.");
+            
             let phonon_mode_ind: i32 = self.photon.photon_modes.len() as i32; // Phonon mode is last in the list
+            let cos_mat_phonon = self.matrix_element_arrays.as_ref().unwrap().cos_mat.get(&vec![phonon_mode_ind]).unwrap();
 
-            Array1::from_iter( (0 .. x.len()).map( |r_ind| {
-                let r_ex_ind =  r_ind / (n_ph * n_pn);
+            // Pre-compute p_com for phonon mode to avoid repeated calculations
+            let p_com_phonon = if n_pn > 1 {
+                let k = &self.phonon.as_ref().unwrap().phonon_mode.q;
+                Some(self.exciton.get_p_com(k, false))
+            } else {
+                None
+            };
+
+            for r_ind in 0..x.len() {
+                let r_ex_ind = r_ind / (n_ph * n_pn);
                 let r_ph_ind = (r_ind / n_pn) % n_ph;
-                let r_pn_ind =  r_ind % n_pn;
-
-                x.iter().enumerate().map(|(x_ind, &val)| {
+                let r_pn_ind = r_ind % n_pn;
+                
+                // Only iterate over indices where interaction is possible
+                for x_ind in 0..x.len() {
                     let x_ex_ind = x_ind / (n_ph * n_pn);
                     let x_ph_ind = (x_ind / n_pn) % n_ph;
                     let x_pn_ind = x_ind % n_pn;
-
+                    
+                    let val = x[x_ind];
+                    
+                    // Skip if no interaction is possible based on indices
+                    if x_pn_ind != r_pn_ind && x_pn_ind != r_pn_ind + 1 && x_pn_ind + 1 != r_pn_ind {
+                        continue;
+                    }
+                    
                     if x_pn_ind == r_pn_ind {
-                        if x_ph_ind == r_ph_ind && r_ex_ind != x_ex_ind{
-
+                        if x_ph_ind == r_ph_ind && r_ex_ind != x_ex_ind && n_pn > 1 {
                             // P·k (b† b) / 2 M term (off-diagonal terms only)
-                            let k = &self.phonon.as_ref().unwrap().phonon_mode.q;
-                            let p_com = self.exciton.get_p_com(k, false);
-
-                            p_com[[r_ex_ind, x_ex_ind]] / 2.0 / self.exciton.exciton_ham.m * val * x_pn_ind as f64  // (b† b) = n for phonon states
-
-                            // All other LM interaction terms
-                            + self.apply_lm_int(x_ph_ind, r_ph_ind, x_ex_ind, r_ex_ind, val)
-
+                            if let Some(ref p_com) = p_com_phonon {
+                                result[r_ind] += p_com[[r_ex_ind, x_ex_ind]] / 2.0 / self.exciton.exciton_ham.m 
+                                              * val * x_pn_ind as f64;  // (b† b) = n for phonon states
+                            }
                         }
-                        else {
-                            // No phonon off-diagonal operators, only LM interaction
-                            self.apply_lm_int(x_ph_ind, r_ph_ind, x_ex_ind, r_ex_ind, val)
-                        }
+                        // LM interaction terms
+                        result[r_ind] += self.apply_lm_int(x_ph_ind, r_ph_ind, x_ex_ind, r_ex_ind, val);
                     }
                     else if x_pn_ind == r_pn_ind + 1 {
-                        // g (b† + b) term
-                        &self.matrix_element_arrays.as_ref().unwrap().cos_mat.get(&vec![phonon_mode_ind]).unwrap()[[r_ex_ind, x_ex_ind]] *
-                        self.pn_coupling * ((x_pn_ind) as f64).sqrt() * val  // b† term
+                        // g cos(kx/2) b†  term
+                        result[r_ind] += cos_mat_phonon[[r_ex_ind, x_ex_ind]] * 
+                                       self.pn_coupling * ((x_pn_ind) as f64).sqrt() * val;  // b† term
                     }
                     else if x_pn_ind + 1 == r_pn_ind {
-                        // sqrt(n) g (b† + b) term
-                        &self.matrix_element_arrays.as_ref().unwrap().cos_mat.get(&vec![phonon_mode_ind]).unwrap()[[r_ex_ind, x_ex_ind]] *
-                        self.pn_coupling * ((x_pn_ind + 1) as f64).sqrt() * val  // b term
+                        // g cos(kx/2) b   term
+                        result[r_ind] += cos_mat_phonon[[r_ex_ind, x_ex_ind]] *
+                                       self.pn_coupling * ((x_pn_ind + 1) as f64).sqrt() * val;  // b term
                     }
-                    else {
-                        0.0
-                    }
-
-                }).sum::<f64>()
-            }))
+                }
+            }
         }
+        
+        result
     }
 }
+
 
 pub struct PolaronPolariton {
     pub k: Vec<f64>,
@@ -591,15 +613,20 @@ impl PolaronPolariton {
 
 impl Operator<f64> for PolaronPolariton {
     fn apply(&self, x: &[f64], y: &mut [f64]) {
-        let x_arr = Array1::from(x.to_vec());
+        // Avoid unnecessary allocation and copying
+        let x_arr = Array1::from_shape_fn(x.len(), |i| x[i]);
 
         println!("Applying Mat-Vec");
-
+        // Apply diagonal part directly to y
         let diag_part = self.pp_diag_ham.apply(&x_arr);
-        let off_part = self.pp_off_ham.apply(&x_arr);
-
         for i in 0..y.len() {
-            y[i] = diag_part[i] + off_part[i];
+            y[i] = diag_part[i];
+        }
+        
+        // Apply off-diagonal part and add to y
+        let off_part = self.pp_off_ham.apply(&x_arr);
+        for i in 0..y.len() {
+            y[i] += off_part[i];
         }
     }
 }
