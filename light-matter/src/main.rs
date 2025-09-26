@@ -1,6 +1,7 @@
 use exciton_2d::{Exciton2DGridSystem, ExcitonConfig};
 use std::{f64::consts::PI, path::PathBuf};
 use std::time::Instant;
+use ndarray::arr1;
 
 pub mod sparse_methods;
 
@@ -9,6 +10,8 @@ pub use utils::{Vector3D, PhotonMode, Polarization};
 
 pub mod visualization;
 pub use visualization::plot_band_structure;
+
+use crate::utils::PPConfig;
 
 pub mod sing_ex;
 
@@ -28,10 +31,10 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     // Create the 2D exciton system
     let a0 = (&e_config).a0;
     let v0 = (&e_config).v0;
-    let exciton = Exciton2DGridSystem::from_config(e_config);
+    let exciton = Exciton2DGridSystem::from_config(e_config.clone());
     
     // Parameters for diagonalization
-    let n_rel = 16;      // Number of relative coordinate states
+    let n_rel = 8;      // Number of relative coordinate states
     let n_ex_eig = 32;  // Number of exciton eigenstates
     let parity = 0;      // Parity of states to consider
     
@@ -46,7 +49,23 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
 
     let n_k_points = 300;  // Number of k-points along the path
     let n_bands = 64;
+
+    let q_values: Vec<Vector3D> = qx_values.iter().map(|qx| {
+            Vector3D { x: *qx, y: 0.0, z: qz }
+        }).collect();
     
+
+    // Define phonon parameters
+    let pn_coupling = 0.01;
+    let pn_omega = 0.05;
+    let pn_k = arr1(&[0.,0.5]);
+    let pn_n_fock = 10;
+
+    let pp_config = PPConfig{
+        e_config, n_rel, n_ex_eig, lm_coupling: coupling, omega_0, q_values,
+        pn_coupling, pn_omega, pn_k, pn_n_fock, n_k_points, n_bands
+    };
+
     // Create photon modes
     let photon_modes: Vec<PhotonMode> = qx_values.iter().map(|qx| {
             PhotonMode::new(Vector3D { x: *qx, y: 0.0, z: qz }, Polarization::TE, n_fock)
@@ -128,7 +147,12 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
 
             println!("Using Mat-Vec methods for light-matter coupling in single photon limit.");
 
+            let mut pp_wrapper = sing_ex::SingExWrapper::new(pp_config.clone());
+            pp_wrapper.generate_pp();
 
+            let (e_vals, _) = sing_ex::diagonalize_pp_sing_ex(&pp_config, pp_wrapper.polaron_polariton.unwrap(), 2);
+
+            println!("{:?}", e_vals);
         }     
     }
 }
@@ -144,7 +168,7 @@ fn main() {
         m_e: 0.3,                              // Electron effective mass
         m_h: 0.3,                              // Hole effective mass
         verbose: false,                        // Verbose output flag
-        grid_size: 128,                        // Grid size for real-space calculations
+        grid_size: 64,                        // Grid size for real-space calculations
         box_size: 3.0,                         // Real-space box size
         save_dir: PathBuf::from("saved_data_lm"), // Directory to save data
         recalculate: false,                    // Whether to recalculate existing data
@@ -154,9 +178,9 @@ fn main() {
     };
     // davidson::davidson_test();
 
-    run_bandstructure(Method::Sparse, e_config.clone());
-    run_bandstructure(Method::Dense, e_config.clone());
-    
+    // run_bandstructure(Method::Sparse, e_config.clone());
+    // run_bandstructure(Method::Dense, e_config.clone());
+    run_bandstructure(Method::SingEx, e_config.clone());
     
     // // Define phonon modes for polaron-polariton calculation
     // let phonon_freq = 0.01;  // Phonon frequency in a.u.

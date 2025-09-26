@@ -3,7 +3,7 @@ use ndarray::{array, linalg::kron, Array1, Array2};
 use serde::{Serialize, Deserialize};
 use std::path::Path;
 use bincode::{self};
-use exciton_2d::{utils::fast_matrix_element_calc, FullHamiltonian};
+use exciton_2d::{utils::fast_matrix_element_calc, ExcitonConfig, FullHamiltonian};
 use std::{collections::HashMap, f64::consts::PI};
 
 // Speed of light in atomic units
@@ -288,8 +288,7 @@ impl LMMatrixElement {
         // Calculate matrix element using fast implementation
         fast_matrix_element_calc(&psi_i, &psi_j, &cos_term, dx)
     }
-
-
+    
     fn get_psin_elements(&self, exciton: &FullHamiltonian,
         rel_vecs: &Array2<f64>, i1: usize, i2: usize, q: &Array1<f64>, eps: &Array1<f64>) -> f64{
         let x_grid =  &exciton.rel_ham.grid.x;
@@ -312,7 +311,7 @@ impl LMMatrixElement {
         }
         
         let sin_term = (q_x + q_y).sin();
-        let sin: Array2<f64> = Array2::from_diag(&sin_term.flatten());
+        let sin= sin_term.flatten();
         
         // Calculate momentum operator in sinc-DVR basis
         let p_1d = self.compute_sinc_dvr_rel(exciton);
@@ -320,11 +319,9 @@ impl LMMatrixElement {
         let p = kron(&(eps[0] * &p_1d), &Array2::eye(grid_size)) 
             + kron(&Array2::eye(grid_size), &(eps[1] * &p_1d));
         
-        // Calculate p·sin + sin·p term
-        let p_sin = &p.dot(&sin) + &sin.dot(&p);
-        
         // Calculate matrix element
-        psi_i.dot(&p_sin.dot(&psi_j)) * dx * dx
+        (psi_i.dot(&p.dot(&(&sin * &psi_j)))
+        +psi_i.dot(&(&sin * &p.dot(&psi_j)))) * dx * dx
     }
 
     fn compute_sinc_dvr_rel(&self, exciton: &FullHamiltonian) -> Array2<f64> {
@@ -365,6 +362,8 @@ impl LMMatrixElementArray {
         // Find the number of even and odd parity states more efficiently
         let mut n_rel_even = 0;
         let mut n_rel_odd = 0;
+
+        assert!(&mat_els.all_q_ind.is_some(), "all_q_ind mus be computed first!");
         
         for (idx, &parity) in parities.iter().enumerate() {
             if parity == 1 && n_rel_even == 0 {
@@ -453,6 +452,9 @@ impl LMMatrixElementArray {
             }
         }
         
+        // let test = cos_mat.clone().into_keys().collect::<Vec<Vec<i32>>>();
+        // println!("cos_mat in populate_mat_elements {:?}",test);
+
         Self { cos_mat, p_sin_mat }
     }
 
@@ -570,4 +572,54 @@ impl LMMatrixElementArray {
     //         }
     //     })
     // }
+}
+
+#[derive (Clone)]
+pub struct PPConfig {
+    // Exciton Parameters
+    pub e_config: ExcitonConfig,
+    pub n_rel: usize,
+    pub n_ex_eig: usize,
+
+    // Polariton Parameters
+    pub lm_coupling: f64,
+    pub omega_0: f64,
+    pub q_values: Vec<Vector3D>,
+    
+    // Polaron Parameters
+    pub pn_coupling: f64,
+    pub pn_omega: f64,
+    pub pn_k: Array1<f64>,
+    pub pn_n_fock: usize,
+
+    // Band Parameters
+    pub n_k_points: usize,
+    pub n_bands: usize,
+}
+
+impl PPConfig {
+    pub fn new( 
+            // Exciton Parameters
+            e_config: ExcitonConfig,
+            n_rel: usize,
+            n_ex_eig: usize,
+
+            // Polariton Parameters
+            lm_coupling: f64,
+            omega_0: f64,
+            q_values: Vec<Vector3D>,
+            
+            // Polaron Parameters
+            pn_coupling: f64,
+            pn_omega: f64,
+            pn_k: Array1<f64>,
+            pn_n_fock: usize,
+
+            // Band Parameters
+            n_k_points: usize,
+            n_bands: usize,
+    ) -> Self {
+        Self { e_config, n_rel, n_ex_eig,  lm_coupling,  omega_0,  q_values,  
+            pn_coupling,  pn_omega,  pn_k, pn_n_fock, n_k_points,  n_bands}
+    }
 }
