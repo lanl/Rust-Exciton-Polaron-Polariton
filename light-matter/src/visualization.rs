@@ -20,7 +20,7 @@ pub fn plot_band_structure(
         
         // Create a larger drawing area with better resolution
         let root = BitMapBackend::new(path, (1200, 900)).into_drawing_area();
-        root.fill(&WHITE).unwrap();
+        root.fill(&BLACK).unwrap();
         
         // Create x-axis for the plot (path length)
         let mut x = vec![0.0; k_points.len()];
@@ -60,6 +60,9 @@ pub fn plot_band_structure(
             max_energy = max_energy.max(eigvals.fold(f64::NEG_INFINITY, |a, &b| a.max(b)));
         }
         
+        // Set max energy to 0.3
+        max_energy = 0.3;
+
         // Add padding to the energy range (5%)
         let energy_padding = (max_energy - min_energy) * 0.05;
         min_energy -= energy_padding;
@@ -71,7 +74,7 @@ pub fn plot_band_structure(
 
         // Set up chart with better styling
         let mut chart = ChartBuilder::on(&root)
-            .caption(title, ("sans-serif", 30).into_font())
+            .caption(title, ("sans-serif", 30).into_font().color(&WHITE))
             .margin(10)
             .margin_top(20)
             .margin_bottom(10)
@@ -107,9 +110,9 @@ pub fn plot_band_structure(
         
         // Draw vertical lines at high-symmetry points
         let line_style = ShapeStyle {
-            color: RGBColor(80, 80, 80).mix(0.8),
+            color: WHITE.mix(0.6),
             filled: false,
-            stroke_width: 1,
+            stroke_width: 3,
         };
         
         for &x_pos in &sym_positions {
@@ -124,7 +127,7 @@ pub fn plot_band_structure(
         println!("Number of bands: {}", num_bands );
         
         for band_idx in 0..num_bands {
-            let color = BLUE;
+            let color = WHITE;
             let band_points: Vec<(f64, f64)> = x.iter()
                 .zip(eigvals_list.iter())
                 .map(|(&x_val, eigvals)| (x_val, eigvals[band_idx]))
@@ -133,9 +136,9 @@ pub fn plot_band_structure(
             chart.draw_series(LineSeries::new(
                 band_points,
                 ShapeStyle {
-                    color: color.mix(0.9),
+                    color: color.mix(1.0),
                     filled: false,
-                    stroke_width: 2,
+                    stroke_width: 3,
                 }
             )).unwrap();
         }

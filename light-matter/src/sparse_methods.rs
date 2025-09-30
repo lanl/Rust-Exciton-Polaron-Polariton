@@ -419,7 +419,7 @@ impl LightMatter {
         
         // Configure ARPACK
         let config = Config::new()
-            .which(arpack::Which::SR)  // Smallest algebraic eigenvalues
+            .which(arpack::Which::SA)  // Smallest algebraic eigenvalues
             .tol(1e-10)                // Tolerance
             .max_iter(1000);          // Maximum iterations
         

@@ -34,12 +34,12 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     let exciton = Exciton2DGridSystem::from_config(e_config.clone());
     
     // Parameters for diagonalization
-    let n_rel = 8;      // Number of relative coordinate states
+    let n_rel = 16;      // Number of relative coordinate states
     let n_ex_eig = 32;  // Number of exciton eigenstates
     let parity = 0;      // Parity of states to consider
     
     // Light-matter coupling parameters
-    let coupling = 0.02;  // Coupling strength
+    let coupling = 0.01;  // Coupling strength
     let omega_0 = 0.25;    // Photon frequency
     
     // Define photon modes
@@ -82,8 +82,8 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
 
             // Define high-symmetry points in k-space for band structure calculation
             // Here we use Γ to X path (center to edge of Brillouin zone)
-            let sym_points = vec![ vec![0.0,0.0], vec![PI / a0, 0.0]];
-            let sym_labels = vec!["Γ".to_string(), "X".to_string()];
+            let sym_points = vec![ vec![0.0,0.0], vec![PI / a0, 0.0], vec![PI / a0, PI / a0]];
+            let sym_labels = vec!["Γ".to_string(), "X".to_string(), "M".to_string()];
 
             // Start timing the band structure calculation
             let start_time = Instant::now();
@@ -118,8 +118,8 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
 
             // Define high-symmetry points in k-space for band structure calculation
             // Here we use Γ to X path (center to edge of Brillouin zone)
-            let sym_points = vec![ vec![0.0,0.0], vec![PI / a0, 0.0]];
-            let sym_labels = vec!["Γ".to_string(), "X".to_string()];
+            let sym_points = vec![ vec![0.0,0.0], vec![PI / a0, 0.0], vec![PI / a0, PI / a0]];
+            let sym_labels = vec!["Γ".to_string(), "X".to_string(), "M".to_string()];
 
             // Start timing the band structure calculation
             let start_time = Instant::now();
@@ -146,11 +146,21 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
         Method::SingEx => {
 
             println!("Using Mat-Vec methods for light-matter coupling in single photon limit.");
+            
+            let start_time = Instant::now();
 
             let mut pp_wrapper = sing_ex::SingExWrapper::new(pp_config.clone());
             pp_wrapper.generate_pp();
 
+            let time1 = Instant::now();
+            let gen_time = time1.duration_since(start_time);
+            println!("Precomputed matrix elements in {:?}", gen_time);
+
             let (e_vals, _) = sing_ex::diagonalize_pp_sing_ex(&pp_config, pp_wrapper.polaron_polariton.unwrap(), 2);
+
+            let time2 = Instant::now();
+            let diag_time = time2.duration_since(time1);
+            println!("Diagonalized gamma point in {:?}", diag_time);
 
             println!("{:?}", e_vals);
         }     
@@ -163,7 +173,7 @@ fn main() {
     let e_config = ExcitonConfig {
         n_kappa: 7,                           // Number of k-points in Brillouin zone
         a0: 9.0,                               // Lattice constant
-        v0: 0.01,                              // Potential strength
+        v0: 0.05,                              // Potential strength
         k: vec![0.0, 0.0],                     // Initial k-vector
         m_e: 0.3,                              // Electron effective mass
         m_h: 0.3,                              // Hole effective mass
@@ -178,9 +188,9 @@ fn main() {
     };
     // davidson::davidson_test();
 
-    // run_bandstructure(Method::Sparse, e_config.clone());
-    // run_bandstructure(Method::Dense, e_config.clone());
     run_bandstructure(Method::SingEx, e_config.clone());
+    run_bandstructure(Method::Sparse, e_config.clone());
+    run_bandstructure(Method::Dense, e_config.clone());
     
     // // Define phonon modes for polaron-polariton calculation
     // let phonon_freq = 0.01;  // Phonon frequency in a.u.
