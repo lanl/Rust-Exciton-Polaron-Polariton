@@ -466,6 +466,8 @@ impl PPOffHamiltonian {
         let mut a_dag_term: Array1<f64> = Array1::zeros(n_ex);
         let mut aa_term: Array1<f64> = Array1::zeros(n_ex);
 
+        let stride = n_ph * n_pn;
+
         // Implement all a and a† terms
         for (mode_i, _) in self.photon.photon_modes.iter().enumerate() {
 
@@ -473,16 +475,16 @@ impl PPOffHamiltonian {
             let p_cos = &p_cos_ref[mode_i];
 
             // Sum over all phonon states
-            for r_pn_ind in 0..n_pn {
+            for pn_ind in 0..n_pn {
 
-                let pn_block_ind = r_pn_ind * n_ex * n_ph;
-
-                let mode_i_block =  pn_block_ind + n_ex * (mode_i + 1) .. pn_block_ind + n_ex * (mode_i + 2);
-                let ground_block = pn_block_ind .. pn_block_ind + n_ex;
+                let mode_i_start = (mode_i + 1)* n_pn + pn_ind;
+                let ground_start = pn_ind;
+                let mode_i_slice = s![mode_i_start .. ; stride];
+                let ground_slice = s![ground_start .. ; stride];
                 
                 // For a† term
-                // x for photon ground state and phonon in r_pn_ind
-                let x_ph = x_vec.slice(s![ground_block.clone()]);
+                // x for photon ground state and phonon in pn_ind
+                let x_ph = x_vec.slice(ground_slice.clone());
 
                 // Apply 2P cos(qx/2) a† / M term
                 a_dag_term.fill(0.0);
@@ -493,20 +495,19 @@ impl PPOffHamiltonian {
 
 
                 // For P a† a terms
-                let x_ph = x_vec.slice(s![mode_i_block.clone()]);
+                let x_ph = x_vec.slice(mode_i_slice.clone());
                 aa_term.fill(0.0);
                 aa_term = p_q_ref[mode_i].dot(&x_ph) / 2.0 / self.exciton.exciton_ham.m;
 
-                // Add to y at photon mode_i and phonon in r_pn_ind
-                y[mode_i_block.clone()]
-                    .iter_mut()
-                    .zip(a_dag_term.iter())
-                    .zip(aa_term.iter())
-                    .for_each(|((y_elem, aa_term), &a_dag_term)| *y_elem += aa_term + a_dag_term);
+                // Add to y at photon mode_i and phonon in pn_ind
+                for ex_ind in 0..n_ex {
+                    let idx_y = pn_ind + (mode_i + 1) * n_pn + ex_ind * stride;
+                    y[idx_y] += a_dag_term[ex_ind] + aa_term[ex_ind];
+                }
 
                 // For a terms
-                // x for photon mode_i and phonon in r_pn_ind
-                let x_ph = x_vec.slice(s![mode_i_block]);
+                // x for photon mode_i and phonon in pn_ind
+                let x_ph = x_vec.slice(mode_i_slice);
 
                 // Apply 2P cos(qx/2) a / M term
                 a_term.fill(0.0);
@@ -515,11 +516,11 @@ impl PPOffHamiltonian {
                 // Apply 2p sin(qx/2) a / mu term
                 a_term = &a_term - p_sin.dot(&x_ph) * self.lm_coupling * 2.0 / self.exciton.exciton_ham.rel_ham.mu;
 
-                // Add to y at photon mode_i and phonon in r_pn_ind
-                y[ground_block.clone()]
-                    .iter_mut()
-                    .zip(a_term.iter())
-                    .for_each(|(y_elem, &res_elem)| *y_elem += res_elem);
+                // Add to y at photon mode_i and phonon in pn_ind
+                for ex_ind in 0..n_ex {
+                    let idx_y = pn_ind + ex_ind * stride;
+                    y[idx_y] += a_term[ex_ind];
+                }
 
             }
 
@@ -536,23 +537,21 @@ impl PPOffHamiltonian {
                     // Calculate dot product directly
                     let eps_dot = eps_j[0] * eps_i[0] + eps_j[1] * eps_i[1];
 
-                    for r_pn_ind in 0..n_pn {
-                        let pn_block_ind = r_pn_ind * n_ex * n_ph;
+                    for pn_ind in 0..n_pn {
+                        let mode_j_start = (mode_i + 1)* n_pn + pn_ind;
+                        let mode_j_slice = s![mode_j_start .. ; stride];
 
-                        let mode_i_block =  pn_block_ind + n_ex * (mode_i + 1) .. pn_block_ind + n_ex * (mode_i + 2);
-                        let mode_j_block =  pn_block_ind + n_ex * (mode_j + 1) .. pn_block_ind + n_ex * (mode_j + 2);
-
-                        // x for photon mode_j and phonon in r_pn_ind
-                        let x_ph = x_vec.slice(s![mode_j_block.clone()]);
+                        // x for photon mode_j and phonon in pn_ind
+                        let x_ph = x_vec.slice(mode_j_slice);
 
                         // Apply A A cos((q - q') x / 2) a†_q a_q' term
                         let aa_term = cos_matrix.dot(&x_ph) * self.lm_coupling * self.lm_coupling * eps_dot;
 
-                        // Add to y at photon mode_i and phonon in r_pn_ind
-                        y[mode_i_block.clone()]
-                            .iter_mut()
-                            .zip(aa_term.iter())
-                            .for_each(|(y_elem, &res_elem)| *y_elem += res_elem);
+                        // Add to y at photon mode_i and phonon in pn_ind
+                        for ex_ind in 0..n_ex {
+                            let idx_y = pn_ind + (mode_i + 1) * n_pn + ex_ind * stride;
+                            y[idx_y] += aa_term[ex_ind];
+                        }
                     }
                 }
             }
@@ -560,10 +559,45 @@ impl PPOffHamiltonian {
         }
 
 
-        // Implement all phonon b and b† terms if phonon mode exists
+        // Implement all phonon b and b† terms 
+        let phonon_mode_ind: i32 = self.photon.photon_modes.len() as i32; // Phonon mode is last in the list
+        let cos_mat_phonon = matrix_element_arrays_ref.cos_mat.get(&vec![phonon_mode_ind]).unwrap();
 
+        for pn_ind in 0..n_pn-1 {
 
-        
+            for ph_ind in 0..n_ph {
+
+                let pn_dex_start = ph_ind* n_pn + pn_ind;
+                let pn_exc_start = pn_dex_start + 1;
+                let pn_dex_slice = s![pn_dex_start .. ; stride];
+                let pn_exc_slice = s![pn_exc_start .. ; stride];
+
+                // For b† term
+                // x for phonon in pn_ind and photon in ph_ind
+                let x_ph = x_vec.slice(pn_dex_slice);
+
+                // Apply g cos(kx/2) b†  term
+                let b_dag_term = cos_mat_phonon.dot(&x_ph) * self.pn_coupling * ((pn_ind + 1) as f64).sqrt();
+
+                // Add to y at phonon in pn_ind + 1 and photon in ph_ind
+                for ex_ind in 0..n_ex {
+                    let idx_y = (pn_ind + 1) + ph_ind * n_pn + ex_ind * stride;
+                    y[idx_y] += b_dag_term[ex_ind];
+                }
+
+                // For b term
+                // x for phonon in pn_ind + 1 and photon in ph_ind
+                let x_ph = x_vec.slice(pn_exc_slice); 
+                // Apply g cos(kx/2) b   term
+                let b_term = cos_mat_phonon.dot(&x_ph) * self.pn_coupling * ((pn_ind + 1) as f64).sqrt();
+
+                // Add to y at phonon in pn_ind and photon in ph_ind
+                for ex_ind in 0..n_ex {
+                    let idx_y = (pn_ind) + ph_ind * n_pn + ex_ind * stride;
+                    y[idx_y] += b_term[ex_ind];
+                }
+            }
+        }
     }
    
 }
