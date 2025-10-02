@@ -80,10 +80,10 @@ impl ExcitonicHamiltonian {
         let (exciton_energies, e_vecs, _, r_vecs, parities) 
             = self.exciton_ham.diagonalize_full_hamiltonian(self.n_rel, self.n_ex_eig, self.parity);
         
-        self.e_vals = Some(exciton_energies);
-        self.e_vecs = Some(e_vecs);
+        self.e_vals = Some(exciton_energies.slice(s![..self.n_ex_eig]).to_owned());
+        self.e_vecs = Some(e_vecs[0..self.n_ex_eig].to_vec());
         self.r_vecs = Some(r_vecs);
-        self.parities = Some(parities);
+        self.parities = Some(parities.slice(s![..self.n_ex_eig]).to_owned());
     }
 
     /// Calculates the center-of-mass momentum matrix element P·field_vec
@@ -356,6 +356,7 @@ impl PPOffHamiltonian {
         });
 
         self.p_cos = Some(p_cos);
+        self.p_q = Some(p_q);
     }
 
     pub fn calc_matrix_element_arrays(&mut self) {
@@ -376,7 +377,7 @@ impl PPOffHamiltonian {
         self.matrix_element_arrays = Some(matrix_element_arrays);
     }
 
-    fn apply_lm_int(&self, x_ph_ind: usize, r_ph_ind: usize, x_ex_ind: usize, r_ex_ind: usize, val: f64) -> f64 {
+    fn _apply_lm_int(&self, x_ph_ind: usize, r_ph_ind: usize, x_ex_ind: usize, r_ex_ind: usize, val: f64) -> f64 {
         // Early return if indices don't allow for interaction
         if (x_ph_ind == 0 && r_ph_ind == 0) || (r_ex_ind == x_ex_ind && x_ph_ind == r_ph_ind) {
             return 0.0;
@@ -440,275 +441,14 @@ impl PPOffHamiltonian {
 
         res
     }
-
-
-    fn _new_apply_test_optimized(&self, x: &[f64], y: &mut[f64]) {
-        assert!(self.matrix_element_arrays.is_some(), "Matrix element arrays not computed. Call calc_matrix_element_arrays() first.");
-        assert!(self.p_cos.is_some(), "P cos(x) element arrays not computed. Call calc_p_cos_matrix() first.");
-
-        let p_cos_ref = self.p_cos.as_ref().unwrap();
-        let matrix_element_arrays_ref = self.matrix_element_arrays.as_ref().unwrap();
-        let p_q_ref = self.p_q.as_ref().unwrap();
-
-        let n_ex = self.exciton.n_ex_eig;
-        let n_ph = self.photon.photon_modes.len() + 1; // +1 for ground state
-        let n_pn = if self.phonon.is_some() { self.phonon.as_ref().unwrap().phonon_mode.n_fock } else { 1 };
-        assert!(x.len() == n_ex * n_ph * n_pn, 
-            "Input vector length must match PP Hamiltonian dimension.");
-
-        // Clear the output array
-        y.fill(0.0);
-
-        let x_vec = ndarray::ArrayView1::from(x);
-        let stride = n_ph * n_pn;
-        
-        // Pre-compute some constants to avoid repeated calculations
-        let lm_coupling_2_over_m = self.lm_coupling * 2.0 / self.exciton.exciton_ham.m;
-        let lm_coupling_2_over_mu = self.lm_coupling * 2.0 / self.exciton.exciton_ham.rel_ham.mu;
-        let one_over_2m = 1.0 / (2.0 * self.exciton.exciton_ham.m);
-
-        // Reuse these arrays for all calculations
-        let mut a_term: Array1<f64> = Array1::zeros(n_ex);
-        let mut a_dag_term: Array1<f64> = Array1::zeros(n_ex);
-        let mut aa_term: Array1<f64> = Array1::zeros(n_ex);
-
-        // Implement all a and a† terms
-        for (mode_i, _) in self.photon.photon_modes.iter().enumerate() {
-            let p_sin = matrix_element_arrays_ref.p_sin_mat.get(&vec![mode_i as i32]).unwrap();
-            let p_cos = &p_cos_ref[mode_i];
-            let p_q = &p_q_ref[mode_i];
-
-            // Sum over all phonon states
-            for pn_ind in 0..n_pn {
-                let mode_i_start = (mode_i + 1) * n_pn + pn_ind;
-                let ground_start = pn_ind;
-                
-
-                // Get slice for mode_i at this phonon level
-                    let x_ph_mode_i = x_vec.slice(s![mode_i_start..;stride]);
-
-                // Combine a† and P a† a terms - more efficient!
-                {
-                    // Get slices for ground state and mode_i at this phonon level
-                    let x_ph_ground = x_vec.slice(s![ground_start..;stride]);
-                    
-                    // Calculate terms using BLAS-powered dot products
-                    a_dag_term = &(&p_cos.dot(&x_ph_ground) * lm_coupling_2_over_m) + 
-                                 &(&p_sin.dot(&x_ph_ground) * lm_coupling_2_over_mu);
-                    aa_term = &p_q.dot(&x_ph_mode_i) * one_over_2m;
-                    
-                    // Add both terms to y in a single loop
-                    for ex_ind in 0..n_ex {
-                        let idx_y = pn_ind + (mode_i + 1) * n_pn + ex_ind * stride;
-                        y[idx_y] += a_dag_term[ex_ind] + aa_term[ex_ind];
-                    }
-                }
-                    
-                // For a terms - Process mode_i to ground state transition
-                {                    
-                    // Calculate a_term using BLAS-powered dot products
-                    a_term = &(&p_cos.dot(&x_ph_mode_i) * lm_coupling_2_over_m) - 
-                             &(&p_sin.dot(&x_ph_mode_i) * lm_coupling_2_over_mu);
-                    
-                    // Add to y at photon ground state and phonon in pn_ind
-                    for ex_ind in 0..n_ex {
-                        let idx_y = pn_ind + ex_ind * stride;
-                        y[idx_y] += a_term[ex_ind];
-                    }
-                }
-            }
-
-            // Diamagnetic A^2 terms
-            for (mode_j, _) in self.photon.photon_modes.iter().enumerate() {
-                let q_ind1 = (mode_i as i32).max(mode_j as i32);
-                let q_ind2 = (mode_i as i32).min(mode_j as i32);
-                let q_ind_key = vec![q_ind1, -q_ind2];
-
-                if let Some(cos_matrix) = matrix_element_arrays_ref.cos_mat.get(&q_ind_key) {
-                    let eps_i = &self.photon.photon_modes[mode_i].eps;
-                    let eps_j = &self.photon.photon_modes[mode_j].eps;
-                    
-                    // Calculate dot product directly
-                    let eps_dot = eps_j[0] * eps_i[0] + eps_j[1] * eps_i[1];
-                    let coupling_factor: f64 = self.lm_coupling * self.lm_coupling * eps_dot;
-
-                    for pn_ind in 0..n_pn {
-                        let mode_j_start = (mode_j + 1) * n_pn + pn_ind;
-                        
-                        // Get slice for mode_j at this phonon level
-                        let x_ph_mode_j = x_vec.slice(s![mode_j_start..;stride]);
-                        
-                        // Calculate aa_term using BLAS-powered dot product
-                        aa_term = &cos_matrix.dot(&x_ph_mode_j) * coupling_factor;
-                        
-                        // Add to y at photon mode_i and phonon in pn_ind
-                        for ex_ind in 0..n_ex {
-                            let idx_y = pn_ind + (mode_i + 1) * n_pn + ex_ind * stride;
-                            y[idx_y] += aa_term[ex_ind];
-                        }
-                    }
-                }
-            }
-        }
-
-        // Implement all phonon b and b† terms 
-        let phonon_mode_ind: i32 = self.photon.photon_modes.len() as i32;
-        let cos_mat_phonon = matrix_element_arrays_ref.cos_mat.get(&vec![phonon_mode_ind]).unwrap();
-
-        for pn_ind in 0..n_pn-1 {
-            let sqrt_pn_plus_1 = ((pn_ind + 1) as f64).sqrt();
-            let pn_coupling_factor = self.pn_coupling * sqrt_pn_plus_1;
-
-            for ph_ind in 0..n_ph {
-                let pn_dex_start = ph_ind * n_pn + pn_ind;
-                let pn_exc_start = pn_dex_start + 1;
-                
-                // For b† term - Process pn_ind to pn_ind+1 transition
-                {
-                    // Get slice for phonon pn_ind at this photon level
-                    let x_ph_pn = x_vec.slice(s![pn_dex_start..;stride]);
-                    
-                    // Calculate b_dag_term using BLAS-powered dot product
-                    let b_dag_term = &cos_mat_phonon.dot(&x_ph_pn) * pn_coupling_factor;
-                    
-                    // Add to y at phonon pn_ind+1 and photon in ph_ind
-                    for ex_ind in 0..n_ex {
-                        let idx_y = (pn_ind + 1) + ph_ind * n_pn + ex_ind * stride;
-                        y[idx_y] += b_dag_term[ex_ind];
-                    }
-                }
-                
-                // For b term - Process pn_ind+1 to pn_ind transition
-                {
-                    // Get slice for phonon pn_ind+1 at this photon level
-                    let x_ph_pn_plus_1 = x_vec.slice(s![pn_exc_start..;stride]);
-                    
-                    // Calculate b_term using BLAS-powered dot product
-                    let b_term = &cos_mat_phonon.dot(&x_ph_pn_plus_1) * pn_coupling_factor;
-                    
-                    // Add to y at phonon pn_ind and photon in ph_ind
-                    for ex_ind in 0..n_ex {
-                        let idx_y = pn_ind + ph_ind * n_pn + ex_ind * stride;
-                        y[idx_y] += b_term[ex_ind];
-                    }
-                }
-            }
-        }
-    }
-
-   
 }
-
-// impl ArrayOperator<f64> for PPOffHamiltonian {
-//     fn apply(&self, x: &Array1<f64>) -> Vec<f64> {
-//         assert!(self.matrix_element_arrays.is_some(), "Matrix element arrays not computed. Call calc_matrix_element_arrays() first.");
-
-//         let n_ex = self.exciton.n_ex_eig;
-//         let n_ph = self.photon.photon_modes.len() + 1; // +1 for ground state
-
-//         // Pre-allocate the result array
-//         let result: Vec<f64>  ;
-
-//         if self.phonon.is_none() {
-//             assert!(x.len() == n_ex * n_ph, 
-//                 "Input vector length must match LM Hamiltonian dimension.");
-
-//             // Use parallel iteration with rayon if available
-
-//             result = (0..x.len()).into_par_iter().map(|r_ind| {
-//                 let r_ex_ind = r_ind / n_ph;
-//                 let r_ph_ind = r_ind % n_ph;
-                
-//                 // Sparse application: only iterate over indices where interaction is possible
-//                 x.indexed_iter().map( |(x_ind, val)| {
-//                     let x_ex_ind = x_ind / n_ph;
-//                     let x_ph_ind = x_ind % n_ph;
-                    
-//                     // Skip if no interaction is possible
-//                     if (x_ph_ind == 0 && r_ph_ind == 0) || (r_ex_ind == x_ex_ind && x_ph_ind == r_ph_ind) {
-//                         return 0.0;
-//                     }
-                    
-//                     self.apply_lm_int(x_ph_ind, r_ph_ind, x_ex_ind, r_ex_ind, *val)
-//                 }).sum::<f64>()
-//             }).collect();
-
-//             result
-//         }
-//         else {
-//             let n_pn = self.phonon.as_ref().unwrap().phonon_mode.n_fock;
-//             assert!(x.len() == n_ex * n_ph * n_pn, 
-//                 "Input vector length must match PP Hamiltonian dimension.");
-            
-//             let phonon_mode_ind: i32 = self.photon.photon_modes.len() as i32; // Phonon mode is last in the list
-//             let cos_mat_phonon = self.matrix_element_arrays.as_ref().unwrap().cos_mat.get(&vec![phonon_mode_ind]).unwrap();
-
-//             // Pre-compute p_com for phonon mode to avoid repeated calculations
-//             let p_com_phonon = if n_pn > 1 {
-//                 let k = &self.phonon.as_ref().unwrap().phonon_mode.q;
-//                 Some(self.exciton.get_p_com(k, false))
-//             } else {
-//                 None
-//             };
-
-//             result = (0..x.len()).into_par_iter().map(|r_ind| {
-//                 let r_ex_ind = r_ind / (n_ph * n_pn);
-//                 let r_ph_ind = (r_ind / n_pn) % n_ph;
-//                 let r_pn_ind = r_ind % n_pn;
-                
-//                 let mut res = 0.0;
-                
-//                 // Only iterate over indices where interaction is possible
-//                 x.indexed_iter().for_each( |(x_ind, val)|  {
-//                     let x_ex_ind = x_ind / (n_ph * n_pn);
-//                     let x_ph_ind = (x_ind / n_pn) % n_ph;
-//                     let x_pn_ind = x_ind % n_pn;
-                                        
-//                     // Skip if no interaction is possible based on indices
-//                     if x_pn_ind != r_pn_ind && x_pn_ind != r_pn_ind + 1 && x_pn_ind + 1 != r_pn_ind {
-//                         return;
-//                     }
-                    
-//                     if x_pn_ind == r_pn_ind {
-//                         if x_ph_ind == r_ph_ind && r_ex_ind != x_ex_ind && n_pn > 1 {
-//                             // P·k (b† b) / 2 M term (off-diagonal terms only)
-//                             if let Some(ref p_com) = p_com_phonon {
-//                                 res += p_com[[r_ex_ind, x_ex_ind]] / 2.0 / self.exciton.exciton_ham.m 
-//                                               * val * x_pn_ind as f64;  // (b† b) = n for phonon states
-//                             }
-//                         }
-//                         // LM interaction terms
-//                         res += self.apply_lm_int(x_ph_ind, r_ph_ind, x_ex_ind, r_ex_ind, *val);
-//                     }
-//                     else if x_pn_ind == r_pn_ind + 1 {
-//                         // g cos(kx/2) b†  term
-//                         res += cos_mat_phonon[[r_ex_ind, x_ex_ind]] * 
-//                                 self.pn_coupling * ((x_pn_ind) as f64).sqrt() * val;  // b† term
-//                     }
-//                     else if x_pn_ind + 1 == r_pn_ind {
-//                         // g cos(kx/2) b   term
-//                        res += cos_mat_phonon[[r_ex_ind, x_ex_ind]] *
-//                             self.pn_coupling * ((x_pn_ind + 1) as f64).sqrt() * val;  // b term
-//                     }
-//                     else {
-//                         return
-//                     }
-//                 });
-
-//                 res
-
-//             }).collect();
-
-//             result
-//         }
-        
-//     }
-// }
 
 impl Operator<f64> for PPOffHamiltonian {
     fn apply(&self, x: &[f64], y: &mut [f64]) {
-                assert!(self.matrix_element_arrays.is_some(), "Matrix element arrays not computed. Call calc_matrix_element_arrays() first.");
+        
+        assert!(self.matrix_element_arrays.is_some(), "Matrix element arrays not computed. Call calc_matrix_element_arrays() first.");
         assert!(self.p_cos.is_some(), "P cos(x) element arrays not computed. Call calc_p_cos_matrix() first.");
+        assert!(self.p_q.is_some(), "P q element arrays not computed. Call calc_p_cos_matrix() first.");
 
         let p_cos_ref = self.p_cos.as_ref().unwrap();
         let matrix_element_arrays_ref = self.matrix_element_arrays.as_ref().unwrap();
@@ -731,41 +471,40 @@ impl Operator<f64> for PPOffHamiltonian {
         let lm_coupling_2_over_mu = self.lm_coupling * 2.0 / self.exciton.exciton_ham.rel_ham.mu;
         let one_over_2m = 1.0 / (2.0 * self.exciton.exciton_ham.m);
 
-        // Reuse these arrays for all calculations
-        let mut a_term: Array1<f64> = Array1::zeros(n_ex);
-        let mut a_dag_term: Array1<f64> = Array1::zeros(n_ex);
-        let mut aa_term: Array1<f64> = Array1::zeros(n_ex);
-
         // Implement all a and a† terms
-        for (mode_i, _) in self.photon.photon_modes.iter().enumerate() {
+        let y_ph_list: Vec<(usize, f64)> = self.photon.photon_modes.par_iter().enumerate().flat_map(|(mode_i, _)| {
             let p_sin = matrix_element_arrays_ref.p_sin_mat.get(&vec![mode_i as i32]).unwrap();
             let p_cos = &p_cos_ref[mode_i];
             let p_q = &p_q_ref[mode_i];
+
+            let mut a_term: Array1<f64>;
+            let mut a_dag_term: Array1<f64>;
+            let mut aa_term: Array1<f64>;
+
+            let mut local_y: Vec<(usize, f64)> = Vec::new();
 
             // Sum over all phonon states
             for pn_ind in 0..n_pn {
                 let mode_i_start = (mode_i + 1) * n_pn + pn_ind;
                 let ground_start = pn_ind;
                 
-
                 // Get slice for mode_i at this phonon level
-                    let x_ph_mode_i = x_vec.slice(s![mode_i_start..;stride]);
+                let x_ph_mode_i = x_vec.slice(s![mode_i_start..;stride]);
 
                 // Combine a† and P a† a terms - more efficient!
                 {
                     // Get slices for ground state and mode_i at this phonon level
                     let x_ph_ground = x_vec.slice(s![ground_start..;stride]);
-                    
+
                     // Calculate terms using BLAS-powered dot products
                     a_dag_term = &(&p_cos.dot(&x_ph_ground) * lm_coupling_2_over_m) + 
                                  &(&p_sin.dot(&x_ph_ground) * lm_coupling_2_over_mu);
                     aa_term = &p_q.dot(&x_ph_mode_i) * one_over_2m;
                     
-                    // Add both terms to y in a single loop
-                    for ex_ind in 0..n_ex {
-                        let idx_y = pn_ind + (mode_i + 1) * n_pn + ex_ind * stride;
-                        y[idx_y] += a_dag_term[ex_ind] + aa_term[ex_ind];
-                    }
+
+                    let indices: Vec<usize> = (0..n_ex).map(|ex_ind| pn_ind + (mode_i + 1) * n_pn + ex_ind * stride).collect();
+                    let values: Vec<f64> = (a_dag_term + &aa_term).to_vec();
+                    local_y.extend(indices.into_iter().zip(values.into_iter()));
                 }
                     
                 // For a terms - Process mode_i to ground state transition
@@ -775,10 +514,9 @@ impl Operator<f64> for PPOffHamiltonian {
                              &(&p_sin.dot(&x_ph_mode_i) * lm_coupling_2_over_mu);
                     
                     // Add to y at photon ground state and phonon in pn_ind
-                    for ex_ind in 0..n_ex {
-                        let idx_y = pn_ind + ex_ind * stride;
-                        y[idx_y] += a_term[ex_ind];
-                    }
+                    let indices: Vec<usize> = (0..n_ex).map(|ex_ind| pn_ind + ex_ind * stride).collect();
+                    let values: Vec<f64> = (a_term).to_vec();
+                    local_y.extend(indices.into_iter().zip(values.into_iter()));
                 }
             }
 
@@ -804,24 +542,27 @@ impl Operator<f64> for PPOffHamiltonian {
                         
                         // Calculate aa_term using BLAS-powered dot product
                         aa_term = &cos_matrix.dot(&x_ph_mode_j) * coupling_factor;
-                        
+
                         // Add to y at photon mode_i and phonon in pn_ind
-                        for ex_ind in 0..n_ex {
-                            let idx_y = pn_ind + (mode_i + 1) * n_pn + ex_ind * stride;
-                            y[idx_y] += aa_term[ex_ind];
-                        }
+                        let indices: Vec<usize> = (0..n_ex).map(|ex_ind| pn_ind + (mode_i + 1) * n_pn + ex_ind * stride).collect();
+                        let values: Vec<f64> = (aa_term).to_vec();
+                        local_y.extend(indices.into_iter().zip(values.into_iter()));
                     }
                 }
             }
-        }
+
+            local_y
+        }).collect();
 
         // Implement all phonon b and b† terms 
         let phonon_mode_ind: i32 = self.photon.photon_modes.len() as i32;
         let cos_mat_phonon = matrix_element_arrays_ref.cos_mat.get(&vec![phonon_mode_ind]).unwrap();
 
-        for pn_ind in 0..n_pn-1 {
+        let y_pn_list: Vec<(usize, f64)> = (0..n_pn-1).into_par_iter().flat_map(|pn_ind| {
             let sqrt_pn_plus_1 = ((pn_ind + 1) as f64).sqrt();
             let pn_coupling_factor = self.pn_coupling * sqrt_pn_plus_1;
+
+            let mut local_y: Vec<(usize, f64)> = Vec::new();
 
             for ph_ind in 0..n_ph {
                 let pn_dex_start = ph_ind * n_pn + pn_ind;
@@ -836,10 +577,9 @@ impl Operator<f64> for PPOffHamiltonian {
                     let b_dag_term = &cos_mat_phonon.dot(&x_ph_pn) * pn_coupling_factor;
                     
                     // Add to y at phonon pn_ind+1 and photon in ph_ind
-                    for ex_ind in 0..n_ex {
-                        let idx_y = (pn_ind + 1) + ph_ind * n_pn + ex_ind * stride;
-                        y[idx_y] += b_dag_term[ex_ind];
-                    }
+                    let indices: Vec<usize> = (0..n_ex).map(|ex_ind| (pn_ind + 1) + ph_ind * n_pn + ex_ind * stride).collect();
+                    let values: Vec<f64> = (b_dag_term).to_vec();
+                    local_y.extend(indices.into_iter().zip(values.into_iter()));
                 }
                 
                 // For b term - Process pn_ind+1 to pn_ind transition
@@ -851,13 +591,20 @@ impl Operator<f64> for PPOffHamiltonian {
                     let b_term = &cos_mat_phonon.dot(&x_ph_pn_plus_1) * pn_coupling_factor;
                     
                     // Add to y at phonon pn_ind and photon in ph_ind
-                    for ex_ind in 0..n_ex {
-                        let idx_y = pn_ind + ph_ind * n_pn + ex_ind * stride;
-                        y[idx_y] += b_term[ex_ind];
-                    }
+                    let indices: Vec<usize> = (0..n_ex).map(|ex_ind| pn_ind + ph_ind * n_pn + ex_ind * stride).collect();
+                    let values: Vec<f64> = (b_term).to_vec();
+                    local_y.extend(indices.into_iter().zip(values.into_iter()));
                 }
             }
+
+            local_y
+        }).collect();
+
+        // Combine results from photon and phonon contributions
+        for (idx, val) in y_ph_list.into_iter().chain(y_pn_list.into_iter()) {
+            y[idx] += val;
         }
+
     }
 }
 pub struct PolaronPolariton {

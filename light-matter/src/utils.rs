@@ -437,7 +437,7 @@ impl LMMatrixElementArray {
                         matrix_2[[idx1, idx2]] = sin_sum;
                     }
                 }
-                
+
                 // Insert into the appropriate HashMaps
                 if q_inds.len() == 1 {
                     cos_mat.insert(q_inds.clone(), matrix_1);

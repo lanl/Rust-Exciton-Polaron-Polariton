@@ -134,7 +134,7 @@ impl RelativeHamiltonian {
                     
                     // Characteristic length for this state
                     let n_r = n as f64 + 0.5;
-                    let beta_n = 8.0 * std::f64::consts::PI.powi(2) * self.mu / n_r;
+                    let beta_n =  self.mu / n_r / 8.0 / std::f64::consts::PI.powi(2);
                     
                     // Scaled radius
                     let rho = &r * beta_n;

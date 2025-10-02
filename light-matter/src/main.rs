@@ -43,7 +43,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     let omega_0 = 0.25;    // Photon frequency
     
     // Define photon modes
-    let qx_values = vec![0.0,0.01,0.02]; // Photon wavevectors along x
+    let qx_values = vec![0.0, 0.01, 0.02]; // Photon wavevectors along x
     let qz = omega_0 / C;
     let n_fock = 2;      // Dimension of Fock space
 
@@ -156,7 +156,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
             let gen_time = time1.duration_since(start_time);
             println!("Precomputed matrix elements in {:?}", gen_time);
 
-            let (e_vals, _) = sing_ex::diagonalize_pp_sing_ex(&pp_config, pp_wrapper.polaron_polariton.unwrap(), 2);
+            let (e_vals, _) = sing_ex::diagonalize_pp_sing_ex(&pp_config, pp_wrapper.polaron_polariton.unwrap(), 100);
 
             let time2 = Instant::now();
             let diag_time = time2.duration_since(time1);
@@ -189,8 +189,8 @@ fn main() {
     // davidson::davidson_test();
 
     run_bandstructure(Method::SingEx, e_config.clone());
-    run_bandstructure(Method::Sparse, e_config.clone());
-    run_bandstructure(Method::Dense, e_config.clone());
+    // run_bandstructure(Method::Sparse, e_config.clone());
+    // run_bandstructure(Method::Dense, e_config.clone());
     
     // // Define phonon modes for polaron-polariton calculation
     // let phonon_freq = 0.01;  // Phonon frequency in a.u.
