@@ -540,8 +540,13 @@ impl LMMatrixElementArray {
         }
     }
 
-    pub fn _get_tay_mat_elements() {}
+    pub fn get_tay_mat_elements() {}
 
+
+    /// Matrix element: < n1,m1 | (epsilon·∇) sin(q·r/2) | n2,m2 >
+    /// ≈ < n1,m1 | (epsilon·∇) (q·r/2) | n2,m2 > (First order Taylor expansion)
+    /// = < n1,m1 | (|q|r) cos(θ - θ_q) (1/r) sin(θ-θ_e) ∂/∂θ | n2,m2 > <- ∂θ term
+    /// + < n1,m1 | (|q|r) cos(θ - θ_q) cos(θ-θ_e) ∂/∂r | n2,m2 > <- ∂r term
     pub fn get_p_sin_tayl(
         &self,
         states: &Vec<(i32, i32)>,
@@ -555,12 +560,14 @@ impl LMMatrixElementArray {
     ) -> f64 {
         let (n1, m1) = states[i1];
         let (n2, m2) = states[i2];
+        
+        // Validate quantum numbers
+        debug_assert!(n1 >= m1.abs(), "Invalid state: n1 must be >= |m1|");
+        debug_assert!(n2 >= m2.abs(), "Invalid state: n2 must be >= |m2|");
 
-        // Matrix element: < n1,m1 | (epsilon·∇) sin(q·r/2) | n2,m2 >
-        // ≈ < n1,m1 | (epsilon·∇) (q·r/2) | n2,m2 > (First order Taylor expansion)
-        // = < n1,m1 | (|q|r) cos(θ - θ_q) (1/r) sin(θ-θ_e) ∂/∂θ | n2,m2 > <- ∂θ term
-        // + < n1,m1 | (|q|r) cos(θ - θ_q) cos(θ-θ_e) ∂/∂r | n2,m2 > <- ∂r term
-
+        // Common constants
+        const SQRT_2: f64 = 1.4142135623730951;
+        
         // Calculate angular component
         let m_sign = (m1 * m2).signum();
         let theta_q = f64::atan2(q[1], q[0]);
@@ -572,48 +579,50 @@ impl LMMatrixElementArray {
             // Case: At least one of m1 or m2 is zero
             0 => {
                 // Both m1 and m2 are zero: matrix element is zero since q.eps = 0
-                if m1 == m2 {
+                if m1 == 0 && m2 == 0 {
                     (0.0, 0.0)
                 }
-                // One of m1 or m2 is zero
+                // One of m1 or m2 is zero, the other is +/-2
                 else if m1 + m2 == 2 {
+                    // m2 = 2, m1 = 0
                     let m2_term_dtheta = if m2 != 0 {
-                        -PI * 2.0_f64.sqrt() * sin_theta * m2.signum() as f64
+                        -PI * SQRT_2 * sin_theta * m2.signum() as f64
                     } else {
                         0.0
                     };
                     let m2_term_dr = if m2 != 0 {
-                        PI / 2.0_f64.sqrt() * cos_theta * m2.signum() as f64
+                        PI / SQRT_2 * cos_theta * m2.signum() as f64
                     } else {
                         0.0
                     };
-                    let m1_term_dtheta = 0.0;
+                    // m1 = 2, m2 = 0 -> ∂/∂θ |n,0> = 0= 0, only ∂/∂r term contributes
                     let m1_term_dr = if m1 != 0 {
-                        PI * 2.0_f64.sqrt() * cos_theta * m1.signum() as f64
+                        PI * SQRT_2 * cos_theta * m1.signum() as f64
                     } else {
                         0.0
                     };
 
-                    (m2_term_dtheta + m1_term_dtheta, m2_term_dr + m1_term_dr)
+                    (m2_term_dtheta, m2_term_dr + m1_term_dr)
                 } else if m1 + m2 == -2 {
+                    // m2 = -2, m1 = 0
                     let m2_term_dtheta = if m2 != 0 {
-                        -PI * 2.0_f64.sqrt() * sin_theta * m2.signum() as f64
+                        -PI * SQRT_2 * sin_theta * m2.signum() as f64
                     } else {
                         0.0
                     };
                     let m2_term_dr = if m2 != 0 {
-                        PI / 2.0_f64.sqrt() * sin_theta * m2.signum() as f64
+                        PI / SQRT_2 * sin_theta * m2.signum() as f64
                     } else {
                         0.0
                     };
-                    let m1_term_dtheta = 0.0;
+                    // m1 = 2, m2 = 0 -> ∂/∂θ |n,0> = 0, only ∂/∂r term contributes
                     let m1_term_dr = if m1 != 0 {
-                        PI * 2.0_f64.sqrt() * cos_theta * m1.signum() as f64
+                        PI * SQRT_2 * cos_theta * m1.signum() as f64
                     } else {
                         0.0
                     };
 
-                    (m2_term_dtheta + m1_term_dtheta, m2_term_dr + m1_term_dr)
+                    (m2_term_dtheta, m2_term_dr + m1_term_dr)
                 } else {
                     (0.0, 0.0)
                 }
@@ -665,6 +674,8 @@ impl LMMatrixElementArray {
         let q_mag = q.norm();
         let beta_1 = mu / 8. / PI / PI / (n1 as f64 + 0.5);
         let beta_2 = mu / 8. / PI / PI / (n2 as f64 + 0.5);
+        
+        // Precompute normalization factors
         let norm_1 = beta_1
             * (factorial(n1 as usize - m1.abs() as usize) as f64
                 / (2.
@@ -681,49 +692,40 @@ impl LMMatrixElementArray {
                 .sqrt();
 
         let prefactor = norm_1 * norm_2 * q_mag / 2.0;
+        
+        // Helper function for radial integrals
+        let calculate_radial_integral = |i: i32, j: i32, add_power: i32| -> f64 {
+            let a = (beta_1 + beta_2) / 2.0;
+            let b = m1.abs() + m2.abs() + i + j + add_power;
+            
+            // Use logarithmic factorials for large values to prevent overflow
+            let factorial_term = if b > 170 {
+                (0..=b).map(|i| (i as f64).ln()).sum::<f64>().exp()
+            } else {
+                factorial(b as usize) as f64
+            };
+            
+            let denom_term = a.powi(b + 1);
+            
+            factorial_term / denom_term * beta_1.powi(m1.abs() + i) * beta_2.powi(m2.abs() + j)
+        };
 
-        // < n1,m1 | (|q|r) (1/r) | n2,m2 > <- ∂θ term
+        // Calculate radial components for dtheta and dr terms
         let lag_coeff1 = &lag_coeffs[&(n1, m1.abs())];
         let lag_coeff2 = &lag_coeffs[&(n2, m2.abs())];
+        let dr_lag_coeff = &dr_lag_coeffs[&(n2, m2.abs())];
 
+        // < n1,m1 | (|q|r) (1/r) | n2,m2 > <- ∂θ term
         let rad_dtheta = lag_coeff1.iter().fold(0.0, |acc1, (i, c1)| {
             acc1 + lag_coeff2.iter().fold(0.0, |acc2, (j, c2)| {
-                // \int e^{-a r} r^b dr = b! / a^(b+1)
-
-                // From e^{-beta1 x} * e^{-beta2 x} = e^{-(beta1 + beta2) x}
-                let a = (beta_1 + beta_2) / 2.0;
-
-                // From r^|m1| * r^i * r^|m2| * r^j * (|q| r) / r * r dr
-                let b = m1.abs() + m2.abs() + i + j + 1;
-
-                let factorial_term = factorial(b as usize) as f64;
-                let denom_term = (a).powi(b + 1);
-
-                acc2 + c1 * c2 * factorial_term / denom_term
-                    * beta_1.powi(m1.abs() + i)
-                    * beta_2.powi(m2.abs() + j)
+                acc2 + c1 * c2 * calculate_radial_integral(*i, *j, 1)
             })
         }) * prefactor;
 
         // < n1,m1 | (|q|r) ∂/∂r | n2,m2 > <- ∂r term
-        let dr_lag_coeff = &dr_lag_coeffs[&(n2, m2.abs())];
-
         let rad_dr = lag_coeff1.iter().fold(0.0, |acc1, (i, c1)| {
             acc1 + dr_lag_coeff.iter().fold(0.0, |acc2, (j, c2)| {
-                // \int e^{-a r} r^b dr = b! / a^(b+1)
-
-                // From e^{-beta1 x} * e^{-beta2 x} = e^{-(beta1 + beta2) x}
-                let a = (beta_1 + beta_2) / 2.0;
-
-                // From r^|m1| * r^i * r^|m2| * r^j * (|q| r) * r dr
-                let b = m1.abs() + m2.abs() + i + j + 2;
-
-                let factorial_term = factorial(b as usize) as f64;
-                let denom_term = (a).powi(b + 1);
-
-                acc2 + c1 * c2 * factorial_term / denom_term
-                    * beta_1.powi(m1.abs() + i)
-                    * beta_2.powi(m2.abs() + j)
+                acc2 + c1 * c2 * calculate_radial_integral(*i, *j, 2)
             })
         }) * prefactor;
 
@@ -881,17 +883,14 @@ impl LMMatrixElementArray {
         let mut lag_coeffs: HashMap<(i32, i32), Vec<(i32, f64)>> = HashMap::new();
 
         states.iter().for_each(|&(n, m)| {
-            lag_coeffs.insert((n, m), self.laguerre(n as usize, m.abs() as usize));
+            lag_coeffs.insert((n, m), self.laguerre((n - m.abs()) as usize, 2. * m.abs() as f64));
         });
 
         lag_coeffs
     }
 
-    fn laguerre(&self, n: usize, m: usize) -> Vec<(i32, f64)> {
+    fn laguerre(&self, order: usize, alpha: f64) -> Vec<(i32, f64)> {
         let coeffs: Vec<(i32, f64)>;
-
-        let alpha = 2. * m as f64;
-        let order = n - m;
 
         match order {
             0 => {
@@ -903,152 +902,57 @@ impl LMMatrixElementArray {
             2 => {
                 coeffs = vec![
                     (0, 0.5 * (alpha + 2.0) * (alpha + 1.0)),
-                    (1, -(alpha + 2.0)),
+                    (1,      -(alpha + 2.0)),
                     (2, 0.5),
                 ];
             }
             3 => {
                 coeffs = vec![
-                    (
-                        0,
-                        (1.0 / 6.0) * (alpha + 3.0) * (alpha + 2.0) * (alpha + 1.0),
-                    ),
-                    (1, -0.5 * (alpha + 3.0) * (alpha + 2.0)),
-                    (2, 0.5 * (alpha + 3.0)),
-                    (3, -(1.0 / 6.0)),
+                    (0,(1.0 / 6.0) * (alpha + 3.0) * (alpha + 2.0) * (alpha + 1.0)),
+                    (1, -0.5       * (alpha + 3.0) * (alpha + 2.0)),
+                    (2,  0.5       * (alpha + 3.0)),
+                    (3,-(1.0 / 6.0)),
                 ];
             }
             4 => {
                 coeffs = vec![
-                    (
-                        0,
-                        (1.0 / 24.0)
-                            * (alpha + 4.0)
-                            * (alpha + 3.0)
-                            * (alpha + 2.0)
-                            * (alpha + 1.0),
-                    ),
-                    (
-                        1,
-                        -(1.0 / 6.0) * (alpha + 4.0) * (alpha + 3.0) * (alpha + 2.0),
-                    ),
-                    (2, 0.25 * (alpha + 4.0) * (alpha + 3.0)),
+                    (0, (1.0 / 24.0) * (alpha + 4.0) * (alpha + 3.0) * (alpha + 2.0) * (alpha + 1.0)),
+                    (1, -(1.0 / 6.0) * (alpha + 4.0) * (alpha + 3.0) * (alpha + 2.0)),
+                    (2,         0.25 * (alpha + 4.0) * (alpha + 3.0)),
                     (3, -(1.0 / 6.0) * (alpha + 4.0)),
                     (4, 1.0 / 24.0),
                 ];
             }
             5 => {
                 coeffs = vec![
-                    (
-                        0,
-                        (1.0 / 120.0)
-                            * (alpha + 5.0)
-                            * (alpha + 4.0)
-                            * (alpha + 3.0)
-                            * (alpha + 2.0)
-                            * (alpha + 1.0),
-                    ),
-                    (
-                        1,
-                        -(1.0 / 24.0)
-                            * (alpha + 5.0)
-                            * (alpha + 4.0)
-                            * (alpha + 3.0)
-                            * (alpha + 2.0),
-                    ),
-                    (
-                        2,
-                        (1.0 / 12.0) * (alpha + 5.0) * (alpha + 4.0) * (alpha + 3.0),
-                    ),
+                    (0, (1.0 / 120.0) * (alpha + 5.0) * (alpha + 4.0) * (alpha + 3.0) * (alpha + 2.0) * (alpha + 1.0)),
+                    (1, -(1.0 / 24.0) * (alpha + 5.0) * (alpha + 4.0) * (alpha + 3.0) * (alpha + 2.0)),
+                    (2,  (1.0 / 12.0) * (alpha + 5.0) * (alpha + 4.0) * (alpha + 3.0)),
                     (3, -(1.0 / 12.0) * (alpha + 5.0) * (alpha + 4.0)),
-                    (4, (1.0 / 24.0) * (alpha + 5.0)),
+                    (4,  (1.0 / 24.0) * (alpha + 5.0)),
                     (5, -(1.0 / 120.0)),
                 ];
             }
             6 => {
                 coeffs = vec![
-                    (
-                        0,
-                        (1.0 / 720.0)
-                            * (alpha + 6.0)
-                            * (alpha + 5.0)
-                            * (alpha + 4.0)
-                            * (alpha + 3.0)
-                            * (alpha + 2.0)
-                            * (alpha + 1.0),
-                    ),
-                    (
-                        1,
-                        -(1.0 / 120.0)
-                            * (alpha + 6.0)
-                            * (alpha + 5.0)
-                            * (alpha + 4.0)
-                            * (alpha + 3.0)
-                            * (alpha + 2.0),
-                    ),
-                    (
-                        2,
-                        (1.0 / 48.0)
-                            * (alpha + 6.0)
-                            * (alpha + 5.0)
-                            * (alpha + 4.0)
-                            * (alpha + 3.0),
-                    ),
-                    (
-                        3,
-                        -(1.0 / 36.0) * (alpha + 6.0) * (alpha + 5.0) * (alpha + 4.0),
-                    ),
-                    (4, (1.0 / 48.0) * (alpha + 6.0) * (alpha + 5.0)),
+                    (0,  (1.0 / 720.0) * (alpha + 6.0) * (alpha + 5.0) * (alpha + 4.0) * (alpha + 3.0) * (alpha + 2.0) * (alpha + 1.0)),
+                    (1, -(1.0 / 120.0) * (alpha + 6.0) * (alpha + 5.0) * (alpha + 4.0) * (alpha + 3.0) * (alpha + 2.0)),
+                    (2,   (1.0 / 48.0) * (alpha + 6.0) * (alpha + 5.0) * (alpha + 4.0) * (alpha + 3.0)),
+                    (3,  -(1.0 / 36.0) * (alpha + 6.0) * (alpha + 5.0) * (alpha + 4.0)),
+                    (4,   (1.0 / 48.0) * (alpha + 6.0) * (alpha + 5.0)),
                     (5, -(1.0 / 120.0) * (alpha + 6.0)),
                     (6, 1.0 / 720.0),
                 ];
             }
             7 => {
                 coeffs = vec![
-                    (
-                        0,
-                        (1.0 / 5040.0)
-                            * (alpha + 7.0)
-                            * (alpha + 6.0)
-                            * (alpha + 5.0)
-                            * (alpha + 4.0)
-                            * (alpha + 3.0)
-                            * (alpha + 2.0)
-                            * (alpha + 1.0),
-                    ),
-                    (
-                        1,
-                        -(1.0 / 720.0)
-                            * (alpha + 7.0)
-                            * (alpha + 6.0)
-                            * (alpha + 5.0)
-                            * (alpha + 4.0)
-                            * (alpha + 3.0)
-                            * (alpha + 2.0),
-                    ),
-                    (
-                        2,
-                        (1.0 / 240.0)
-                            * (alpha + 7.0)
-                            * (alpha + 6.0)
-                            * (alpha + 5.0)
-                            * (alpha + 4.0)
-                            * (alpha + 3.0),
-                    ),
-                    (
-                        3,
-                        -(1.0 / 144.0)
-                            * (alpha + 7.0)
-                            * (alpha + 6.0)
-                            * (alpha + 5.0)
-                            * (alpha + 4.0),
-                    ),
-                    (
-                        4,
-                        (1.0 / 144.0) * (alpha + 7.0) * (alpha + 6.0) * (alpha + 5.0),
-                    ),
+                    (0, (1.0 / 5040.0) * (alpha + 7.0) * (alpha + 6.0) * (alpha + 5.0) * (alpha + 4.0) * (alpha + 3.0) * (alpha + 2.0) * (alpha + 1.0)),
+                    (1, -(1.0 / 720.0) * (alpha + 7.0) * (alpha + 6.0) * (alpha + 5.0) * (alpha + 4.0) * (alpha + 3.0) * (alpha + 2.0)),
+                    (2,  (1.0 / 240.0) * (alpha + 7.0) * (alpha + 6.0) * (alpha + 5.0) * (alpha + 4.0) * (alpha + 3.0)),
+                    (3, -(1.0 / 144.0) * (alpha + 7.0) * (alpha + 6.0) * (alpha + 5.0) * (alpha + 4.0)),
+                    (4,  (1.0 / 144.0) * (alpha + 7.0) * (alpha + 6.0) * (alpha + 5.0)),
                     (5, -(1.0 / 240.0) * (alpha + 7.0) * (alpha + 6.0)),
-                    (6, (1.0 / 720.0) * (alpha + 7.0)),
+                    (6,  (1.0 / 720.0) * (alpha + 7.0)),
                     (7, -(1.0 / 5040.0)),
                 ];
             }
@@ -1060,95 +964,6 @@ impl LMMatrixElementArray {
         coeffs
     }
 
-    // // Original implementations for reference
-
-    // pub fn _get_cos_elements(&self, exciton: &FullHamiltonian,
-    //     rel_vecs: &Array2<f64>, i1: usize, i2: usize, q: &Array1<f64>) -> f64{
-
-    //     let x_grid = &exciton.rel_ham.grid.x;
-    //     let y_grid = &exciton.rel_ham.grid.y;
-    //     let eigvecs = &rel_vecs;
-    //     let grid_size = exciton.rel_ham.grid.grid_size;
-
-    //     // Get the eigenvectors for states i and j
-    //     let psi_i: Array2<f64> = eigvecs.column(i1)
-    //         .to_shape((grid_size, grid_size)).unwrap().to_owned();
-    //     let psi_j = eigvecs.column(i2)
-    //         .to_shape((grid_size, grid_size)).unwrap().to_owned();
-
-    //     // Calculate the cosine term
-    //     let mut q_x = Array2::zeros((grid_size, 1));
-    //     let mut q_y = Array2::zeros((1, grid_size));
-
-    //     for i in 0..grid_size {
-    //         q_x[[i, 0]] = x_grid[i] * q[0] / 2.0;
-    //         q_y[[0, i]] = y_grid[i] * q[1] / 2.0;
-    //     }
-
-    //     let cos_term = (q_x + q_y).cos();
-
-    //     // Calculate matrix element using fast implementation
-    //     fast_matrix_element_calc(
-    //         &psi_i,
-    //         &psi_j,
-    //         &cos_term, exciton.rel_ham.grid.dx
-    //     )
-    // }
-
-    // fn get_psin_elements(&self, exciton: &FullHamiltonian,
-    //     rel_vecs: &Array2<f64>, i1: usize, i2: usize, q: &Array1<f64>, eps: &Array1<f64>) -> f64{
-    //     let x_grid =  &exciton.rel_ham.grid.x;
-    //     let y_grid =  &exciton.rel_ham.grid.y;
-    //     let eigvecs = rel_vecs;
-    //     let grid_size = exciton.rel_ham.grid.grid_size;
-    //     let dx = exciton.rel_ham.grid.dx;
-
-    //     // Get the eigenvectors for states i and j
-    //     let psi_i = eigvecs.column(i1);
-    //     let psi_j = eigvecs.column(i2);
-
-    //     // Calculate the sine term
-    //     let mut q_x = Array2::zeros((grid_size, 1));
-    //     let mut q_y = Array2::zeros((1, grid_size));
-
-    //     for i in 0..grid_size {
-    //         q_x[[i, 0]] = x_grid[i] * q[0] / 2.0;
-    //         q_y[[0, i]] = y_grid[i] * q[1] / 2.0;
-    //     }
-
-    //     let sin_term = (q_x + q_y).sin();
-    //     let sin: Array2<f64> = Array2::from_diag(&sin_term.flatten());
-
-    //     // Calculate momentum operator in sinc-DVR basis
-    //     let p_1d = self.compute_sinc_dvr_rel(exciton);
-
-    //     let p = kron(&(eps[0] * &p_1d), &Array2::eye(grid_size))
-    //         + kron(&Array2::eye(grid_size), &(eps[1] * &p_1d));
-
-    //     // Calculate p·sin + sin·p term
-    //     let p_sin = &p.dot(&sin) + &sin.dot(&p);
-
-    //     // Calculate matrix element
-    //     psi_i.dot(&p_sin.dot(&psi_j)) * dx * dx
-    // }
-
-    // fn compute_sinc_dvr_rel(&self, exciton: &FullHamiltonian) -> Array2<f64> {
-    //     let dx = exciton.rel_ham.grid.dx;
-    //     let nx = exciton.rel_ham.grid.grid_size;
-
-    //     // Create momentum operator matrix using sinc-DVR formula
-    //     Array2::from_shape_fn((nx,nx), |(i, j)| {
-    //         if i == j {
-    //             // Diagonal elements
-    //             PI.powi(2) / 3.0 / dx*dx
-    //         }
-    //         else {
-    //             // Off-diagonal elements
-    //             let diff: f64 = i as f64 - j as f64;
-    //             (-1.0 as f64).powf(diff) / (diff + f64::EPSILON) / dx
-    //         }
-    //     })
-    // }
 }
 
 #[derive(Clone)]
