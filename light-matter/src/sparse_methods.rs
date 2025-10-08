@@ -7,7 +7,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use sprs::{kronecker_product as kron, smmp::mul_csr_csr, CsMat, CsMatBase, TriMat};
 use arpack::{Config, Operator}; 
 
-use crate::utils::{PhotonMode, save_band_data, LMMatrixElement};
+use crate::utils::{PhotonMode, LMMatrixElement};//, save_band_data};
 
 
 
@@ -565,8 +565,8 @@ impl BandStructureCalculatorLM {
             std::fs::create_dir_all(parent).unwrap();
         }
 
-        // Save the band structure data
-        save_band_data(filename, (k_points.clone(), eigvals_list.clone())).unwrap();
+        // // Save the band structure data
+        // save_band_data(filename, (k_points.clone(), eigvals_list.clone())).unwrap();
 
         (k_points, eigvals_list)
     }

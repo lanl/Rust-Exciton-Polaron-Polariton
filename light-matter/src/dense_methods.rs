@@ -5,7 +5,7 @@ use std::{collections::HashMap, f64::consts::PI, usize};
 use ndarray::{arr1, linalg::kron, Array1, Array2};
 use std::path::Path;
 use indicatif::{ProgressBar, ProgressStyle};
-use crate::utils::{PhotonMode, save_band_data};
+use crate::utils::{PhotonMode};//, save_band_data};
 
 /// Stores matrix elements for light-matter interaction calculations
 pub struct LMMatrixElement {
@@ -725,8 +725,8 @@ impl BandStructureCalculatorLM {
             std::fs::create_dir_all(parent).unwrap();
         }
 
-        // Save the band structure data
-        save_band_data(filename, (k_points.clone(), eigvals_list.clone())).unwrap();
+        // // Save the band structure data
+        // save_band_data(filename, (k_points.clone(), eigvals_list.clone())).unwrap();
 
         (k_points, eigvals_list)
     }

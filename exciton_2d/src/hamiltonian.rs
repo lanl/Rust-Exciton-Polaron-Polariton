@@ -173,7 +173,7 @@ impl RelativeHamiltonian {
                     
                     // Correct normalization constant for 2D hydrogen
                     let norm = beta_n * (self.factorial(n - m.abs()) as f64 / 
-                              (self.factorial(n + m.abs()).pow(3) as f64 * (2.0 * n_r))).sqrt();
+                              (self.factorial(n + m.abs()) as f64 * (2.0 * n_r))).sqrt();
                     
                     // Complete radial function
                     let mut radial = Array2::zeros((self.grid.grid_size, self.grid.grid_size));

@@ -171,20 +171,20 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
 fn main() {
     // Create exciton configuration
     let e_config = ExcitonConfig {
-        n_kappa: 7,                           // Number of k-points in Brillouin zone
-        a0: 9.0,                               // Lattice constant
-        v0: 0.05,                              // Potential strength
-        k: vec![0.0, 0.0],                     // Initial k-vector
-        m_e: 0.3,                              // Electron effective mass
-        m_h: 0.3,                              // Hole effective mass
-        verbose: false,                        // Verbose output flag
-        grid_size: 64,                        // Grid size for real-space calculations
-        box_size: 3.0,                         // Real-space box size
+        n_kappa: 7,                               // Number of k-points in Brillouin zone
+        a0: 9.0,                                  // Lattice constant
+        v0: 0.05,                                 // Potential strength
+        k: vec![0.0, 0.0],                        // Initial k-vector
+        m_e: 0.3,                                 // Electron effective mass
+        m_h: 0.3,                                 // Hole effective mass
+        verbose: false,                           // Verbose output flag
+        grid_size: 64,                            // Grid size for real-space calculations
+        box_size: 3.0,                            // Real-space box size
         save_dir: PathBuf::from("saved_data_lm"), // Directory to save data
-        recalculate: false,                    // Whether to recalculate existing data
-        n_jobs: 2,                             // Number of parallel jobs
-        use_gpu: false,                        // Whether to use GPU acceleration
-        batch_size: 32,                        // Batch size for calculations
+        recalculate: false,                       // Whether to recalculate existing data
+        n_jobs: 2,                                // Number of parallel jobs
+        use_gpu: false,                           // Whether to use GPU acceleration
+        batch_size: 32,                           // Batch size for calculations
     };
     // davidson::davidson_test();
 
