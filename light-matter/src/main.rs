@@ -56,10 +56,10 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     
 
     // Define phonon parameters
-    let pn_coupling = 0.01;
-    let pn_omega = 0.05;
+    let pn_coupling = 0.000001;
+    let pn_omega = 0.00;
     let pn_k = arr1(&[0.,0.5]);
-    let pn_n_fock = 1;
+    let pn_n_fock = 2;
 
     let pp_config = PPConfig{
         e_config, n_rel, n_ex_eig, lm_coupling: coupling, omega_0, q_values,

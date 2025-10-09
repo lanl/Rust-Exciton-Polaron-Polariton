@@ -535,11 +535,14 @@ impl Operator<f64> for PPOffHamiltonian {
             local_y
         }).collect();
 
-        // Implement all phonon b and b† terms 
+        // Implement all phonon b and b† terms if n_pn > 1
+        let y_pn_list: Vec<(usize, f64)>;
+
+        if self.phonon.is_some() && self.pn_coupling.abs() > 1e-12 {
         let phonon_mode_ind: i32 = self.photon.photon_modes.len() as i32;
         let cos_mat_phonon = matrix_element_arrays_ref.cos_mat.get(&vec![phonon_mode_ind]).unwrap();
 
-        let y_pn_list: Vec<(usize, f64)> = (0..n_pn-1).into_par_iter().flat_map(|pn_ind| {
+        y_pn_list = (0..n_pn-1).into_par_iter().flat_map(|pn_ind| {
             let sqrt_pn_plus_1 = ((pn_ind + 1) as f64).sqrt();
             let pn_coupling_factor = self.pn_coupling * sqrt_pn_plus_1;
 
@@ -580,6 +583,10 @@ impl Operator<f64> for PPOffHamiltonian {
 
             local_y
         }).collect();
+        }
+        else {
+            y_pn_list = vec![(0,0.0)]; // No phonon contributions
+        }
 
         // Combine results from photon and phonon contributions
         for (idx, val) in y_ph_list.into_iter().chain(y_pn_list.into_iter()) {
