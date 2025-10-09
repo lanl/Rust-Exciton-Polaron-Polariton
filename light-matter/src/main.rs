@@ -43,11 +43,11 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     let omega_0 = 0.25;    // Photon frequency
     
     // Define photon modes
-    let qx_values = vec![0.0, 0.01, 0.02]; // Photon wavevectors along x
+    let qx_values = vec![0.0]; // Photon wavevectors along x
     let qz = omega_0 / C;
     let n_fock = 2;      // Dimension of Fock space
 
-    let n_k_points = 300;  // Number of k-points along the path
+    let n_k_points = 30;  // Number of k-points along the path
     let n_bands = 64;
 
     let q_values: Vec<Vector3D> = qx_values.iter().map(|qx| {
@@ -59,7 +59,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     let pn_coupling = 0.01;
     let pn_omega = 0.05;
     let pn_k = arr1(&[0.,0.5]);
-    let pn_n_fock = 10;
+    let pn_n_fock = 1;
 
     let pp_config = PPConfig{
         e_config, n_rel, n_ex_eig, lm_coupling: coupling, omega_0, q_values,
@@ -156,7 +156,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
             let gen_time = time1.duration_since(start_time);
             println!("Precomputed matrix elements in {:?}", gen_time);
 
-            let (e_vals, _) = sing_ex::diagonalize_pp_sing_ex(&pp_config, pp_wrapper.polaron_polariton.unwrap(), 100);
+            let (e_vals, _) = sing_ex::diagonalize_pp_sing_ex(&pp_config, pp_wrapper.polaron_polariton.unwrap(), 10);
 
             let time2 = Instant::now();
             let diag_time = time2.duration_since(time1);

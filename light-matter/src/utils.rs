@@ -579,8 +579,8 @@ impl LMMatrixElementArray {
         let (lag_coeffs, states) = &self.get_laguerre_coeffs(n_rel_even + n_rel_odd);
         let dr_coeffs = &self.get_dr_radial_poly(states);
 
-        // Test norms
-        self._test_psi_norm(states, mu);
+        // // Test norms
+        // self._test_psi_norm(states, mu);
 
         for q_inds in all_q_ind {
             let mut matrix_1 = Array2::zeros((n_eigs, n_eigs));
@@ -876,8 +876,8 @@ impl LMMatrixElementArray {
         };
 
         // Calculate radial component
-        let beta_1 = mu / 8. / PI / PI / (n1 as f64 + 0.5);
-        let beta_2 = mu / 8. / PI / PI / (n2 as f64 + 0.5);
+        let beta_1 = 2.0 * mu / (n1 as f64 + 0.5);
+        let beta_2 = 2.0 * mu / (n2 as f64 + 0.5);
         
         // Precompute normalization factors
         let norm_1 = beta_1
@@ -932,6 +932,10 @@ impl LMMatrixElementArray {
                 acc2 + c1 * c2 * calculate_radial_integral(*i, *j, 2)
             })
         }) * prefactor;
+
+        if n1 == 0 {
+            println!("States (n1={},m1={}), (n2={},m2={}): Radial dtheta = {}, Radial dr = {}", n1, m1, n2, m2, rad_dtheta, rad_dr);
+        }
 
         ang_dtheta * rad_dtheta + ang_dr * rad_dr
     }
@@ -1030,8 +1034,8 @@ impl LMMatrixElementArray {
         };
 
         // Calculate radial component
-        let beta_1 = mu / 8. / PI / PI / (n1 as f64 + 0.5);
-        let beta_2 = mu / 8. / PI / PI / (n2 as f64 + 0.5);
+        let beta_1 = mu * 2.0 / (n1 as f64 + 0.5);
+        let beta_2 = mu * 2.0 / (n2 as f64 + 0.5);
         let norm_1 = beta_1
             * (factorial(n1 as usize - m1.abs() as usize) as f64
                 / (2.
@@ -1070,6 +1074,10 @@ impl LMMatrixElementArray {
                     * beta_2.powi(m2.abs() + j)
             })
         }) * prefactor;
+
+        // if n1 == 0 {
+        //     println!("States (n1={},m1={}), (n2={},m2={}): Angular = {}, Radial = {}, Overlap = {}", n1, m1, n2, m2, angular, radial, overlap);
+        // }
 
         overlap - angular * radial
     }

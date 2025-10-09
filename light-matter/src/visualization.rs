@@ -20,7 +20,7 @@ pub fn plot_band_structure(
         
         // Create a larger drawing area with better resolution
         let root = BitMapBackend::new(path, (1200, 900)).into_drawing_area();
-        root.fill(&BLACK).unwrap();
+        root.fill(&WHITE).unwrap();
         
         // Create x-axis for the plot (path length)
         let mut x = vec![0.0; k_points.len()];
@@ -74,7 +74,7 @@ pub fn plot_band_structure(
 
         // Set up chart with better styling
         let mut chart = ChartBuilder::on(&root)
-            .caption(title, ("sans-serif", 30).into_font().color(&WHITE))
+            .caption(title, ("sans-serif", 30).into_font().color(&BLACK))
             .margin(10)
             .margin_top(20)
             .margin_bottom(10)
@@ -110,7 +110,7 @@ pub fn plot_band_structure(
         
         // Draw vertical lines at high-symmetry points
         let line_style = ShapeStyle {
-            color: WHITE.mix(0.6),
+            color: BLACK.mix(0.6),
             filled: false,
             stroke_width: 3,
         };
@@ -127,7 +127,7 @@ pub fn plot_band_structure(
         println!("Number of bands: {}", num_bands );
         
         for band_idx in 0..num_bands {
-            let color = WHITE;
+            let color = BLACK;
             let band_points: Vec<(f64, f64)> = x.iter()
                 .zip(eigvals_list.iter())
                 .map(|(&x_val, eigvals)| (x_val, eigvals[band_idx]))

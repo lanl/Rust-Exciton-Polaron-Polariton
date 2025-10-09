@@ -716,13 +716,22 @@ impl SingExWrapper {
             }).collect();
         let photon = PhotonicHamiltonian::new(photon_modes);
 
-        // Initialize Phononic System
-        let phonon_mode = PhotonMode { eps: arr1(&[0.0,0.0]), q: config.pn_k.clone(), 
-            omega: config.pn_omega, n_fock: config.pn_n_fock };
-        let phonon = PhononHamiltonian::new(phonon_mode);
+        if config.pn_n_fock > 1 {
+            assert!(config.pn_n_fock > 1, "Phonon Fock space must be greater than 1 when phonon coupling is non-zero.");
 
-        self.polaron_polariton = Some(PolaronPolariton::new(Arc::new(exciton), Arc::new(photon), Some(Arc::new(phonon)), vec![0.,0.], 
-            config.lm_coupling, config.pn_coupling));
+            // Initialize Phononic System
+            let phonon_mode = PhotonMode { eps: arr1(&[0.0,0.0]), q: config.pn_k.clone(), 
+                omega: config.pn_omega, n_fock: config.pn_n_fock };
+            let phonon = PhononHamiltonian::new(phonon_mode);
+
+            self.polaron_polariton = Some(PolaronPolariton::new(Arc::new(exciton), Arc::new(photon), Some(Arc::new(phonon)), vec![0.,0.], 
+                config.lm_coupling, config.pn_coupling));
+        }
+        else {
+            self.polaron_polariton = Some(PolaronPolariton::new(Arc::new(exciton), Arc::new(photon), None, vec![0.,0.], 
+                config.lm_coupling, config.pn_coupling));
+        }
+
 
     }
 
@@ -738,11 +747,20 @@ pub fn diagonalize_pp_sing_ex(pp_config: &PPConfig, pp: PolaronPolariton, n_eig:
         .tol(1e-6)                // Tolerance
         .max_iter(1000);          // Maximum iterations
     
+    let n: usize;
     let n_ph = pp_config.q_values.len() + 1;
-    let n_pn = if pp.pp_diag_ham.phonon.is_some() {
-            pp_config.pn_n_fock
-        } else {1};
-    let n = pp.exciton.n_ex_eig * n_ph * n_pn;
+    // Ensure phonon Fock space is valid if phonon coupling is present
+    if pp.pp_off_ham.phonon.is_some() {
+        assert!(pp_config.pn_n_fock > 1, "Phonon Fock space must be greater than 1 when phonon coupling is non-zero.");
+
+        let n_pn = if pp.pp_diag_ham.phonon.is_some() {
+                pp_config.pn_n_fock
+            } else {1};
+        n = pp.exciton.n_ex_eig * n_ph * n_pn;
+    }
+    else {
+        n = pp.exciton.n_ex_eig * n_ph;
+    }
 
     // Solve eigenvalue problem
     let result = arpack::eigs(pp, n,n_eig, config).unwrap();
