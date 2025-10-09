@@ -20,7 +20,7 @@ pub mod dense_methods;
 // Speed of light in atomic units
 const C: f64 = 137.036;
 
-enum Method {
+pub enum Method {
     Sparse,
     Dense,
     SingEx,
