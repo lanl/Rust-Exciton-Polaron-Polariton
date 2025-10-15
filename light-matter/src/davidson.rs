@@ -1,422 +1,315 @@
-use ndarray::{Array1, Array2, s};
-use ndarray_linalg::{Eigh, UPLO};
+// davidson.rs
+use ndarray::{Array1, Array2, ArrayView1, s};
 use std::fmt::Debug;
-use rand::prelude::*;
 
-/// Trait for applying a linear operator to a vector without explicitly building the matrix
-pub trait LinearOperator {
-    /// Apply the operator to a vector: result = A * v
-    fn apply(&self, v: &Array1<f64>, result: &mut Array1<f64>);
+/// Trait for operators that can be used with the Davidson algorithm
+pub trait DavidsonOperator<T: Clone + Debug> {
+    /// Apply the operator to a vector
+    fn apply(&self, x: &[T], y: &mut [T]);
+    
+    /// Get the diagonal of the operator (used for preconditioning)
+    fn get_diagonal(&self) -> Vec<T>;
     
     /// Get the dimension of the operator
-    fn dim(&self) -> usize;
-    
-    /// Get the diagonal elements of the operator (needed for preconditioning)
-    fn diagonal(&self) -> Array1<f64>;
+    fn dimension(&self) -> usize;
 }
 
-/// Davidson algorithm configuration parameters
+/// Configuration for the Davidson algorithm
 pub struct DavidsonConfig {
     /// Maximum number of iterations
     pub max_iter: usize,
-    /// Maximum subspace size before restart
+    /// Maximum subspace dimension before restart
     pub max_subspace_size: usize,
-    /// Minimum subspace size after restart
+    /// Minimum subspace dimension after restart
     pub min_subspace_size: usize,
-    /// Convergence threshold for residual norm
+    /// Convergence tolerance
     pub tolerance: f64,
     /// Number of eigenvalues to compute
-    pub n_eigenvalues: usize,
-    /// Whether to use preconditioning
-    pub use_preconditioning: bool,
+    pub num_eigenvalues: usize,
+    /// Which eigenvalues to compute (smallest or largest)
+    pub which: DavidsonWhich,
+}
+
+/// Which eigenvalues to compute
+#[derive(Clone, Copy, Debug)]
+pub enum DavidsonWhich {
+    /// Smallest algebraic eigenvalues
+    Smallest,
+    /// Largest algebraic eigenvalues
+    Largest,
 }
 
 impl Default for DavidsonConfig {
     fn default() -> Self {
         Self {
-            max_iter: 100,
+            max_iter: 1000,
             max_subspace_size: 20,
             min_subspace_size: 10,
-            tolerance: 1e-8,
-            n_eigenvalues: 1,
-            use_preconditioning: true,
+            tolerance: 1e-6,
+            num_eigenvalues: 1,
+            which: DavidsonWhich::Smallest,
         }
     }
 }
 
 /// Result of the Davidson algorithm
-#[derive(Debug)]
 pub struct DavidsonResult {
-    /// Computed eigenvalues
-    pub eigenvalues: Array1<f64>,
-    /// Computed eigenvectors
-    pub eigenvectors: Array2<f64>,
+    /// Eigenvalues
+    pub values: Vec<f64>,
+    /// Eigenvectors
+    pub vectors: Vec<f64>,
     /// Number of iterations performed
     pub iterations: usize,
+    /// Residual norms for each eigenvalue
+    pub residuals: Vec<f64>,
     /// Whether the algorithm converged
     pub converged: bool,
-    /// Maximum residual norm
-    pub max_residual: f64,
 }
 
-/// Davidson algorithm for diagonalizing real symmetric matrices
-pub fn davidson<T: LinearOperator>(
-    operator: &T,
+/// Davidson algorithm for finding a few eigenvalues and eigenvectors of a large sparse matrix
+pub fn davidson<T>(
+    op: &impl DavidsonOperator<T>,
     config: &DavidsonConfig,
-    initial_guess: Option<Array2<f64>>,
-) -> DavidsonResult {
-    let n = operator.dim();
-    let k = config.n_eigenvalues;
+) -> Result<DavidsonResult, String>
+where
+    T: Clone + Debug + std::ops::Add<Output = T> + std::ops::Sub<Output = T> + 
+       std::ops::Mul<Output = T> + std::ops::Div<Output = T> + 
+       std::ops::AddAssign + std::ops::SubAssign + std::ops::MulAssign + 
+       std::ops::DivAssign + PartialOrd + num_traits::Zero + num_traits::One + 
+       num_traits::NumAssign + num_traits::Float + Copy,
+{
+    let n = op.dimension();
+    let k = config.num_eigenvalues;
     
-    // Validate parameters
-    assert!(k < n, "Number of requested eigenvalues must be less than matrix dimension");
-    assert!(config.min_subspace_size >= k, "Minimum subspace size must be at least the number of eigenvalues");
-    assert!(config.max_subspace_size >= config.min_subspace_size, "Maximum subspace size must be at least the minimum subspace size");
+    if k >= n {
+        return Err("Number of requested eigenvalues must be less than matrix dimension".to_string());
+    }
     
-    // Initialize the subspace with the initial guess or random vectors
-    let mut v_basis = match initial_guess {
-        Some(guess) => {
-            assert_eq!(guess.shape()[0], n, "Initial guess must have correct dimension");
-            assert!(guess.shape()[1] >= k, "Initial guess must have at least k columns");
+    // Get diagonal for preconditioning
+    let diag = op.get_diagonal();
+    
+    // Initialize subspace with random vectors
+    let mut v = Array2::<T>::zeros((n, k));
+    let mut rng = rand::thread_rng();
+    for j in 0..k {
+        for i in 0..n {
+            v[[i, j]] = T::from(rand::random::<f64>()).unwrap();
+        }
+        // Orthogonalize against previous vectors
+        for l in 0..j {
+            let dot_product = (0..n).map(|i| v[[i, j]] * v[[i, l]]).sum::<T>();
+            for i in 0..n {
+                v[[i, j]] -= dot_product * v[[i, l]];
+            }
+        }
+        // Normalize
+        let norm = (0..n).map(|i| v[[i, j]] * v[[i, j]]).sum::<T>().sqrt();
+        for i in 0..n {
+            v[[i, j]] /= norm;
+        }
+    }
+    
+    let mut subspace_size = k;
+    let mut converged = false;
+    let mut iterations = 0;
+    
+    // Allocate work arrays
+    let mut av = Array2::<T>::zeros((n, config.max_subspace_size));
+    let mut h = Array2::<T>::zeros((config.max_subspace_size, config.max_subspace_size));
+    let mut s = Array2::<T>::zeros((config.max_subspace_size, k));
+    let mut theta = Vec::<T>::with_capacity(k);
+    let mut residuals = Vec::<T>::with_capacity(k);
+    
+    while iterations < config.max_iter && !converged {
+        iterations += 1;
+        
+        // Apply operator to each basis vector
+        for j in 0..subspace_size {
+            let mut x_slice = vec![T::zero(); n];
+            let mut y_slice = vec![T::zero(); n];
             
-            // Orthogonalize the initial guess using Gram-Schmidt
-            let mut basis = Array2::zeros((n, guess.shape()[1]));
-            for j in 0..guess.shape()[1] {
-                let mut vj = guess.column(j).to_owned();
-                
-                // Orthogonalize against previous vectors
-                for i in 0..j {
-                    let vi = basis.column(i);
-                    let projection = vi.dot(&vj);
-                    vj = &vj - &(&vi * projection);
+            for i in 0..n {
+                x_slice[i] = v[[i, j]];
+            }
+            
+            op.apply(&x_slice, &mut y_slice);
+            
+            for i in 0..n {
+                av[[i, j]] = y_slice[i];
+            }
+        }
+        
+        // Form projected matrix H = V^T * A * V
+        for i in 0..subspace_size {
+            for j in 0..=i {
+                h[[i, j]] = (0..n).map(|l| v[[l, i]] * av[[l, j]]).sum();
+                if i != j {
+                    h[[j, i]] = h[[i, j]];
                 }
-                
-                // Normalize
-                let norm = (vj.dot(&vj) as f64).sqrt();
-                if norm > 1e-10 {
-                    vj /= norm;
-                    basis.column_mut(j).assign(&vj);
-                } else {
-                    // If linear dependence is detected, generate a random vector
-                    let mut rng = rand::rng();
-                    let mut random_vec = Array1::zeros(n);
+            }
+        }
+        
+        // Solve the small eigenvalue problem
+        let (eigenvalues, eigenvectors) = diagonalize_small_matrix(&h, subspace_size);
+        
+        // Sort eigenvalues and eigenvectors
+        let mut indices: Vec<usize> = (0..subspace_size).collect();
+        match config.which {
+            DavidsonWhich::Smallest => {
+                indices.sort_by(|&i, &j| eigenvalues[i].partial_cmp(&eigenvalues[j]).unwrap());
+            }
+            DavidsonWhich::Largest => {
+                indices.sort_by(|&i, &j| eigenvalues[j].partial_cmp(&eigenvalues[i]).unwrap());
+            }
+        }
+        
+        // Extract the k eigenvalues and eigenvectors we want
+        theta.clear();
+        for &idx in indices.iter().take(k) {
+            theta.push(eigenvalues[idx]);
+        }
+        
+        // Compute Ritz vectors u = V * s
+        let mut u = Array2::<T>::zeros((n, k));
+        for l in 0..k {
+            let idx = indices[l];
+            for j in 0..subspace_size {
+                s[[j, l]] = eigenvectors[[j, idx]];
+            }
+            
+            for i in 0..n {
+                for j in 0..subspace_size {
+                    u[[i, l]] += v[[i, j]] * s[[j, l]];
+                }
+            }
+        }
+        
+        // Compute residuals r = A*u - theta*u
+        let mut r = Array2::<T>::zeros((n, k));
+        residuals.clear();
+        converged = true;
+        
+        for l in 0..k {
+            let mut x_slice = vec![T::zero(); n];
+            let mut y_slice = vec![T::zero(); n];
+            
+            for i in 0..n {
+                x_slice[i] = u[[i, l]];
+            }
+            
+            op.apply(&x_slice, &mut y_slice);
+            
+            for i in 0..n {
+                r[[i, l]] = y_slice[i] - theta[l] * u[[i, l]];
+            }
+            
+            let res_norm = (0..n).map(|i| r[[i, l]] * r[[i, l]]).sum::<T>().sqrt();
+            residuals.push(res_norm);
+            
+            if res_norm > T::from(config.tolerance).unwrap() {
+                converged = false;
+            }
+        }
+        
+        if converged {
+            break;
+        }
+        
+        // Check if we need to restart or expand the subspace
+        if subspace_size >= config.max_subspace_size {
+            // Restart with the current Ritz vectors
+            v = u.clone();
+            subspace_size = k;
+        } else {
+            // Expand the subspace with preconditioned residuals
+            for l in 0..k {
+                if residuals[l] > T::from(config.tolerance).unwrap() {
+                    // Apply preconditioner: (diag - theta)^-1 * r
                     for i in 0..n {
-                        random_vec[i] = rng.random_range(-1.0..1.0);
+                        let t = if (diag[i] - theta[l]).abs() > T::from(1e-10).unwrap() {
+                            r[[i, l]] / (diag[i] - theta[l])
+                        } else {
+                            r[[i, l]] / T::from(1e-10).unwrap()
+                        };
+                        v[[i, subspace_size]] = t;
                     }
                     
-                    // Orthogonalize against previous vectors
-                    for i in 0..j {
-                        let vi = basis.column(i);
-                        let projection = vi.dot(&random_vec);
-                        random_vec = &random_vec - &(&vi * projection);
+                    // Orthogonalize against existing subspace
+                    for j in 0..subspace_size {
+                        let dot_product = (0..n).map(|i| v[[i, subspace_size]] * v[[i, j]]).sum::<T>();
+                        for i in 0..n {
+                            v[[i, subspace_size]] -= dot_product * v[[i, j]];
+                        }
                     }
                     
                     // Normalize
-                    let norm = (random_vec.dot(&random_vec) as f64).sqrt();
-                    random_vec /= norm;
-                    basis.column_mut(j).assign(&random_vec);
-                }
-            }
-            
-            basis
-        },
-        None => {
-            // Start with random orthogonal vectors
-            let mut rng = rand::rng();
-            
-            let mut basis = Array2::zeros((n, k));
-            for j in 0..k {
-                let mut vj = Array1::zeros(n);
-                for i in 0..n {
-                    vj[i] = rng.random_range(-1.0..1.0);
-                }
-                
-                // Orthogonalize against previous vectors
-                for i in 0..j {
-                    let vi = basis.column(i);
-                    let projection = vi.dot(&vj);
-                    vj = &vj - &(&vi * projection);
-                }
-                
-                // Normalize
-                let norm = (vj.dot(&vj) as f64).sqrt();
-                vj /= norm;
-                basis.column_mut(j).assign(&vj);
-            }
-            
-            basis
-        }
-    };
-    
-    // Get diagonal elements for preconditioning
-    let diag = operator.diagonal();
-    
-    // Allocate work arrays
-    let mut av = Array1::zeros(n);
-    let mut subspace_matrix = Array2::zeros((v_basis.shape()[1], v_basis.shape()[1]));
-    
-    // Main Davidson iteration
-    let mut iteration = 0;
-    let mut converged = false;
-    let mut max_residual = std::f64::MAX;
-    
-    while iteration < config.max_iter && !converged {
-        let m = v_basis.shape()[1]; // Current subspace size
-        
-        // Ensure subspace_matrix is correctly sized for the current subspace
-        if subspace_matrix.shape()[0] != m || subspace_matrix.shape()[1] != m {
-            subspace_matrix = Array2::zeros((m, m));
-        }
-        
-        // Compute the projected subspace matrix H_ij = <v_i|A|v_j>
-        for j in 0..m {
-            let vj = v_basis.column(j);
-            operator.apply(&vj.to_owned(), &mut av);
-            
-            for i in 0..=j {
-                let vi = v_basis.column(i);
-                let h_ij = vi.dot(&av);
-                subspace_matrix[(i, j)] = h_ij;
-                subspace_matrix[(j, i)] = h_ij; // Symmetric matrix
-            }
-        }
-        
-        // Solve the eigenvalue problem in the subspace
-        let (eigenvalues, eigenvectors) = subspace_matrix.eigh(UPLO::Upper).unwrap();
-        let theta = eigenvalues.slice(s![..k]).to_owned();
-        let s = eigenvectors.slice(s![..m, ..k]).to_owned();
-        
-        // Compute Ritz vectors: y_i = V * s_i
-        let y = v_basis.dot(&s);
-        
-        // Compute residuals: r_i = A*y_i - theta_i*y_i
-        let mut residuals = Array2::zeros((n, k));
-        let mut residual_norms = Array1::zeros(k);
-        
-        for i in 0..k {
-            let yi = y.column(i);
-            operator.apply(&yi.to_owned(), &mut av);
-            let ri = &av - &(&yi * theta[i]);
-            residuals.column_mut(i).assign(&ri);
-            
-            let r_norm = (ri.dot(&ri) as f64).sqrt();
-            residual_norms[i] = r_norm;
-        }
-        
-        // Check convergence
-        max_residual = residual_norms.fold(0.0, |max, &val| max.max(val));
-        converged = max_residual < config.tolerance;
-        
-        if converged || iteration == config.max_iter - 1 {
-            // Return the result if converged or reached max iterations
-            return DavidsonResult {
-                eigenvalues: theta,
-                eigenvectors: y,
-                iterations: iteration + 1,
-                converged,
-                max_residual,
-            };
-        }
-        
-        // Expand the subspace with preconditioned residuals
-        let mut new_vectors = Vec::new();
-        
-        for i in 0..k {
-            if residual_norms[i] > config.tolerance {
-                let ri = residuals.column(i);
-                let mut qi = ri.to_owned();
-                
-                // Apply preconditioning if enabled
-                if config.use_preconditioning {
-                    for j in 0..n {
-                        let denom = diag[j] - theta[i];
-                        if denom.abs() > 1e-10 {
-                            qi[j] /= denom;
-                        } else {
-                            qi[j] /= 1e-10; // Avoid division by zero
+                    let norm = (0..n).map(|i| v[[i, subspace_size]] * v[[i, subspace_size]]).sum::<T>().sqrt();
+                    if norm > T::from(1e-10).unwrap() {
+                        for i in 0..n {
+                            v[[i, subspace_size]] /= norm;
                         }
+                        subspace_size += 1;
+                    }
+                    
+                    if subspace_size >= config.max_subspace_size {
+                        break;
                     }
                 }
-                
-                // Orthogonalize against the current basis (Modified Gram-Schmidt)
-                for j in 0..m {
-                    let vj = v_basis.column(j);
-                    let projection = vj.dot(&qi);
-                    qi = &qi - &(&vj * projection);
-                }
-                
-                // Normalize the new vector
-                let norm = (qi.dot(&qi) as f64).sqrt();
-                if norm > 1e-10 {
-                    qi /= norm;
-                    new_vectors.push(qi);
-                }
-            }
-        }
-        
-        // Add new vectors to the basis
-        if !new_vectors.is_empty() {
-            let new_m = m + new_vectors.len();
-            let mut new_basis = Array2::zeros((n, new_m));
-            
-            // Copy existing basis
-            for j in 0..m {
-                new_basis.column_mut(j).assign(&v_basis.column(j));
-            }
-            
-            // Add new vectors
-            for (j, q) in new_vectors.iter().enumerate() {
-                new_basis.column_mut(m + j).assign(q);
-            }
-            
-            v_basis = new_basis;
-        }
-        
-        // Check if we need to restart (subspace size exceeds max_subspace_size)
-        if v_basis.shape()[1] > config.max_subspace_size {
-            // Restart with the current Ritz vectors plus some additional vectors
-            let mut new_basis = Array2::zeros((n, config.min_subspace_size));
-            
-            // Use the current Ritz vectors as the new basis
-            for j in 0..k {
-                new_basis.column_mut(j).assign(&y.column(j));
-            }
-            
-            // Add some of the most recent correction vectors
-            let remaining = config.min_subspace_size - k;
-            if remaining > 0 {
-                let start_idx = v_basis.shape()[1] - remaining;
-                for j in 0..remaining {
-                    new_basis.column_mut(k + j).assign(&v_basis.column(start_idx + j));
-                }
-            }
-            
-            // Reorthogonalize the basis using Gram-Schmidt
-            for j in 0..config.min_subspace_size {
-                let mut vj = new_basis.column(j).to_owned();
-                
-                // Orthogonalize against previous vectors
-                for i in 0..j {
-                    let vi = new_basis.column(i);
-                    let projection = vi.dot(&vj);
-                    vj = &vj - &(&vi * projection);
-                }
-                
-                // Normalize
-                let norm = (vj.dot(&vj) as f64).sqrt();
-                if norm > 1e-10 {
-                    vj /= norm;
-                    new_basis.column_mut(j).assign(&vj);
-                }
-            }
-            
-            v_basis = new_basis;
-            
-            // Resize the subspace matrix for the new basis size
-            subspace_matrix = Array2::zeros((config.min_subspace_size, config.min_subspace_size));
-        }
-        
-        iteration += 1;
-    }
-    
-    // If we reach here, we've hit the maximum number of iterations without converging
-    // Compute the final Ritz vectors and return
-    let m = v_basis.shape()[1];
-    
-    // Ensure subspace_matrix is correctly sized for the final computation
-    if subspace_matrix.shape()[0] != m || subspace_matrix.shape()[1] != m {
-        subspace_matrix = Array2::zeros((m, m));
-        
-        // Recompute the subspace matrix
-        for j in 0..m {
-            let vj = v_basis.column(j);
-            operator.apply(&vj.to_owned(), &mut av);
-            
-            for i in 0..=j {
-                let vi = v_basis.column(i);
-                let h_ij = vi.dot(&av);
-                subspace_matrix[(i, j)] = h_ij;
-                subspace_matrix[(j, i)] = h_ij;
             }
         }
     }
     
-    let (eigenvalues, eigenvectors) = subspace_matrix.eigh(UPLO::Upper).unwrap();
-    let theta = eigenvalues.slice(s![..k]).to_owned();
-    let s = eigenvectors.slice(s![..m, ..k]).to_owned();
-    let y = v_basis.dot(&s);
+    // Prepare result
+    let mut result_values = Vec::with_capacity(k);
+    let mut result_vectors = Vec::with_capacity(n * k);
+    let mut result_residuals = Vec::with_capacity(k);
     
-    DavidsonResult {
-        eigenvalues: theta,
-        eigenvectors: y,
-        iterations: iteration,
-        converged: false,
-        max_residual,
+    for l in 0..k {
+        result_values.push(theta[l].to_f64().unwrap());
+        result_residuals.push(residuals[l].to_f64().unwrap());
+        for i in 0..n {
+            result_vectors.push(v[[i, l]].to_f64().unwrap());
+        }
     }
+    
+    Ok(DavidsonResult {
+        values: result_values,
+        vectors: result_vectors,
+        iterations,
+        residuals: result_residuals,
+        converged,
+    })
 }
 
-
-// Example implementation of LinearOperator for a simple test case
-struct MatrixFreeOperator {
-    dim: usize,
-    diag: Array1<f64>,
-    offdiag: f64,
-}
-
-impl MatrixFreeOperator {
-    fn new(dim: usize, diag_value: f64, offdiag: f64) -> Self {
-        let mut diag = Array1::zeros(dim);
-        for i in 0..dim {
-            diag[i] = diag_value + i as f64;
-        }
-        Self { dim, diag, offdiag }
-    }
-}
-
-impl LinearOperator for MatrixFreeOperator {
-    fn apply(&self, v: &Array1<f64>, result: &mut Array1<f64>) {
-        // Apply diagonal part
-        for i in 0..self.dim {
-            result[i] = self.diag[i] * v[i];
-        }
-        
-        // Apply off-diagonal part (tridiagonal in this example)
-        for i in 1..self.dim {
-            result[i] += self.offdiag * v[i-1];
-            result[i-1] += self.offdiag * v[i];
+// Helper function to diagonalize a small matrix
+fn diagonalize_small_matrix<T>(h: &Array2<T>, size: usize) -> (Vec<T>, Array2<T>)
+where
+    T: Clone + Debug + std::ops::Add<Output = T> + std::ops::Sub<Output = T> + 
+       std::ops::Mul<Output = T> + std::ops::Div<Output = T> + 
+       std::ops::AddAssign + std::ops::SubAssign + std::ops::MulAssign + 
+       std::ops::DivAssign + PartialOrd + num_traits::Zero + num_traits::One + 
+       num_traits::NumAssign + num_traits::Float + Copy,
+{
+    // For simplicity, we'll use nalgebra's eigendecomposition
+    // In a real implementation, you might want to use LAPACK or another optimized library
+    let mut h_nalgebra = nalgebra::DMatrix::<f64>::zeros(size, size);
+    for i in 0..size {
+        for j in 0..size {
+            h_nalgebra[(i, j)] = h[[i, j]].to_f64().unwrap();
         }
     }
     
-    fn dim(&self) -> usize {
-        self.dim
+    let eigen = nalgebra::linalg::SymmetricEigen::new(h_nalgebra);
+    
+    let mut eigenvalues = Vec::with_capacity(size);
+    let mut eigenvectors = Array2::<T>::zeros((size, size));
+    
+    for i in 0..size {
+        eigenvalues.push(T::from(eigen.eigenvalues[i]).unwrap());
+        for j in 0..size {
+            eigenvectors[[j, i]] = T::from(eigen.eigenvectors[(j, i)]).unwrap();
+        }
     }
     
-    fn diagonal(&self) -> Array1<f64> {
-        self.diag.clone()
-    }
-}
-
-// Example usage
-pub fn davidson_test() {
-    // Create a tridiagonal operator
-    let dim = 1000;
-    let operator = MatrixFreeOperator::new(dim, 2.0, -1.0);
-    
-    // Configure Davidson algorithm
-    let config = DavidsonConfig {
-        max_iter: 1000,
-        max_subspace_size: 30,
-        min_subspace_size: 15,
-        tolerance: 1e-8,
-        n_eigenvalues: 5,
-        use_preconditioning: true,
-    };
-    
-    // Run Davidson algorithm
-    let result = davidson(&operator, &config, None);
-    
-    println!("Converged: {}", result.converged);
-    println!("Iterations: {}", result.iterations);
-    println!("Max residual: {:.2e}", result.max_residual);
-    println!("Eigenvalues: {:?}", result.eigenvalues);
+    (eigenvalues, eigenvectors)
 }

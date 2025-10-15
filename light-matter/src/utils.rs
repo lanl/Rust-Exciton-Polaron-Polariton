@@ -6,6 +6,7 @@ use exciton_2d::{ExcitonConfig, FullHamiltonian, utils::fast_matrix_element_calc
 use ndarray_linalg::Norm;
 use scilib::math::basic::factorial;
 use std::{collections::HashMap, f64::consts::PI};
+use rayon::prelude::*;
 
 // Speed of light in atomic units
 const C: f64 = 137.036;
@@ -552,6 +553,8 @@ impl LMMatrixElementArray {
         let mut n_rel_even = 0;
         let mut n_rel_odd = 0;
 
+        // println!("All q_ind = {:?}", all_q_ind);
+
         for (idx, &parity) in parities.iter().enumerate() {
             if parity == 1 && n_rel_even == 0 {
                 n_rel_even = e_vecs[idx].len() / n_com;
@@ -579,10 +582,8 @@ impl LMMatrixElementArray {
         let (lag_coeffs, states) = &self.get_laguerre_coeffs(n_rel_even + n_rel_odd);
         let dr_coeffs = &self.get_dr_radial_poly(states);
 
-        // // Test norms
-        // self._test_psi_norm(states, mu);
-
-        for q_inds in all_q_ind {
+        // Use parallel map to compute matrices for each q_inds value
+        let results: Vec<(Vec<i32>, Array2<f64>, Array2<f64>)> = all_q_ind.par_iter().map(|q_inds| {
             let mut matrix_1 = Array2::zeros((n_eigs, n_eigs));
             let mut matrix_2 = Array2::zeros((n_eigs, n_eigs));
 
@@ -637,11 +638,16 @@ impl LMMatrixElementArray {
                     matrix_2[[idx1, idx2]] = element_2;
                 }
             }
+            
+            // Return tuple of q_inds and computed matrices
+            (q_inds.clone(), matrix_1, matrix_2)
+        }).collect();
 
-            // Insert into the appropriate HashMaps
+        // Process results and populate HashMaps
+        for (q_inds, matrix_1, matrix_2) in results {
             if q_inds.len() == 1 {
                 cos_mat.insert(q_inds.clone(), matrix_1);
-                p_sin_mat.insert(q_inds.clone(), matrix_2);
+                p_sin_mat.insert(q_inds, matrix_2);
             } else if q_inds.len() == 2 {
                 let q_ind1 = q_inds[0].max(q_inds[1]);
                 let q_ind2 = q_inds[0].min(q_inds[1]);
@@ -650,9 +656,6 @@ impl LMMatrixElementArray {
                 cos_mat.insert(vec![q_ind1, q_ind2], matrix_2);
             }
         }
-
-        // let test = cos_mat.clone().into_keys().collect::<Vec<Vec<i32>>>();
-        // println!("cos_mat in populate_mat_elements {:?}",test);
 
         Self { cos_mat, p_sin_mat }
     }
@@ -933,9 +936,9 @@ impl LMMatrixElementArray {
             })
         }) * prefactor;
 
-        if n1 == 0 {
-            println!("States (n1={},m1={}), (n2={},m2={}): Radial dtheta = {}, Radial dr = {}", n1, m1, n2, m2, rad_dtheta, rad_dr);
-        }
+        // if n1 == 0 {
+        //     println!("States (n1={},m1={}), (n2={},m2={}): Radial dtheta = {}, Radial dr = {}", n1, m1, n2, m2, rad_dtheta, rad_dr);
+        // }
 
         ang_dtheta * rad_dtheta + ang_dr * rad_dr
     }
@@ -951,10 +954,12 @@ impl LMMatrixElementArray {
         lag_coeffs: &HashMap<(i32, i32), Vec<(i32, f64)>>,
     ) -> f64 {
 
+        let overlap = if (n1,m1) == (n2,m2) { 1.0 } else { 0.0 };
+
         // Test for q == 0
         let q_2 = q[0].powi(2) + q[1].powi(2);
         if q_2 < 1e-10 {
-            return 0.0;
+            return overlap;
         }
 
         let n1 = *n1;
@@ -1026,8 +1031,6 @@ impl LMMatrixElementArray {
             _ => panic!("Unexpected sign value"),
         };
 
-        let overlap = if (n1,m1) == (n2,m2) { 1.0 } else { 0.0 };
-
         // If angular part is negligible, return overlap only
         if angular.abs() < 1e-10 || q.norm() < 1e-10 {
             return overlap;
@@ -1076,7 +1079,7 @@ impl LMMatrixElementArray {
         }) * prefactor;
 
         // if n1 == 0 {
-        //     println!("States (n1={},m1={}), (n2={},m2={}): Angular = {}, Radial = {}, Overlap = {}", n1, m1, n2, m2, angular, radial, overlap);
+            // println!("States (n1={},m1={}), (n2={},m2={}): Angular = {}, Radial = {}, Overlap = {}", n1, m1, n2, m2, angular, radial, overlap);
         // }
 
         overlap - angular * radial

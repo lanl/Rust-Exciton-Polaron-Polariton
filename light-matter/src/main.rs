@@ -1,7 +1,7 @@
 use exciton_2d::{Exciton2DGridSystem, ExcitonConfig};
 use std::{f64::consts::PI, path::PathBuf};
 use std::time::Instant;
-use ndarray::arr1;
+use ndarray::{arr1, Array1};
 
 pub mod sparse_methods;
 
@@ -34,16 +34,18 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     let exciton = Exciton2DGridSystem::from_config(e_config.clone());
     
     // Parameters for diagonalization
-    let n_rel = 16;      // Number of relative coordinate states
-    let n_ex_eig = 32;  // Number of exciton eigenstates
+    let n_rel = 4;      // Number of relative coordinate states
+    let n_ex_eig = 16;  // Number of exciton eigenstates
     let parity = 0;      // Parity of states to consider
     
     // Light-matter coupling parameters
-    let coupling = 0.01;  // Coupling strength
+    let coupling = 0.03;  // Coupling strength
     let omega_0 = 0.25;    // Photon frequency
     
     // Define photon modes
-    let qx_values = vec![0.0]; // Photon wavevectors along x
+    // let qx_values = vec![0.0]; // Photon wavevectors along x
+    let qx_values = Array1::linspace(-0.05, 0.05, 16); // Photon wavevectors along x
+    let qy_values = Array1::linspace(-0.05, 0.05, 16);
     let qz = omega_0 / C;
     let n_fock = 2;      // Dimension of Fock space
 
@@ -58,8 +60,8 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     // Define phonon parameters
     let pn_coupling = 0.000001;
     let pn_omega = 0.00;
-    let pn_k = arr1(&[0.,0.5]);
-    let pn_n_fock = 2;
+    let pn_k = arr1(&[0.,0.1]);
+    let pn_n_fock = 16;
 
     let pp_config = PPConfig{
         e_config, n_rel, n_ex_eig, lm_coupling: coupling, omega_0, q_values,
@@ -67,9 +69,13 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     };
 
     // Create photon modes
-    let photon_modes: Vec<PhotonMode> = qx_values.iter().map(|qx| {
-            PhotonMode::new(Vector3D { x: *qx, y: 0.0, z: qz }, Polarization::TE, n_fock)
+    let photon_modes: Vec<PhotonMode> = qx_values.iter().flat_map(|qx| {
+            qy_values.iter().map( |qy| {
+                PhotonMode::new(Vector3D { x: *qx, y: *qy, z: qz }, Polarization::TE, n_fock).clone()
+            })
         }).collect();
+    
+    println!("Running with {} modes", photon_modes.len());
 
     match method {
         Method::Sparse => {
@@ -156,7 +162,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
             let gen_time = time1.duration_since(start_time);
             println!("Precomputed matrix elements in {:?}", gen_time);
 
-            let (e_vals, _) = sing_ex::diagonalize_pp_sing_ex(&pp_config, pp_wrapper.polaron_polariton.unwrap(), 10);
+            let (e_vals, _) = sing_ex::diagonalize_pp_sing_ex(&pp_config, pp_wrapper.polaron_polariton.unwrap(), 64);
 
             let time2 = Instant::now();
             let diag_time = time2.duration_since(time1);

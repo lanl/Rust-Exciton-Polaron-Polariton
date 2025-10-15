@@ -81,6 +81,8 @@ impl ExcitonicHamiltonian {
             = self.exciton_ham.diagonalize_full_hamiltonian(self.n_rel, self.n_ex_eig, self.parity);
         
         self.e_vals = Some(exciton_energies.slice(s![..self.n_ex_eig]).to_owned());
+        // println!("Exciton energies: {:?}", self.e_vals);
+
         self.e_vecs = Some(e_vecs[0..self.n_ex_eig].to_vec());
         self.r_vecs = Some(r_vecs);
         self.parities = Some(parities.slice(s![..self.n_ex_eig]).to_owned());
@@ -371,7 +373,9 @@ impl PPOffHamiltonian {
         // Pairs of photon modes for A^2 terms
         for i in 0..n_ph {
             for j in i..n_ph {
-                all_q_ind.push(vec![i as i32, j as i32]);
+                if i != j {
+                    all_q_ind.push(vec![i as i32, j as i32]);
+                }
             }
         }
 
@@ -440,9 +444,6 @@ impl Operator<f64> for PPOffHamiltonian {
         let n_pn = if self.phonon.is_some() { self.phonon.as_ref().unwrap().phonon_mode.n_fock } else { 1 };
         assert!(x.len() == n_ex * n_ph * n_pn, 
             "Input vector length must match PP Hamiltonian dimension.");
-
-        // Clear the output array
-        y.fill(0.0);
 
         let x_vec = ndarray::ArrayView1::from(x);
         let stride = n_ph * n_pn;
