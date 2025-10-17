@@ -17,6 +17,8 @@ pub mod sing_ex;
 
 pub mod dense_methods;
 
+pub mod davidson;
+
 // Speed of light in atomic units
 const C: f64 = 137.036;
 
@@ -44,12 +46,12 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     
     // Define photon modes
     // let qx_values = vec![0.0]; // Photon wavevectors along x
-    let qx_values = Array1::linspace(-0.05, 0.05, 16); // Photon wavevectors along x
-    let qy_values = Array1::linspace(-0.05, 0.05, 16);
+    let qx_values = Array1::linspace(-0.01, 0.01, 32); // Photon wavevectors along x
+    let qy_values = Array1::linspace(-0.01, 0.01, 32);
     let qz = omega_0 / C;
     let n_fock = 2;      // Dimension of Fock space
 
-    let n_k_points = 30;  // Number of k-points along the path
+    let n_k_points = 300;  // Number of k-points along the path
     let n_bands = 64;
 
     let q_values: Vec<Vector3D> = qx_values.iter().map(|qx| {
@@ -58,8 +60,8 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     
 
     // Define phonon parameters
-    let pn_coupling = 0.000001;
-    let pn_omega = 0.00;
+    let pn_coupling = 0.005;
+    let pn_omega = 0.01;
     let pn_k = arr1(&[0.,0.1]);
     let pn_n_fock = 16;
 
@@ -74,6 +76,10 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
                 PhotonMode::new(Vector3D { x: *qx, y: *qy, z: qz }, Polarization::TE, n_fock).clone()
             })
         }).collect();
+
+    // Define high-symmetry points in k-space for band structure calculation
+    let sym_points = vec![ vec![0.0,0.0], vec![PI / a0, 0.0], vec![PI / a0, PI / a0]];
+    let sym_labels = vec!["Γ".to_string(), "X".to_string(), "M".to_string()];
     
     println!("Running with {} modes", photon_modes.len());
 
@@ -85,11 +91,6 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
             // Create light-matter system
             let light_matter = sparse_methods::LightMatter::new(exciton.full_ham, photon_modes, coupling,
                                             n_rel, n_ex_eig, parity);
-
-            // Define high-symmetry points in k-space for band structure calculation
-            // Here we use Γ to X path (center to edge of Brillouin zone)
-            let sym_points = vec![ vec![0.0,0.0], vec![PI / a0, 0.0], vec![PI / a0, PI / a0]];
-            let sym_labels = vec!["Γ".to_string(), "X".to_string(), "M".to_string()];
 
             // Start timing the band structure calculation
             let start_time = Instant::now();
@@ -152,23 +153,38 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
         Method::SingEx => {
 
             println!("Using Mat-Vec methods for light-matter coupling in single photon limit.");
+            let n_eig = 4096;
             
             let start_time = Instant::now();
 
             let mut pp_wrapper = sing_ex::SingExWrapper::new(pp_config.clone());
             pp_wrapper.generate_pp();
+            let mut pp = pp_wrapper.polaron_polariton.unwrap();
 
             let time1 = Instant::now();
             let gen_time = time1.duration_since(start_time);
             println!("Precomputed matrix elements in {:?}", gen_time);
 
-            let (e_vals, _) = sing_ex::diagonalize_pp_sing_ex(&pp_config, pp_wrapper.polaron_polariton.unwrap(), 64);
+            let (_, _) = sing_ex::diagonalize_pp_sing_ex(&pp_config, &pp, n_eig);
 
             let time2 = Instant::now();
             let diag_time = time2.duration_since(time1);
-            println!("Diagonalized gamma point in {:?}", diag_time);
+            println!("Diagonalized gamma point with ARPACK in {:?}", diag_time);
 
-            println!("{:?}", e_vals);
+            let omegas = Array1::linspace(-0.3, 0.0, 1000);
+            let gamma = 0.01;
+            let _ = sing_ex::get_dielectric_function(&pp_config, &pp, n_eig, omegas, gamma);
+
+            let time3 = Instant::now();
+            let dielec_time = time3.duration_since(time2);
+            println!("Calculated Dielectric Function in {:?}", dielec_time);
+            
+            let (k_points, eigvals_list) = sing_ex::calculate_band_structure_sing_ex(&mut pp, n_k_points, n_eig, &sym_points, &pp_config);
+
+            // Plot the band structure
+            plot_band_structure(
+                &k_points, sym_points, sym_labels, &eigvals_list, n_bands, a0, 
+                Some("sing_ex_disp_plot.png"), false, v0, coupling);
         }     
     }
 }

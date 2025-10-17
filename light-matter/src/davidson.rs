@@ -1,6 +1,8 @@
 // davidson.rs
-use ndarray::{Array1, Array2, ArrayView1, s};
+use ndarray::{Array2};
+use ndarray_linalg::eigh::Eigh;
 use std::fmt::Debug;
+use rand::Rng;
 
 /// Trait for operators that can be used with the Davidson algorithm
 pub trait DavidsonOperator<T: Clone + Debug> {
@@ -76,7 +78,7 @@ where
        std::ops::Mul<Output = T> + std::ops::Div<Output = T> + 
        std::ops::AddAssign + std::ops::SubAssign + std::ops::MulAssign + 
        std::ops::DivAssign + PartialOrd + num_traits::Zero + num_traits::One + 
-       num_traits::NumAssign + num_traits::Float + Copy,
+       num_traits::NumAssign + num_traits::Float + Copy + std::iter::Sum
 {
     let n = op.dimension();
     let k = config.num_eigenvalues;
@@ -89,17 +91,18 @@ where
     let diag = op.get_diagonal();
     
     // Initialize subspace with random vectors
-    let mut v = Array2::<T>::zeros((n, k));
-    let mut rng = rand::thread_rng();
+    let mut v = Array2::<T>::zeros((n, config.max_subspace_size));
+    let mut rng = rand::rng();
     for j in 0..k {
         for i in 0..n {
-            v[[i, j]] = T::from(rand::random::<f64>()).unwrap();
+            v[[i, j]] = T::from(rng.random::<f64>()).unwrap();
         }
         // Orthogonalize against previous vectors
         for l in 0..j {
             let dot_product = (0..n).map(|i| v[[i, j]] * v[[i, l]]).sum::<T>();
+            let v_l = v.column(l).to_owned();
             for i in 0..n {
-                v[[i, j]] -= dot_product * v[[i, l]];
+                v[[i, j]] -= dot_product * v_l[i];
             }
         }
         // Normalize
@@ -216,9 +219,14 @@ where
         }
         
         // Check if we need to restart or expand the subspace
-        if subspace_size >= config.max_subspace_size {
+        if subspace_size >= config.max_subspace_size - k {
             // Restart with the current Ritz vectors
-            v = u.clone();
+            // Copy u into the first k columns of v
+            for j in 0..k {
+                for i in 0..n {
+                    v[[i, j]] = u[[i, j]];
+                }
+            }
             subspace_size = k;
         } else {
             // Expand the subspace with preconditioned residuals
@@ -237,8 +245,9 @@ where
                     // Orthogonalize against existing subspace
                     for j in 0..subspace_size {
                         let dot_product = (0..n).map(|i| v[[i, subspace_size]] * v[[i, j]]).sum::<T>();
+                        let v_j = v.column(j).to_owned();
                         for i in 0..n {
-                            v[[i, subspace_size]] -= dot_product * v[[i, j]];
+                            v[[i, subspace_size]] -= dot_product * v_j[i];
                         }
                     }
                     
@@ -263,12 +272,12 @@ where
     let mut result_values = Vec::with_capacity(k);
     let mut result_vectors = Vec::with_capacity(n * k);
     let mut result_residuals = Vec::with_capacity(k);
-    
+
     for l in 0..k {
         result_values.push(theta[l].to_f64().unwrap());
         result_residuals.push(residuals[l].to_f64().unwrap());
         for i in 0..n {
-            result_vectors.push(v[[i, l]].to_f64().unwrap());
+            result_vectors.push(v[[i, l]].to_f64().unwrap());  // Use u for final vectors
         }
     }
     
@@ -281,7 +290,7 @@ where
     })
 }
 
-// Helper function to diagonalize a small matrix
+// Helper function to diagonalize a small matrix using ndarray-linalg
 fn diagonalize_small_matrix<T>(h: &Array2<T>, size: usize) -> (Vec<T>, Array2<T>)
 where
     T: Clone + Debug + std::ops::Add<Output = T> + std::ops::Sub<Output = T> + 
@@ -290,26 +299,26 @@ where
        std::ops::DivAssign + PartialOrd + num_traits::Zero + num_traits::One + 
        num_traits::NumAssign + num_traits::Float + Copy,
 {
-    // For simplicity, we'll use nalgebra's eigendecomposition
-    // In a real implementation, you might want to use LAPACK or another optimized library
-    let mut h_nalgebra = nalgebra::DMatrix::<f64>::zeros(size, size);
+    // Convert to f64 for ndarray-linalg
+    let mut h_f64 = Array2::<f64>::zeros((size, size));
     for i in 0..size {
         for j in 0..size {
-            h_nalgebra[(i, j)] = h[[i, j]].to_f64().unwrap();
+            h_f64[[i, j]] = h[[i, j]].to_f64().unwrap();
         }
     }
     
-    let eigen = nalgebra::linalg::SymmetricEigen::new(h_nalgebra);
+    // Use ndarray-linalg's eigh for symmetric eigendecomposition
+    let (eigenvalues, eigenvectors) = h_f64.eigh(ndarray_linalg::UPLO::Upper).unwrap();
     
-    let mut eigenvalues = Vec::with_capacity(size);
-    let mut eigenvectors = Array2::<T>::zeros((size, size));
+    let mut eigenvalues_t = Vec::with_capacity(size);
+    let mut eigenvectors_t = Array2::<T>::zeros((size, size));
     
     for i in 0..size {
-        eigenvalues.push(T::from(eigen.eigenvalues[i]).unwrap());
+        eigenvalues_t.push(T::from(eigenvalues[i]).unwrap());
         for j in 0..size {
-            eigenvectors[[j, i]] = T::from(eigen.eigenvectors[(j, i)]).unwrap();
+            eigenvectors_t[[j, i]] = T::from(eigenvectors[[j, i]]).unwrap();
         }
     }
     
-    (eigenvalues, eigenvectors)
+    (eigenvalues_t, eigenvectors_t)
 }

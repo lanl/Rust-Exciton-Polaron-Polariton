@@ -1,11 +1,15 @@
-use exciton_2d::{Exciton2DGridSystem,  FullHamiltonian};
+use exciton_2d::{Exciton2DGridSystem, FullHamiltonian};
 use ndarray::{arr1, Array1, Array2, s};
-use arpack::{Config, Operator}; 
+use arpack::{Config, Operator};
+use std::f64::consts::PI;
 use std::sync::Arc;
+use ndarray_linalg::c64;
 use rayon::{prelude::*};
+use indicatif::{ProgressBar, ProgressStyle};
 
+use crate::davidson::{DavidsonOperator, DavidsonConfig, DavidsonWhich, davidson};
 
-use crate::utils::{LMMatrixElement, LMMatrixElementArray, PPConfig, PhotonMode, Polarization};
+use crate::utils::{LMMatrixElement, LMMatrixElementArray, PPConfig, PhotonMode, Polarization, save_band_data};
 
 pub fn kron_1d(a: &Array1<f64>, b: &Array1<f64>) -> Array1<f64> {
     a.iter().flat_map(|&x| b.iter().map(move |&y| x * y)).collect::<Array1<f64>>()
@@ -693,6 +697,65 @@ impl Operator<f64> for PolaronPolariton {
     }
 }
 
+impl DavidsonOperator<f64> for PolaronPolariton {
+    fn apply(&self, x: &[f64], y: &mut [f64]) {
+        // Reuse your existing implementation
+        Operator::apply(self, x, y);
+    }
+    
+    fn get_diagonal(&self) -> Vec<f64> {
+        // Get the diagonal elements for preconditioning
+        let exciton_diag = self.exciton.form_diagonal();
+        let photon_diag = self.pp_diag_ham.photon.form_diagonal();
+        let n_ex = exciton_diag.len();
+        let n_ph = photon_diag.len();
+        
+        let mut diag = Vec::with_capacity(n_ex * n_ph);
+        
+        if let Some(phonon) = &self.pp_diag_ham.phonon {
+            let phonon_diag = phonon.form_diagonal();
+            let n_pn = phonon_diag.len();
+            
+            for ex_idx in 0..n_ex {
+                for ph_idx in 0..n_ph {
+                    for pn_idx in 0..n_pn {
+                        let lm_idx = ex_idx * n_ph + ph_idx;
+                        let e_val = exciton_diag[ex_idx];
+                        let ph_val = photon_diag[ph_idx];
+                        let pn_val = phonon_diag[pn_idx];
+                        let int_val = self.pp_diag_ham.int_array.as_ref().unwrap()[lm_idx];
+                        
+                        diag.push(e_val + ph_val + pn_val + int_val);
+                    }
+                }
+            }
+        } else {
+            for ex_idx in 0..n_ex {
+                for ph_idx in 0..n_ph {
+                    let lm_idx = ex_idx * n_ph + ph_idx;
+                    let e_val = exciton_diag[ex_idx];
+                    let ph_val = photon_diag[ph_idx];
+                    let int_val = self.pp_diag_ham.int_array.as_ref().unwrap()[lm_idx];
+                    
+                    diag.push(e_val + ph_val + int_val);
+                }
+            }
+        }
+        
+        diag
+    }
+    
+    fn dimension(&self) -> usize {
+        let n_ex = self.exciton.n_ex_eig;
+        let n_ph = self.pp_diag_ham.photon.photon_modes.len() + 1;
+        
+        if let Some(phonon) = &self.pp_diag_ham.phonon {
+            n_ex * n_ph * phonon.phonon_mode.n_fock
+        } else {
+            n_ex * n_ph
+        }
+    }
+}
 
 pub struct SingExWrapper {
     pp_config: PPConfig,
@@ -747,7 +810,7 @@ impl SingExWrapper {
 }
 
 
-pub fn diagonalize_pp_sing_ex(pp_config: &PPConfig, pp: PolaronPolariton, n_eig: usize) -> (Array1<f64>, Array2<f64>) {
+pub fn diagonalize_pp_sing_ex(pp_config: &PPConfig, pp: &PolaronPolariton, n_eig: usize) -> (Array1<f64>, Array2<f64>) {
 
     // Configure ARPACK
     let config = Config::new()
@@ -788,3 +851,217 @@ pub fn diagonalize_pp_sing_ex(pp_config: &PPConfig, pp: PolaronPolariton, n_eig:
         
     (eigenvalues, eigenvectors)
 }  
+
+pub fn diagonalize_pp_sing_ex_david(pp: &PolaronPolariton, n_eig: usize) -> (Array1<f64>, Array2<f64>) {
+    // Configure Davidson solver
+    let config = DavidsonConfig {
+        max_iter: 1000,
+        max_subspace_size: n_eig * 4,  // Adjust based on your problem size
+        min_subspace_size: n_eig * 2,
+        tolerance: 1e-6,
+        num_eigenvalues: n_eig,
+        which: DavidsonWhich::Smallest,
+    };
+    
+    // Solve eigenvalue problem using Davidson algorithm
+    let result = davidson(pp, &config).unwrap();
+    
+    if !result.converged {
+        println!("Warning: Davidson algorithm did not converge after {} iterations", result.iterations);
+        println!("Final residuals: {:?}", result.residuals);
+    }
+    
+    // Convert to ndarray format
+    let eigenvalues = Array1::from_vec(result.values);
+    
+    // Convert eigenvectors to ndarray format
+    let n = pp.dimension();
+    let mut eigenvectors = Array2::zeros((n, n_eig));
+    
+    for i in 0..n_eig {
+        for j in 0..n {
+            eigenvectors[[j, i]] = result.vectors[i * n + j];
+        }
+    }
+    
+    (eigenvalues, eigenvectors)
+}
+
+pub fn get_dielectric_function(pp_config: &PPConfig, pp: &PolaronPolariton, n_eig: usize, omegas: Array1<f64>, gamma: f64) -> (Array1<f64>, Array1<f64>) {
+
+    // Lag Coeffs for Relative coordinates
+    let (lag_coeffs, states) = &pp.pp_off_ham.matrix_element_arrays.as_ref().unwrap().get_laguerre_coeffs(pp.exciton.n_rel);
+    let mu = pp.exciton.exciton_ham.rel_ham.mu;
+
+    // Diagonalize at the Gamma point
+    let (pp_vals, pp_vecs) = diagonalize_pp_sing_ex(pp_config, pp, n_eig);
+
+    // Get <0|x|n> matrix elements in the exciton basis
+    
+    // Calculate the matrix elements using iterators
+    let parities = pp.exciton.parities.as_ref().unwrap();
+    let e_vecs = pp.exciton.e_vecs.as_ref().unwrap();
+    let n_com = pp.exciton.exciton_ham.kappa_vectors.len();
+    let n_rel = pp_config.n_rel;
+    let n_ex_eig = pp_config.n_ex_eig;
+
+    let mut n_rel_even = 0;
+    let mut n_rel_odd = 0;
+    for (idx, &parity) in parities.iter().enumerate() {
+        if parity == 1 && n_rel_even == 0 {
+            n_rel_even = e_vecs[idx].len() / n_com;
+        } else if parity == -1 && n_rel_odd == 0 {
+            n_rel_odd = e_vecs[idx].len() / n_com;
+        }
+
+        // Break early if we've found both
+        if n_rel_even > 0 && n_rel_odd > 0 {
+            break;
+        }
+    }
+    let n_rel_par = [n_rel_even, n_rel_odd];
+
+    // Pre-calculate parity indices for all eigenvectors
+    let parity_indices: Vec<usize> = parities.iter().map(|&p| (p == -1) as usize).collect();
+
+
+    let x_rel = &Array2::from_shape_fn((n_rel,n_rel), |(r_ind1, r_ind2)| {
+        pp.pp_off_ham.matrix_element_arrays.as_ref().unwrap().get_x(&states[r_ind1], &states[r_ind2], mu, &lag_coeffs)
+    });
+
+    // Get <x> in the Exciton basis
+    let x_exc = &Array2::from_shape_fn((n_ex_eig,n_ex_eig) , |(idx1, idx2)| {
+            let vec1 = &e_vecs[idx1];
+            let vec2 = &e_vecs[idx2];
+
+            let idx1_par = parity_indices[idx1];
+            let idx2_par = parity_indices[idx2];
+
+            // Calculate the matrix elements using iterators
+            (0..n_rel_par[idx1_par])
+                .flat_map(|rel_ind1| {
+                    let r_ind1 = rel_ind1 + idx1_par * n_rel_even;
+                    
+                    (0..n_rel_par[idx2_par]).flat_map(move |rel_ind2| {
+                        let r_ind2 = rel_ind2 + idx2_par * n_rel_even;
+
+                        (0..n_com).map(move |com_ind| {
+                            let i1 = n_com * rel_ind1 + com_ind;
+                            let i2 = n_com * rel_ind2 + com_ind;
+                            let a1 = vec1[i1];
+                            let a2 = vec2[i2];
+
+                            a1 * a2 * x_rel[[r_ind1,r_ind2]]
+                        })
+                    })
+                })
+                .fold(0.0, |acc, val| acc + val)
+    });
+
+
+    // get <x> in the PP basis
+    let n_ph = pp_config.q_values.len() + 1;
+    let n_pn = pp_config.pn_n_fock;
+
+    let vec0 = pp_vecs.column(0);
+    let x_pp = &Array1::from_shape_fn(n_eig, |idx| {
+        let vec1 = pp_vecs.column(idx);
+
+        (0.. n_ex_eig).flat_map(|ex_ind1| {
+            (0 .. n_ex_eig).flat_map(move |ex_ind2|{
+                let x_element = x_exc[[ex_ind1,ex_ind2]];
+                (0 .. n_ph*n_pn).map(move | bos_ind | {
+                    let pp_ind1 = ex_ind1 * bos_ind;
+                    let pp_ind2 = ex_ind2 * bos_ind;
+
+                    vec0[pp_ind1] * vec1[pp_ind2] * x_element
+                })
+            })
+        }).fold(0.0, |acc, val| acc + val)
+    });
+
+
+    // Compute dielectric function
+    let dielectric_function: Array1<c64> = Array1::from_shape_fn(omegas.len(), |idx| {
+        let omega = omegas[idx];
+
+        let result: c64 = x_pp.iter().enumerate().map(|(pp_ind, x_pp_val)| {
+            x_pp_val * x_pp_val / (omega - pp_vals[pp_ind] + c64::i() * gamma)
+        }).sum();
+
+        1.0 + 4.0 * PI * result
+    });
+
+    (dielectric_function.map(|&x| x.re), dielectric_function.map(|&x| x.im))
+}
+
+pub fn calculate_band_structure_sing_ex(
+    pp: &mut PolaronPolariton, 
+    n_k_points: usize, 
+    n_eig: usize, 
+    sym_points: &Vec<Vec<f64>>,
+    pp_config: &PPConfig ) -> (Vec<Vec<f64>>, Vec<Array1<f64>>) {   
+
+    let save_dir = "pp_data".to_string();
+    let filename = get_lm_band_structure_filename(&pp, &pp_config,save_dir,n_k_points);
+
+    // Calculate points per segment of the path
+    let points_per_seg = n_k_points / sym_points.len();
+
+    // Generate k-points along the path
+    let k_points: Vec<Vec<f64>> = sym_points.iter().enumerate().flat_map(|(sym_ind,sym_point)| {
+        let sym_ind2 = (sym_ind + 1) % sym_points.len();
+        (0..points_per_seg).map(move |t| {
+            // Interpolate between symmetry points
+            let t_frac = t as f64 / (points_per_seg - 1) as f64;
+            let x = sym_point[0] + t_frac * (sym_points[sym_ind2][0] - sym_point[0]);
+            let y = sym_point[1] + t_frac * (sym_points[sym_ind2][1] - sym_point[1]);
+
+            vec![x,y]
+        })
+    }).collect();
+
+    // Set up progress bar
+    let total = k_points.len() as u64;
+    let pb = ProgressBar::new(total);
+    pb.set_style(ProgressStyle::default_bar()
+        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} k-points ({eta})")
+        .unwrap()
+        .progress_chars("#>-"));
+
+    // Calculate eigenvalues at each k-point
+    let eigvals_list: Vec<Array1<f64>> = k_points.iter().map(|k| {
+        pp.update_k(k.clone());
+        let (eigvals, _) = diagonalize_pp_sing_ex(&pp_config, &pp, n_eig);
+        pb.inc(1);
+        eigvals
+    }).collect();
+    pb.finish_with_message("Bandstructure calculation complete");
+
+    // Save the band structure data
+    save_band_data(filename, (k_points.clone(), eigvals_list.clone())).unwrap();
+
+    (k_points, eigvals_list)
+}
+
+    /// Generates a filename for the band structure data
+fn get_lm_band_structure_filename(
+    pp: &PolaronPolariton,
+    pp_config: &PPConfig,
+    save_dir: String,
+    n_points: usize,
+) -> String {
+    format!(
+        "{}/band_a0{}_V0{}_nrel{}_nbands{}_npoints{}_phcoup{}_nmodes{}_pncoup{}_npn{}.bin",
+        save_dir,
+        pp_config.e_config.a0,
+        pp_config.e_config.v0,
+        pp_config.n_rel,
+        pp_config.n_bands,
+        n_points,
+        pp_config.lm_coupling,
+        pp.pp_off_ham.photon.photon_modes.len(),
+        pp_config.pn_coupling,
+        pp_config.pn_n_fock
+    )
+}

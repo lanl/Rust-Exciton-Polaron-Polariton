@@ -424,7 +424,7 @@ impl LightMatter {
             .max_iter(1000);          // Maximum iterations
         
         // Solve eigenvalue problem
-        let result = arpack::eigs(op, n,n_eigenvalues, config).unwrap();
+        let result = arpack::eigs(&op, n,n_eigenvalues, config).unwrap();
         
         // Convert to ndarray format
         let eigenvalues = Array1::from_vec(result.values);
@@ -663,7 +663,7 @@ impl PolaronPolariton {
             .max_iter(1000);          // Maximum iterations
         
         // Solve eigenvalue problem
-        let result = arpack::eigs(op, n, n_eigenvalues, config).unwrap();
+        let result = arpack::eigs(&op, n, n_eigenvalues, config).unwrap();
         
         // Convert to ndarray format
         let eigenvalues = Array1::from_vec(result.values);

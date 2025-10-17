@@ -1,7 +1,7 @@
 use ndarray::{Array1, Array2, array, linalg::kron};
-// use serde::{Serialize, Deserialize};
-// use std::path::Path;
-// use bincode::{self};
+use serde::{Serialize, Deserialize};
+use std::path::Path;
+use bincode::{self};
 use exciton_2d::{ExcitonConfig, FullHamiltonian, utils::fast_matrix_element_calc};
 use ndarray_linalg::Norm;
 use scilib::math::basic::factorial;
@@ -11,48 +11,48 @@ use rayon::prelude::*;
 // Speed of light in atomic units
 const C: f64 = 137.036;
 
-// // Define a serializable structure for band structure data storage
-// #[derive(Serialize, Deserialize)]
-// struct SerializableData {
-//     matrix: Vec<Vec<f64>>,  // Stores k-points as a 2D matrix
-//     arrays: Vec<Vec<f64>>,  // Stores eigenvalues as vectors
-// }
+// Define a serializable structure for band structure data storage
+#[derive(Serialize, Deserialize)]
+struct SerializableData {
+    matrix: Vec<Vec<f64>>,  // Stores k-points as a 2D matrix
+    arrays: Vec<Vec<f64>>,  // Stores eigenvalues as vectors
+}
 
-// /// Saves band structure data to a binary file using bincode serialization
-// pub fn save_band_data<P: AsRef<Path>>(
-//     path: P,
-//     data: (Vec<Vec<f64>>, Vec<Array1<f64>>)
-// ) -> Result<(), Box<dyn std::error::Error>> {
-//     let (matrix, arrays) = data;
-//     let converted_arrays: Vec<Vec<f64>> = arrays
-//         .into_iter()
-//         .map(|arr| arr.to_vec())
-//         .collect();
+/// Saves band structure data to a binary file using bincode serialization
+pub fn save_band_data<P: AsRef<Path>>(
+    path: P,
+    data: (Vec<Vec<f64>>, Vec<Array1<f64>>)
+) -> Result<(), Box<dyn std::error::Error>> {
+    let (matrix, arrays) = data;
+    let converted_arrays: Vec<Vec<f64>> = arrays
+        .into_iter()
+        .map(|arr| arr.to_vec())
+        .collect();
 
-//     let serializable_data = SerializableData {
-//         matrix,
-//         arrays: converted_arrays,
-//     };
+    let serializable_data = SerializableData {
+        matrix,
+        arrays: converted_arrays,
+    };
 
-//     let encoded: Vec<u8> = bincode::serialize(&serializable_data)?;
-//     std::fs::write(path, encoded)?;
-//     Ok(())
-// }
+    let encoded: Vec<u8> = bincode::serialize(&serializable_data)?;
+    std::fs::write(path, encoded)?;
+    Ok(())
+}
 
-// /// Loads band structure data from a binary file
-// pub fn load_band_data<P: AsRef<Path>>(
-//     path: P
-// ) -> Result<(Vec<Vec<f64>>, Vec<Array1<f64>>), Box<dyn std::error::Error>> {
-//     let bytes = std::fs::read(path)?;
-//     let serializable_data: SerializableData = bincode::deserialize(&bytes)?;
+/// Loads band structure data from a binary file
+pub fn load_band_data<P: AsRef<Path>>(
+    path: P
+) -> Result<(Vec<Vec<f64>>, Vec<Array1<f64>>), Box<dyn std::error::Error>> {
+    let bytes = std::fs::read(path)?;
+    let serializable_data: SerializableData = bincode::deserialize(&bytes)?;
 
-//     let arrays: Vec<Array1<f64>> = serializable_data.arrays
-//         .into_iter()
-//         .map(|vec| Array1::from_vec(vec))
-//         .collect();
+    let arrays: Vec<Array1<f64>> = serializable_data.arrays
+        .into_iter()
+        .map(|vec| Array1::from_vec(vec))
+        .collect();
 
-//     Ok((serializable_data.matrix, arrays))
-// }
+    Ok((serializable_data.matrix, arrays))
+}
 
 /// Represents a 3D vector with x, y, z components
 #[derive(Debug, Clone, Copy)]
@@ -1124,6 +1124,86 @@ impl LMMatrixElementArray {
 
             println!("State (n={},m={}): Norm = {}", n, m, psi_norm);
         });
+    }
+
+    pub fn get_x(
+        &self,
+        (n1,m1): &(i32,i32),
+        (n2,m2): &(i32,i32),
+        mu: f64,
+        lag_coeffs: &HashMap<(i32, i32), Vec<(i32, f64)>>,
+    ) -> f64 {
+
+        let n1 = *n1;
+        let m1 = *m1;
+        let n2 = *n2;   
+        let m2 = *m2;
+
+        // Calculate angular component
+        let diff = (m1 -m2).abs();
+        let sum = (m1 + m2).abs();
+
+        // Only jumps in m by ±1 allowed
+        if diff & sum != 1 {
+            return 0.0
+        }
+        
+        let m_sign = (m1 * m2).signum();
+
+        let angular = match m_sign {
+            0  => PI * 2.0_f64.sqrt(),
+            1  => {
+                let mut result = 0.0;
+                if diff == 1 { result += PI};
+                if sum  == 1 { result += PI * m1.signum() as f64};
+                result
+            },
+            _ => 0.0
+        };
+
+        // Calculate radial component
+        let beta_1 = mu * 2.0 / (n1 as f64 + 0.5);
+        let beta_2 = mu * 2.0 / (n2 as f64 + 0.5);
+        let norm_1 = beta_1
+            * (factorial(n1 as usize - m1.abs() as usize) as f64
+                / (2.
+                    * PI
+                    * factorial(n1 as usize + m1.abs() as usize) as f64
+                    * (2. * n1 as f64 + 1.)))
+                .sqrt();
+        let norm_2 = beta_2
+            * (factorial(n2 as usize - m2.abs() as usize) as f64
+                / (2.
+                    * PI
+                    * factorial(n2 as usize + m2.abs() as usize) as f64
+                    * (2. * n2 as f64 + 1.)))
+                .sqrt();
+
+        let prefactor = norm_1 * norm_2;
+
+        let lag_coeff1 = &lag_coeffs[&(n1, m1.abs())];
+        let lag_coeff2 = &lag_coeffs[&(n2, m2.abs())];
+
+        let radial = lag_coeff1.iter().fold(0.0, |acc1, (i, c1)| {
+            acc1 + lag_coeff2.iter().fold(0.0, |acc2, (j, c2)| {
+                // \int e^{-a r} r^b dr = b! / a^(b+1)
+
+                // From e^{-beta1 x/2} * e^{-beta2 x/2} = e^{-(beta1 + beta2) x/2}
+                let a = (beta_1 + beta_2) / 2.0;
+
+                // From r^|m1| * r^i * r^|m2| * r^j * (x.r) * r dr
+                let b = m1.abs() + m2.abs() + i + j + 2;
+
+                let factorial_term = factorial(b as usize) as f64;
+                let denom_term = (a).powi(b + 1);
+
+                acc2 + c1 * c2 * factorial_term / denom_term
+                    * beta_1.powi(m1.abs() + i)
+                    * beta_2.powi(m2.abs() + j)
+            })
+        }) * prefactor;
+
+        angular * radial
     }
 
     pub fn get_laguerre_coeffs(&self, n_rel: usize) -> (HashMap<(i32, i32), Vec<(i32, f64)>>, Vec<(i32, i32)>) {
