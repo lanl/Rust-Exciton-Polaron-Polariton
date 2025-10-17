@@ -1031,6 +1031,9 @@ pub fn calculate_band_structure_sing_ex(
 
     // Calculate eigenvalues at each k-point
     let eigvals_list: Vec<Array1<f64>> = k_points.iter().map(|k| {
+        if k.iter().sum::<f64>().is_nan() {
+            panic!("Too few k-points must be at least 2x number of high symmetry points");
+        }
         pp.update_k(k.clone());
         let (eigvals, _) = diagonalize_pp_sing_ex(&pp_config, &pp, n_eig);
         pb.inc(1);

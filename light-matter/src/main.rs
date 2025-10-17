@@ -29,7 +29,7 @@ pub enum Method {
 }
 
 fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
-    
+
     // Create the 2D exciton system
     let a0 = (&e_config).a0;
     let v0 = (&e_config).v0;
@@ -51,7 +51,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     let qz = omega_0 / C;
     let n_fock = 2;      // Dimension of Fock space
 
-    let n_k_points = 300;  // Number of k-points along the path
+    let n_k_points = 6;  // Number of k-points along the path
     let n_bands = 64;
 
     let q_values: Vec<Vector3D> = qx_values.iter().map(|qx| {
@@ -153,7 +153,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
         Method::SingEx => {
 
             println!("Using Mat-Vec methods for light-matter coupling in single photon limit.");
-            let n_eig = 4096;
+            let n_eig = 256;
             
             let start_time = Instant::now();
 
@@ -191,6 +191,22 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
 
 /// Main function demonstrating the use of the light-matter coupling framework
 fn main() {
+
+    // Get the number of available cores
+    // let num_threads = num_cpus::get();
+    let num_threads = 8;
+
+    // Set OpenBLAS thread count
+    unsafe {
+        std::env::set_var("OPENBLAS_NUM_THREADS", num_threads.to_string());
+    }
+    
+    // Configure Rayon thread pool
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(num_threads)
+        .build_global()
+        .unwrap();
+    
     // Create exciton configuration
     let e_config = ExcitonConfig {
         n_kappa: 7,                               // Number of k-points in Brillouin zone
@@ -204,7 +220,7 @@ fn main() {
         box_size: 3.0,                            // Real-space box size
         save_dir: PathBuf::from("saved_data_lm"), // Directory to save data
         recalculate: false,                       // Whether to recalculate existing data
-        n_jobs: 2,                                // Number of parallel jobs
+        n_jobs: num_threads as i32,               // Number of parallel jobs
         use_gpu: false,                           // Whether to use GPU acceleration
         batch_size: 32,                           // Batch size for calculations
     };

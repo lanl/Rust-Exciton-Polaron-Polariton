@@ -543,24 +543,54 @@ impl FullHamiltonian {
                 if self.verbose {
                     info!("Diagonalizing full Hamiltonian to find {} eigenvalues...", k_eigvals);
                 }
-                
-                // Compute eigenvalues and eigenvectors
-                let (eigvals, eigvecs) = h_full.eigh(ndarray_linalg::UPLO::Lower).unwrap();
-                
-                // Take only the first k_eigvals
-                let eigvals_p: Array1<f64> = eigvals.slice(ndarray::s![..k_eigvals]).to_owned();
-                
-                // Take only the first k_eigvecs
-                let eigvecs_p = eigvecs.slice(ndarray::s![.., ..k_eigvals]).to_owned();
-                
-                eigvals_list.push(eigvals_p);
-                eigvecs_list.push(eigvecs_p);
-                parities_list.push(Array1::from_elem(k_eigvals, parity_val));
-                
-                if self.verbose {
-                    info!("Diagonalization completed in {:.2} seconds.",
-                          start_time.elapsed().as_secs_f64());
+
+                match h_full.eigh(ndarray_linalg::UPLO::Lower) {
+                    Ok((eigvals, eigvecs)) => {
+
+                        // Take only the first k_eigvals
+                        let eigvals_p: Array1<f64> = eigvals.slice(ndarray::s![..k_eigvals]).to_owned();
+                        
+                        // Take only the first k_eigvecs
+                        let eigvecs_p = eigvecs.slice(ndarray::s![.., ..k_eigvals]).to_owned();
+                        
+                        eigvals_list.push(eigvals_p);
+                        eigvecs_list.push(eigvecs_p);
+                        parities_list.push(Array1::from_elem(k_eigvals, parity_val));
+                        
+                        if self.verbose {
+                            info!("Diagonalization completed in {:.2} seconds.",
+                                start_time.elapsed().as_secs_f64());
+                        }
+                    },
+                    Err(e) => {
+                        println!("k = {:?}", self.k);
+
+                        println!("Full Ham shape = {:?}", h_full.shape());
+
+                        eprintln!("Eigenvalue computation failed: {:?}", e);
+
+
+                        // Handle the error or return early
+                    }
                 }
+                
+                // // Compute eigenvalues and eigenvectors
+                // let (eigvals, eigvecs) = h_full.eigh(ndarray_linalg::UPLO::Lower).unwrap();
+                
+                // // Take only the first k_eigvals
+                // let eigvals_p: Array1<f64> = eigvals.slice(ndarray::s![..k_eigvals]).to_owned();
+                
+                // // Take only the first k_eigvecs
+                // let eigvecs_p = eigvecs.slice(ndarray::s![.., ..k_eigvals]).to_owned();
+                
+                // eigvals_list.push(eigvals_p);
+                // eigvecs_list.push(eigvecs_p);
+                // parities_list.push(Array1::from_elem(k_eigvals, parity_val));
+                
+                // if self.verbose {
+                //     info!("Diagonalization completed in {:.2} seconds.",
+                //           start_time.elapsed().as_secs_f64());
+                // }
             }
             
             // Combine results
