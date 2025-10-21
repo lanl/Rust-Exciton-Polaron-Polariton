@@ -1,11 +1,14 @@
 use exciton_2d::{Exciton2DGridSystem, FullHamiltonian};
-use ndarray::{arr1, Array1, Array2, s};
+use ndarray::{arr1, Array1, Array2, s, ArrayView2,ArrayViewMut2};
 use arpack::{Config, Operator};
+use rand::Rng;
 use std::f64::consts::PI;
 use std::sync::Arc;
 use ndarray_linalg::c64;
 use rayon::{prelude::*};
 use indicatif::{ProgressBar, ProgressStyle};
+use ndarray_linalg::lobpcg::*;
+use ndarray_linalg::QR;
 
 use crate::davidson::{DavidsonOperator, DavidsonConfig, DavidsonWhich, davidson};
 
@@ -1003,7 +1006,7 @@ pub fn calculate_band_structure_sing_ex(
     pp_config: &PPConfig ) -> (Vec<Vec<f64>>, Vec<Array1<f64>>) {   
 
     let save_dir = "pp_data".to_string();
-    let filename = get_lm_band_structure_filename(&pp, &pp_config,save_dir,n_k_points);
+    let filename = get_lm_band_structure_filename(&pp, &pp_config,save_dir,n_k_points, n_eig);
 
     // Calculate points per segment of the path
     let points_per_seg = n_k_points / sym_points.len();
@@ -1053,9 +1056,10 @@ fn get_lm_band_structure_filename(
     pp_config: &PPConfig,
     save_dir: String,
     n_points: usize,
+    n_eig: usize
 ) -> String {
     format!(
-        "{}/band_a0{}_V0{}_nrel{}_nbands{}_npoints{}_phcoup{}_nmodes{}_pncoup{}_npn{}.bin",
+        "{}/band_a0{}_V0{}_nrel{}_nbands{}_npoints{}_phcoup{}_nmodes{}_pncoup{}_npn{}_neig{}.bin",
         save_dir,
         pp_config.e_config.a0,
         pp_config.e_config.v0,
@@ -1065,6 +1069,137 @@ fn get_lm_band_structure_filename(
         pp_config.lm_coupling,
         pp.pp_off_ham.photon.photon_modes.len(),
         pp_config.pn_coupling,
-        pp_config.pn_n_fock
+        pp_config.pn_n_fock,
+        n_eig
     )
+}
+
+pub fn diagonalize_pp_sing_ex_lobpcg_ndarray(pp: &PolaronPolariton, n_eig: usize) -> (Array1<f64>, Array2<f64>) {
+    let n = pp.dimension();
+    
+    // Create initial guess vectors
+    let mut x = Array2::<f64>::zeros((n, n_eig));
+    let mut rng = rand::rng();
+    
+    // Fill with random values
+    for i in 0..n_eig {
+        for j in 0..n {
+            x[[j, i]] = rng.random_range(-1.0..1.0);
+        }
+    }
+    
+    // Orthonormalize the initial guess
+    let (x, _) = x.qr().unwrap();
+    
+    // Define the operator function
+    let a = |x_view: ArrayView2<f64>| -> Array2<f64> {
+        let mut result = Array2::<f64>::zeros((n, x_view.ncols()));
+        
+        // Process each column
+        for i in 0..x_view.ncols() {
+            let x_col = x_view.column(i);
+            let mut y_col = vec![0.0; n];
+            
+            // Apply the operator
+            DavidsonOperator::apply(pp,x_col.as_slice().unwrap(), &mut y_col);
+            
+            // Copy result to the output array
+            for j in 0..n {
+                result[[j, i]] = y_col[j];
+            }
+        }
+        
+        result
+    };
+    
+    // Define the preconditioner function
+    let m = |mut r: ArrayViewMut2<f64>| {
+        let diag = pp.get_diagonal();
+        
+        // Apply diagonal preconditioning
+        for i in 0..r.ncols() {
+            for j in 0..n {
+                // Avoid division by very small values
+                r[[j, i]] /= diag[j].abs().max(1e-6);
+            }
+        }
+    };
+    
+    // Run LOBPCG
+    let result = lobpcg(
+        a,
+        x,
+        m,
+        None,  // No constraints
+        1e-6,  // Tolerance
+        1000,  // Max iterations
+        TruncatedOrder::Smallest  // Find smallest eigenvalues
+    );
+    
+    // Process the result
+    match result {
+        LobpcgResult::Ok(values, vectors, _) => {
+            (values, vectors)
+        },
+        LobpcgResult::Err(values, vectors, _, err) => {
+            println!("Warning: LOBPCG did not fully converge: {:?}", err);
+            (values, vectors)
+        },
+        LobpcgResult::NoResult(err) => {
+            panic!("LOBPCG failed: {:?}", err);
+        }
+    }
+}
+
+// Add this function to calculate band structure using ndarray_linalg's LOBPCG
+pub fn calculate_band_structure_sing_ex_lobpcg_ndarray(
+    pp: &mut PolaronPolariton, 
+    n_k_points: usize, 
+    n_eig: usize, 
+    sym_points: &Vec<Vec<f64>>,
+    pp_config: &PPConfig ) -> (Vec<Vec<f64>>, Vec<Array1<f64>>) {   
+
+    let save_dir = "pp_data".to_string();
+    let filename = get_lm_band_structure_filename(&pp, &pp_config, save_dir, n_k_points, n_eig);
+
+    // Calculate points per segment of the path
+    let points_per_seg = n_k_points / sym_points.len();
+
+    // Generate k-points along the path
+    let k_points: Vec<Vec<f64>> = sym_points.iter().enumerate().flat_map(|(sym_ind,sym_point)| {
+        let sym_ind2 = (sym_ind + 1) % sym_points.len();
+        (0..points_per_seg).map(move |t| {
+            // Interpolate between symmetry points
+            let t_frac = t as f64 / (points_per_seg - 1) as f64;
+            let x = sym_point[0] + t_frac * (sym_points[sym_ind2][0] - sym_point[0]);
+            let y = sym_point[1] + t_frac * (sym_points[sym_ind2][1] - sym_point[1]);
+
+            vec![x,y]
+        })
+    }).collect();
+
+    // Set up progress bar
+    let total = k_points.len() as u64;
+    let pb = ProgressBar::new(total);
+    pb.set_style(ProgressStyle::default_bar()
+        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} k-points ({eta})")
+        .unwrap()
+        .progress_chars("#>-"));
+
+    // Calculate eigenvalues at each k-point
+    let eigvals_list: Vec<Array1<f64>> = k_points.iter().map(|k| {
+        if k.iter().sum::<f64>().is_nan() {
+            panic!("Too few k-points must be at least 2x number of high symmetry points");
+        }
+        pp.update_k(k.clone());
+        let (eigvals, _) = diagonalize_pp_sing_ex_lobpcg_ndarray(&pp, n_eig);
+        pb.inc(1);
+        eigvals
+    }).collect();
+    pb.finish_with_message("Bandstructure calculation complete");
+
+    // Save the band structure data
+    save_band_data(filename, (k_points.clone(), eigvals_list.clone())).unwrap();
+
+    (k_points, eigvals_list)
 }

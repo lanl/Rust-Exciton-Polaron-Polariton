@@ -19,6 +19,8 @@ pub mod dense_methods;
 
 pub mod davidson;
 
+pub mod lobpcg;
+
 // Speed of light in atomic units
 const C: f64 = 137.036;
 
@@ -46,8 +48,8 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     
     // Define photon modes
     // let qx_values = vec![0.0]; // Photon wavevectors along x
-    let qx_values = Array1::linspace(-0.01, 0.01, 32); // Photon wavevectors along x
-    let qy_values = Array1::linspace(-0.01, 0.01, 32);
+    let qx_values = Array1::linspace(-0.01, 0.01, 64); // Photon wavevectors along x
+    let qy_values = Array1::linspace(-0.01, 0.01, 64);
     let qz = omega_0 / C;
     let n_fock = 2;      // Dimension of Fock space
 
@@ -153,7 +155,8 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
         Method::SingEx => {
 
             println!("Using Mat-Vec methods for light-matter coupling in single photon limit.");
-            let n_eig = 256;
+            let n_eig = 4096;
+            println!("Calculating {} eigenstates", n_eig);
             
             let start_time = Instant::now();
 
@@ -193,12 +196,12 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
 fn main() {
 
     // Get the number of available cores
-    // let num_threads = num_cpus::get();
-    let num_threads = 8;
+    let num_threads = num_cpus::get();
+    // let num_threads = 16;
 
     // Set OpenBLAS thread count
     unsafe {
-        std::env::set_var("OPENBLAS_NUM_THREADS", num_threads.to_string());
+        std::env::set_var("OPENBLAS_NUM_THREADS", (num_threads).to_string());
     }
     
     // Configure Rayon thread pool
