@@ -7,8 +7,11 @@
 #
 #SBATCH --time=2-00:00:00
 #SBATCH --nodes=1
-#SBATCH --ntasks=16
+#SBATCH --ntasks=96
 #SBATCH --mem=128
 #SBATCH --qos=long
+
+# Load Intel MKL
+module load intel-mkl
 
 ./build.sh run --release

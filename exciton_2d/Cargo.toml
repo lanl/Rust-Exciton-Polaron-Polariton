@@ -10,7 +10,7 @@ debug = true
 [dependencies]
 indicatif = { version = "0.18", features = ["rayon"] } 
 ndarray = { version = "0.16.1", features = ["rayon"] }
-ndarray-linalg = { version = "0.17.0", features = ["openblas-system"] }
+ndarray-linalg = { workspace = true }
 sprs = "0.11"
 plotters = "0.3"
 rayon = "1.7"

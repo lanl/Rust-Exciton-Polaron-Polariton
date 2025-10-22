@@ -812,92 +812,14 @@ impl SingExWrapper {
 
 }
 
-
-pub fn diagonalize_pp_sing_ex(pp_config: &PPConfig, pp: &PolaronPolariton, n_eig: usize) -> (Array1<f64>, Array2<f64>) {
-
-    // Configure ARPACK
-    let config = Config::new()
-        .which(arpack::Which::SA)  // Smallest algebraic eigenvalues
-        .tol(1e-6)                // Tolerance
-        .max_iter(1000);          // Maximum iterations
-    
-    let n: usize;
-    let n_ph = pp_config.q_values.len() + 1;
-    // Ensure phonon Fock space is valid if phonon coupling is present
-    if pp.pp_off_ham.phonon.is_some() {
-        assert!(pp_config.pn_n_fock > 1, "Phonon Fock space must be greater than 1 when phonon coupling is non-zero.");
-
-        let n_pn = if pp.pp_diag_ham.phonon.is_some() {
-                pp_config.pn_n_fock
-            } else {1};
-        n = pp.exciton.n_ex_eig * n_ph * n_pn;
-    }
-    else {
-        n = pp.exciton.n_ex_eig * n_ph;
-    }
-
-    // Solve eigenvalue problem
-    let result = arpack::eigs(pp, n,n_eig, config).unwrap();
-        
-    // Convert to ndarray format
-    let eigenvalues = Array1::from_vec(result.values);
-    
-    // Convert eigenvectors to ndarray format
-    let n = result.vectors.len() / n_eig;
-    let mut eigenvectors = Array2::zeros((n, n_eig));
-    
-    for i in 0..n_eig {
-        for j in 0..n {
-            eigenvectors[[j, i]] = result.vectors[i * n + j];
-        }
-    }
-        
-    (eigenvalues, eigenvectors)
-}  
-
-pub fn diagonalize_pp_sing_ex_david(pp: &PolaronPolariton, n_eig: usize) -> (Array1<f64>, Array2<f64>) {
-    // Configure Davidson solver
-    let config = DavidsonConfig {
-        max_iter: 1000,
-        max_subspace_size: n_eig * 4,  // Adjust based on your problem size
-        min_subspace_size: n_eig * 2,
-        tolerance: 1e-6,
-        num_eigenvalues: n_eig,
-        which: DavidsonWhich::Smallest,
-    };
-    
-    // Solve eigenvalue problem using Davidson algorithm
-    let result = davidson(pp, &config).unwrap();
-    
-    if !result.converged {
-        println!("Warning: Davidson algorithm did not converge after {} iterations", result.iterations);
-        println!("Final residuals: {:?}", result.residuals);
-    }
-    
-    // Convert to ndarray format
-    let eigenvalues = Array1::from_vec(result.values);
-    
-    // Convert eigenvectors to ndarray format
-    let n = pp.dimension();
-    let mut eigenvectors = Array2::zeros((n, n_eig));
-    
-    for i in 0..n_eig {
-        for j in 0..n {
-            eigenvectors[[j, i]] = result.vectors[i * n + j];
-        }
-    }
-    
-    (eigenvalues, eigenvectors)
-}
-
-pub fn get_dielectric_function(pp_config: &PPConfig, pp: &PolaronPolariton, n_eig: usize, omegas: Array1<f64>, gamma: f64) -> (Array1<f64>, Array1<f64>) {
+pub fn get_dielectric_function(pp_config: &PPConfig, pp: &PolaronPolariton, n_eig: usize, omegas: Array1<f64>, gamma: f64, method: &DiagonalizationMethod) -> (Array1<f64>, Array1<f64>) {
 
     // Lag Coeffs for Relative coordinates
     let (lag_coeffs, states) = &pp.pp_off_ham.matrix_element_arrays.as_ref().unwrap().get_laguerre_coeffs(pp.exciton.n_rel);
     let mu = pp.exciton.exciton_ham.rel_ham.mu;
 
     // Diagonalize at the Gamma point
-    let (pp_vals, pp_vecs) = diagonalize_pp_sing_ex(pp_config, pp, n_eig);
+    let (pp_vals, pp_vecs) = diagonalize_pp_sing_ex(pp, n_eig, method, None);
 
     // Get <0|x|n> matrix elements in the exciton basis
     
@@ -998,59 +920,7 @@ pub fn get_dielectric_function(pp_config: &PPConfig, pp: &PolaronPolariton, n_ei
     (dielectric_function.map(|&x| x.re), dielectric_function.map(|&x| x.im))
 }
 
-pub fn calculate_band_structure_sing_ex(
-    pp: &mut PolaronPolariton, 
-    n_k_points: usize, 
-    n_eig: usize, 
-    sym_points: &Vec<Vec<f64>>,
-    pp_config: &PPConfig ) -> (Vec<Vec<f64>>, Vec<Array1<f64>>) {   
-
-    let save_dir = "pp_data".to_string();
-    let filename = get_lm_band_structure_filename(&pp, &pp_config,save_dir,n_k_points, n_eig);
-
-    // Calculate points per segment of the path
-    let points_per_seg = n_k_points / sym_points.len();
-
-    // Generate k-points along the path
-    let k_points: Vec<Vec<f64>> = sym_points.iter().enumerate().flat_map(|(sym_ind,sym_point)| {
-        let sym_ind2 = (sym_ind + 1) % sym_points.len();
-        (0..points_per_seg).map(move |t| {
-            // Interpolate between symmetry points
-            let t_frac = t as f64 / (points_per_seg - 1) as f64;
-            let x = sym_point[0] + t_frac * (sym_points[sym_ind2][0] - sym_point[0]);
-            let y = sym_point[1] + t_frac * (sym_points[sym_ind2][1] - sym_point[1]);
-
-            vec![x,y]
-        })
-    }).collect();
-
-    // Set up progress bar
-    let total = k_points.len() as u64;
-    let pb = ProgressBar::new(total);
-    pb.set_style(ProgressStyle::default_bar()
-        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} k-points ({eta})")
-        .unwrap()
-        .progress_chars("#>-"));
-
-    // Calculate eigenvalues at each k-point
-    let eigvals_list: Vec<Array1<f64>> = k_points.iter().map(|k| {
-        if k.iter().sum::<f64>().is_nan() {
-            panic!("Too few k-points must be at least 2x number of high symmetry points");
-        }
-        pp.update_k(k.clone());
-        let (eigvals, _) = diagonalize_pp_sing_ex(&pp_config, &pp, n_eig);
-        pb.inc(1);
-        eigvals
-    }).collect();
-    pb.finish_with_message("Bandstructure calculation complete");
-
-    // Save the band structure data
-    save_band_data(filename, (k_points.clone(), eigvals_list.clone())).unwrap();
-
-    (k_points, eigvals_list)
-}
-
-    /// Generates a filename for the band structure data
+/// Generates a filename for the band structure data
 fn get_lm_band_structure_filename(
     pp: &PolaronPolariton,
     pp_config: &PPConfig,
@@ -1074,91 +944,184 @@ fn get_lm_band_structure_filename(
     )
 }
 
-pub fn diagonalize_pp_sing_ex_lobpcg_ndarray(pp: &PolaronPolariton, n_eig: usize) -> (Array1<f64>, Array2<f64>) {
+// In sing_ex.rs, add this enum to select the diagonalization method
+#[derive(Debug)]
+pub enum DiagonalizationMethod {
+    Arpack,
+    Davidson,
+    LobpcgNDArray,
+    LobpcgCustom,
+}
+
+// Then replace all diagonalization functions with a single unified function
+pub fn diagonalize_pp_sing_ex(
+    pp: &PolaronPolariton, 
+    n_eig: usize,
+    method: &DiagonalizationMethod,
+    initial_vec: Option<&Array2<f64>>
+) -> (Array1<f64>, Array2<f64>) {
     let n = pp.dimension();
     
-    // Create initial guess vectors
-    let mut x = Array2::<f64>::zeros((n, n_eig));
-    let mut rng = rand::rng();
-    
-    // Fill with random values
-    for i in 0..n_eig {
-        for j in 0..n {
-            x[[j, i]] = rng.random_range(-1.0..1.0);
-        }
-    }
-    
-    // Orthonormalize the initial guess
-    let (x, _) = x.qr().unwrap();
-    
-    // Define the operator function
-    let a = |x_view: ArrayView2<f64>| -> Array2<f64> {
-        let mut result = Array2::<f64>::zeros((n, x_view.ncols()));
-        
-        // Process each column
-        for i in 0..x_view.ncols() {
-            let x_col = x_view.column(i);
-            let mut y_col = vec![0.0; n];
+    match method {
+        DiagonalizationMethod::Arpack => {
+            // Configure ARPACK
+            let config = Config::new()
+                .which(arpack::Which::SA)  // Smallest algebraic eigenvalues
+                .tol(1e-6)                // Tolerance
+                .max_iter(1000);          // Maximum iterations
             
-            // Apply the operator
-            DavidsonOperator::apply(pp,x_col.as_slice().unwrap(), &mut y_col);
+            // Solve eigenvalue problem using ARPACK
+            let result = arpack::eigs(pp, n, n_eig, config).unwrap();
+                
+            // Convert to ndarray format
+            let eigenvalues = Array1::from_vec(result.values);
             
-            // Copy result to the output array
-            for j in 0..n {
-                result[[j, i]] = y_col[j];
+            // Convert eigenvectors to ndarray format
+            let mut eigenvectors = Array2::zeros((n, n_eig));
+            
+            for i in 0..n_eig {
+                for j in 0..n {
+                    eigenvectors[[j, i]] = result.vectors[i * n + j];
+                }
             }
-        }
-        
-        result
-    };
-    
-    // Define the preconditioner function
-    let m = |mut r: ArrayViewMut2<f64>| {
-        let diag = pp.get_diagonal();
-        
-        // Apply diagonal preconditioning
-        for i in 0..r.ncols() {
-            for j in 0..n {
-                // Avoid division by very small values
-                r[[j, i]] /= diag[j].abs().max(1e-6);
+            
+            (eigenvalues, eigenvectors)
+        },
+        DiagonalizationMethod::Davidson => {
+            // Configure Davidson solver
+            let config = DavidsonConfig {
+                max_iter: 1000,
+                max_subspace_size: n_eig * 4,  // Adjust based on problem size
+                min_subspace_size: n_eig * 2,
+                tolerance: 1e-6,
+                num_eigenvalues: n_eig,
+                which: DavidsonWhich::Smallest,
+            };
+            
+            // Solve eigenvalue problem using Davidson algorithm
+            let result = davidson(pp, &config).unwrap();
+            
+            if !result.converged {
+                println!("Warning: Davidson algorithm did not converge after {} iterations", result.iterations);
+                println!("Final residuals: {:?}", result.residuals);
             }
-        }
-    };
-    
-    // Run LOBPCG
-    let result = lobpcg(
-        a,
-        x,
-        m,
-        None,  // No constraints
-        1e-6,  // Tolerance
-        1000,  // Max iterations
-        TruncatedOrder::Smallest  // Find smallest eigenvalues
-    );
-    
-    // Process the result
-    match result {
-        LobpcgResult::Ok(values, vectors, _) => {
-            (values, vectors)
+            
+            // Convert to ndarray format
+            let eigenvalues = Array1::from_vec(result.values);
+            
+            let mut eigenvectors = Array2::zeros((n, n_eig));
+            
+            for i in 0..n_eig {
+                for j in 0..n {
+                    eigenvectors[[j, i]] = result.vectors[i * n + j];
+                }
+            }
+            
+            (eigenvalues, eigenvectors)
         },
-        LobpcgResult::Err(values, vectors, _, err) => {
-            println!("Warning: LOBPCG did not fully converge: {:?}", err);
-            (values, vectors)
+        DiagonalizationMethod::LobpcgNDArray => {
+
+            let mut x = Array2::zeros((n, n_eig));
+
+            if initial_vec.is_some() {
+                initial_vec.unwrap().to_owned().move_into(&mut x);
+            } 
+            else {
+                // Create initial guess vectors
+                let mut rng = rand::rng();
+                
+                // Fill with random values
+                for i in 0..n_eig {
+                    for j in 0..n {
+                        x[[j, i]] = rng.random_range(-1.0..1.0);
+                    }
+                }
+            }
+
+            
+            use ndarray::Axis;
+
+            // Orthonormalize the initial guess
+            let (x, _) = x.qr().unwrap();
+            
+            // Define the operator function
+            let a = |x_view: ArrayView2<f64>| -> Array2<f64> {
+                let mut result = Array2::<f64>::zeros((n, x_view.ncols()));
+                
+                result.axis_iter_mut(Axis(1))
+                    .into_par_iter()
+                    .zip(x_view.axis_iter(Axis(1)).into_par_iter())
+                    .for_each(|(mut r_column, x_column)| {
+                        let mut y_col = vec![0.0; n];
+                        Operator::apply(pp, x_column.as_slice().unwrap(), &mut y_col);
+                        r_column.assign(&Array1::from_vec(y_col));
+                    });
+                    
+                result
+            };
+
+            // Define energy shift to turn positive definite:
+            // Set shift to 4*µ as a buffer since the exciton ground state is ~ -µ
+            let shift = pp.exciton.exciton_ham.rel_ham.mu * 4.0;
+            
+            // Define the preconditioner function
+            let m = |mut r: ArrayViewMut2<f64>| {
+                let diag = Array1::from_vec(pp.get_diagonal()) + shift;
+                
+                // Create safe diagonal values once (outside the loop)
+                let safe_diag = diag.mapv(|x| x.abs().max(1e-10));
+                
+                // Apply diagonal preconditioning
+                // for i in 0..r.ncols() {
+                //     let mut column = r.column_mut(i);
+                //     column.assign(&(&column / &safe_diag));
+                // }
+                r.axis_iter_mut(Axis(1)).into_par_iter().for_each(|mut r_column|{
+                    r_column.assign(&(&r_column / &safe_diag));
+                });
+            };
+            
+            // Run LOBPCG
+            let result = lobpcg(
+                a,
+                x,
+                m,
+                None,  // No constraints
+                1e-6,  // Tolerance
+                1000,  // Max iterations
+                TruncatedOrder::Smallest  // Find smallest eigenvalues
+            );
+            
+            // Process the result
+            match result {
+                LobpcgResult::Ok(values, vectors, _) => {
+                    (values - shift, vectors)
+                },
+                LobpcgResult::Err(values, vectors, _, err) => {
+                    println!("Warning: LOBPCG did not fully converge: {:?}", err);
+                    (values - shift, vectors)
+                },
+                LobpcgResult::NoResult(err) => {
+                    panic!("LOBPCG failed: {:?}", err);
+                }
+            }
         },
-        LobpcgResult::NoResult(err) => {
-            panic!("LOBPCG failed: {:?}", err);
+        DiagonalizationMethod::LobpcgCustom => {
+            // Use the custom LOBPCG implementation from our lobpcg module
+            crate::lobpcg::diagonalize_lobpcg(pp, n_eig)
         }
     }
 }
 
-// Add this function to calculate band structure using ndarray_linalg's LOBPCG
-pub fn calculate_band_structure_sing_ex_lobpcg_ndarray(
+// Replace the specific band structure calculation functions with a unified one
+pub fn calculate_band_structure_sing_ex(
     pp: &mut PolaronPolariton, 
     n_k_points: usize, 
     n_eig: usize, 
     sym_points: &Vec<Vec<f64>>,
-    pp_config: &PPConfig ) -> (Vec<Vec<f64>>, Vec<Array1<f64>>) {   
-
+    pp_config: &PPConfig,
+    method: DiagonalizationMethod
+) -> (Vec<Vec<f64>>, Vec<Array1<f64>>) {   
     let save_dir = "pp_data".to_string();
     let filename = get_lm_band_structure_filename(&pp, &pp_config, save_dir, n_k_points, n_eig);
 
@@ -1187,12 +1150,14 @@ pub fn calculate_band_structure_sing_ex_lobpcg_ndarray(
         .progress_chars("#>-"));
 
     // Calculate eigenvalues at each k-point
+    let mut eig_vec_last: Option<Array2<f64>> = None;
     let eigvals_list: Vec<Array1<f64>> = k_points.iter().map(|k| {
         if k.iter().sum::<f64>().is_nan() {
             panic!("Too few k-points must be at least 2x number of high symmetry points");
         }
         pp.update_k(k.clone());
-        let (eigvals, _) = diagonalize_pp_sing_ex_lobpcg_ndarray(&pp, n_eig);
+        let (eigvals, eig_vec) = diagonalize_pp_sing_ex(pp, n_eig, &method, eig_vec_last.as_ref());
+        eig_vec_last = Some(eig_vec);
         pb.inc(1);
         eigvals
     }).collect();

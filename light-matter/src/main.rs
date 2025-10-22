@@ -48,8 +48,8 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     
     // Define photon modes
     // let qx_values = vec![0.0]; // Photon wavevectors along x
-    let qx_values = Array1::linspace(-0.01, 0.01, 64); // Photon wavevectors along x
-    let qy_values = Array1::linspace(-0.01, 0.01, 64);
+    let qx_values = Array1::linspace(-0.01, 0.01, 8); // Photon wavevectors along x
+    let qy_values = Array1::linspace(-0.01, 0.01, 8);
     let qz = omega_0 / C;
     let n_fock = 2;      // Dimension of Fock space
 
@@ -153,9 +153,8 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
         },   
 
         Method::SingEx => {
-
             println!("Using Mat-Vec methods for light-matter coupling in single photon limit.");
-            let n_eig = 4096;
+            let n_eig = 128;
             println!("Calculating {} eigenstates", n_eig);
             
             let start_time = Instant::now();
@@ -168,27 +167,36 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
             let gen_time = time1.duration_since(start_time);
             println!("Precomputed matrix elements in {:?}", gen_time);
 
-            let (_, _) = sing_ex::diagonalize_pp_sing_ex(&pp_config, &pp, n_eig);
+            // Choose which diagonalization method to use
+            let diag_method = sing_ex::DiagonalizationMethod::LobpcgNDArray;
+            
+            // Benchmark different methods
+            println!("Using {:?} diagonalization method", diag_method);
+            
+            // Diagonalize at gamma point
+            let (_, _) = sing_ex::diagonalize_pp_sing_ex(&pp, n_eig, &diag_method, None);
 
             let time2 = Instant::now();
             let diag_time = time2.duration_since(time1);
-            println!("Diagonalized gamma point with ARPACK in {:?}", diag_time);
+            println!("Diagonalized gamma point in {:?}", diag_time);
 
             let omegas = Array1::linspace(-0.3, 0.0, 1000);
             let gamma = 0.01;
-            let _ = sing_ex::get_dielectric_function(&pp_config, &pp, n_eig, omegas, gamma);
+            let _ = sing_ex::get_dielectric_function(&pp_config, &pp, n_eig, omegas, gamma, &diag_method);
 
             let time3 = Instant::now();
             let dielec_time = time3.duration_since(time2);
             println!("Calculated Dielectric Function in {:?}", dielec_time);
             
-            let (k_points, eigvals_list) = sing_ex::calculate_band_structure_sing_ex(&mut pp, n_k_points, n_eig, &sym_points, &pp_config);
+            // Calculate band structure
+            let (k_points, eigvals_list) = sing_ex::calculate_band_structure_sing_ex(
+                &mut pp, n_k_points, n_eig, &sym_points, &pp_config, diag_method);
 
             // Plot the band structure
             plot_band_structure(
                 &k_points, sym_points, sym_labels, &eigvals_list, n_bands, a0, 
                 Some("sing_ex_disp_plot.png"), false, v0, coupling);
-        }     
+        } 
     }
 }
 
@@ -201,14 +209,22 @@ fn main() {
 
     // Set OpenBLAS thread count
     unsafe {
-        std::env::set_var("OPENBLAS_NUM_THREADS", (num_threads).to_string());
+        // Set OpenBLAS thread count
+        std::env::set_var("OPENBLAS_NUM_THREADS", num_threads.to_string());
+        std::env::set_var("OMP_NUM_THREADS", num_threads.to_string());
+        
+        // Set MKL thread count (if using MKL)
+        std::env::set_var("MKL_NUM_THREADS", num_threads.to_string());
+
+        std::env::set_var("OMP_PROC_BIND", "spread");
+        std::env::set_var("OMP_PLACES", "cores");
     }
     
-    // Configure Rayon thread pool
-    rayon::ThreadPoolBuilder::new()
-        .num_threads(num_threads)
-        .build_global()
-        .unwrap();
+    // // Configure Rayon thread pool
+    // rayon::ThreadPoolBuilder::new()
+    //     .num_threads(num_threads)
+    //     .build_global()
+    //     .unwrap();
     
     // Create exciton configuration
     let e_config = ExcitonConfig {
@@ -223,7 +239,7 @@ fn main() {
         box_size: 3.0,                            // Real-space box size
         save_dir: PathBuf::from("saved_data_lm"), // Directory to save data
         recalculate: false,                       // Whether to recalculate existing data
-        n_jobs: num_threads as i32,               // Number of parallel jobs
+        n_jobs: 32,                               // Number of parallel jobs
         use_gpu: false,                           // Whether to use GPU acceleration
         batch_size: 32,                           // Batch size for calculations
     };
