@@ -1,6 +1,313 @@
 use log::info;
 use plotters::prelude::*;
 use ndarray::{Array1, s};
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
+use std::collections::HashMap;
+
+/// Plots the dielectric function for different coupling strengths
+pub fn plot_dielectric_function(
+    dir_path: &str,                // Directory containing dielectric function data files
+    save_path: Option<&str>,       // Path to save the plot
+    plot_type: DielectricPlotType, // Which part of the dielectric function to plot
+    omega_range: Option<(f64, f64)>, // Optional frequency range to plot
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Get all dielectric function files in the directory
+    let dir = Path::new(dir_path);
+    let mut files = std::fs::read_dir(dir)?
+        .filter_map(|entry| {
+            let entry = entry.ok()?;
+            let path = entry.path();
+            if path.is_file() && path.extension()?.to_str()? == "dat" {
+                Some(path)
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    
+    // Sort files by coupling strength
+    files.sort_by(|a, b| {
+        let coupling_a = extract_coupling_from_filename(a).unwrap_or(0.0);
+        let coupling_b = extract_coupling_from_filename(b).unwrap_or(0.0);
+        coupling_a.partial_cmp(&coupling_b).unwrap()
+    });
+    
+    if files.is_empty() {
+        return Err("No dielectric function data files found".into());
+    }
+    
+    // Load data from files
+    let mut all_data: HashMap<PathBuf, (Vec<f64>, Vec<f64>, Vec<f64>)> = HashMap::new();
+    let mut omega_min = f64::INFINITY;
+    let mut omega_max = f64::NEG_INFINITY;
+    let mut eps_min = f64::INFINITY;
+    let mut eps_max = f64::NEG_INFINITY;
+    
+    for file_path in &files {
+        let coupling = extract_coupling_from_filename(file_path);
+        let (omegas, re_eps, im_eps) = load_dielectric_data(file_path)?;
+        
+        // Update min/max values
+        if let Some(&min_omega) = omegas.iter().min_by(|a, b| a.partial_cmp(b).unwrap()) {
+            omega_min = omega_min.min(min_omega);
+        }
+        if let Some(&max_omega) = omegas.iter().max_by(|a, b| a.partial_cmp(b).unwrap()) {
+            omega_max = omega_max.max(max_omega);
+        }
+        
+        match plot_type {
+            DielectricPlotType::Real => {
+                if let Some(&min_eps) = re_eps.iter().min_by(|a, b| a.partial_cmp(b).unwrap()) {
+                    eps_min = eps_min.min(min_eps);
+                }
+                if let Some(&max_eps) = re_eps.iter().max_by(|a, b| a.partial_cmp(b).unwrap()) {
+                    eps_max = eps_max.max(max_eps);
+                }
+            },
+            DielectricPlotType::Imaginary => {
+                if let Some(&min_eps) = im_eps.iter().min_by(|a, b| a.partial_cmp(b).unwrap()) {
+                    eps_min = eps_min.min(min_eps);
+                }
+                if let Some(&max_eps) = im_eps.iter().max_by(|a, b| a.partial_cmp(b).unwrap()) {
+                    eps_max = eps_max.max(max_eps);
+                }
+            },
+            DielectricPlotType::Both => {
+                if let Some(&min_re) = re_eps.iter().min_by(|a, b| a.partial_cmp(b).unwrap()) {
+                    eps_min = eps_min.min(min_re);
+                }
+                if let Some(&min_im) = im_eps.iter().min_by(|a, b| a.partial_cmp(b).unwrap()) {
+                    eps_min = eps_min.min(min_im);
+                }
+                if let Some(&max_re) = re_eps.iter().max_by(|a, b| a.partial_cmp(b).unwrap()) {
+                    eps_max = eps_max.max(max_re);
+                }
+                if let Some(&max_im) = im_eps.iter().max_by(|a, b| a.partial_cmp(b).unwrap()) {
+                    eps_max = eps_max.max(max_im);
+                }
+            },
+        }
+
+        // eps_max = eps_max.min( 100.0);
+        // eps_min = eps_min.max(-100.0);
+        
+        println!("Coupling = {:?}", coupling);
+        println!("Max eps = {}", eps_max);
+        println!("Min eps = {}", eps_min);
+        all_data.insert(file_path.clone(), (omegas, re_eps, im_eps));
+    }
+    
+    // Apply omega range if specified
+    if let Some((min, max)) = omega_range {
+        omega_min = min;
+        omega_max = max;
+    }
+    
+    // Add padding to the eps range (5%)
+    let eps_padding = (eps_max - eps_min) * 0.05;
+    eps_min -= eps_padding;
+    eps_max += eps_padding;
+    
+    // Create the plot
+    let save_path = save_path.unwrap_or("dielectric_function.png");
+    let root = BitMapBackend::new(save_path, (1200, 900)).into_drawing_area();
+    root.fill(&WHITE)?;
+    
+    // Split the drawing area for multiple plots if needed
+    let areas = if plot_type == DielectricPlotType::Both {
+        let (top, bottom) = root.split_vertically(450);
+        vec![top, bottom]
+    } else {
+        vec![root.clone()]
+    };
+    
+    // Get sorted couplings
+    let mut couplings: Vec<(PathBuf,f64)> = all_data.keys().map(|file_path| {
+        (file_path.clone(), extract_coupling_from_filename(file_path).unwrap_or(0.0))
+    }).collect();
+    couplings.sort_by(|(_,a), (_,b)| a.partial_cmp(b).unwrap());
+    
+    // Plot title
+    let title = match plot_type {
+        DielectricPlotType::Real => "Real Part of Dielectric Function",
+        DielectricPlotType::Imaginary => "Imaginary Part of Dielectric Function",
+        DielectricPlotType::Both => "Dielectric Function",
+    };
+    
+    // Plot the real part
+    if plot_type == DielectricPlotType::Real || plot_type == DielectricPlotType::Both {
+        let area_index = if plot_type == DielectricPlotType::Both { 0 } else { 0 };
+        let mut chart = ChartBuilder::on(&areas[area_index])
+            .caption(format!("{} - Real Part", title), ("sans-serif", 30).into_font())
+            .margin(10)
+            .margin_top(20)
+            .margin_bottom(10)
+            .x_label_area_size(40)
+            .y_label_area_size(60)
+            .build_cartesian_2d(omega_min..omega_max, eps_min..eps_max)?;
+        
+        chart.configure_mesh()
+            .x_desc("Frequency (a.u.)")
+            .y_desc("Re[ε(ω)]")
+            .axis_desc_style(("sans-serif", 20))
+            .label_style(("sans-serif", 18))
+            .draw()?;
+        
+
+        
+        for (i, (key, coupling)) in couplings.iter().enumerate() {
+            let (omegas, re_eps, _) = &all_data[key];
+            
+            // Create a color gradient from blue to red
+            let color = RGBColor(
+                ((1.0 - i as f64 / couplings.len() as f64) * 255.0) as u8, // More red for higher coupling
+                0,
+                ((i as f64 / couplings.len() as f64) * 255.0) as u8  // More blue for lower coupling
+            );
+            
+            // Filter data points within the omega range
+            let points: Vec<(f64, f64)> = omegas.iter()
+                .zip(re_eps.iter())
+                .filter(|(omega, _)| omega >= &&omega_min && omega <= &&omega_max)
+                .map(|(&omega, &eps)| (omega, eps))
+                .collect();
+            
+            chart.draw_series(LineSeries::new(
+                points,
+                ShapeStyle {
+                    color: color.into(),
+                    filled: false,
+                    stroke_width: 3,
+                }
+            ))?.label(format!("g = {:.3}", coupling))
+              .legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], color));
+        }
+         
+        // Add legend
+        chart.configure_series_labels()
+            .background_style(&WHITE.mix(0.8))
+            .border_style(&BLACK)
+            .label_font(("sans-serif", 15))
+            .position(SeriesLabelPosition::UpperRight)
+            .draw()?;
+    }
+    
+    // Plot the imaginary part
+    if plot_type == DielectricPlotType::Imaginary || plot_type == DielectricPlotType::Both {
+        let area_index = if plot_type == DielectricPlotType::Both { 1 } else { 0 };
+        let mut chart = ChartBuilder::on(&areas[area_index])
+            .caption(format!("{} - Imaginary Part", title), ("sans-serif", 30).into_font())
+            .margin(10)
+            .margin_top(20)
+            .margin_bottom(10)
+            .x_label_area_size(40)
+            .y_label_area_size(60)
+            .build_cartesian_2d(omega_min..omega_max, eps_min..eps_max)?;
+        
+        chart.configure_mesh()
+            .x_desc("Frequency (a.u.)")
+            .y_desc("Im[ε(ω)]")
+            .axis_desc_style(("sans-serif", 20))
+            .label_style(("sans-serif", 18))
+            .draw()?;
+        
+        // Draw each coupling strength with a different color
+        for (i, (key, coupling)) in couplings.iter().enumerate() {
+            let (omegas, _, im_eps) = &all_data[key];
+            
+            // Create a color gradient from blue to red
+            let color = RGBColor(
+                ((1.0 - i as f64 / couplings.len() as f64) * 255.0) as u8, // More red for higher coupling
+                0,
+                ((i as f64 / couplings.len() as f64) * 255.0) as u8  // More blue for lower coupling
+            );
+            
+            // Filter data points within the omega range
+            let points: Vec<(f64, f64)> = omegas.iter()
+                .zip(im_eps.iter())
+                .filter(|(omega, _)| omega >= &&omega_min && omega <= &&omega_max)
+                .map(|(&omega, &eps)| (omega, eps))
+                .collect();
+            
+            chart.draw_series(LineSeries::new(
+                points,
+                ShapeStyle {
+                    color: color.into(),
+                    filled: false,
+                    stroke_width: 3,
+                }
+            ))?.label(format!("g = {:.3}", coupling))
+              .legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], color));
+        }
+        
+        // Add legend
+        chart.configure_series_labels()
+            .background_style(&WHITE.mix(0.8))
+            .border_style(&BLACK)
+            .label_font(("sans-serif", 15))
+            .position(SeriesLabelPosition::UpperRight)
+            .draw()?;
+    }
+    
+    // Present the final plot
+    root.present()?;
+    info!("Dielectric function plot saved to {}", save_path);
+    
+    Ok(())
+}
+
+/// Helper function to extract coupling strength from filename
+fn extract_coupling_from_filename(path: &Path) -> Option<f64> {
+    let filename = path.file_name()?.to_str()?;
+    let parts: Vec<&str> = filename.split('_').collect();
+    
+    for (i, part) in parts.iter().enumerate() {
+        if *part == "coupling" && i + 1 < parts.len() {
+            return parts[i + 1].trim_end_matches(".dat").parse::<f64>().ok();
+        }
+    }
+    
+    None
+}
+
+/// Helper function to load dielectric function data from a file
+fn load_dielectric_data(path: &Path) -> Result<(Vec<f64>, Vec<f64>, Vec<f64>), Box<dyn std::error::Error>> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+    
+    let mut omegas = Vec::new();
+    let mut re_eps = Vec::new();
+    let mut im_eps = Vec::new();
+    
+    for line in reader.lines() {
+        let line = line?;
+        if line.starts_with('#') || line.trim().is_empty() {
+            continue;
+        }
+        
+        let values: Vec<f64> = line.split_whitespace()
+            .filter_map(|s| s.parse::<f64>().ok())
+            .collect();
+        
+        if values.len() >= 3 {
+            omegas.push(values[0]);
+            re_eps.push(values[1]);
+            im_eps.push(values[2]);
+        }
+    }
+    
+    Ok((omegas, re_eps, im_eps))
+}
+
+/// Enum to specify which part of the dielectric function to plot
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum DielectricPlotType {
+    Real,
+    Imaginary,
+    Both,
+}
 
 /// Plots the band structure
 pub fn plot_band_structure(

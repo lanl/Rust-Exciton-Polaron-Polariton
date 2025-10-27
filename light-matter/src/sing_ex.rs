@@ -818,9 +818,6 @@ pub fn get_dielectric_function(pp_config: &PPConfig, pp: &PolaronPolariton, n_ei
     let (lag_coeffs, states) = &pp.pp_off_ham.matrix_element_arrays.as_ref().unwrap().get_laguerre_coeffs(pp.exciton.n_rel);
     let mu = pp.exciton.exciton_ham.rel_ham.mu;
 
-    // Diagonalize at the Gamma point
-    let (pp_vals, pp_vecs) = diagonalize_pp_sing_ex(pp, n_eig, method, None);
-
     // Get <0|x|n> matrix elements in the exciton basis
     
     // Calculate the matrix elements using iterators
@@ -854,6 +851,8 @@ pub fn get_dielectric_function(pp_config: &PPConfig, pp: &PolaronPolariton, n_ei
         pp.pp_off_ham.matrix_element_arrays.as_ref().unwrap().get_x(&states[r_ind1], &states[r_ind2], mu, &lag_coeffs)
     });
 
+    // println!("x_rel = {}", PrettyArray2(&x_rel));
+
     // Get <x> in the Exciton basis
     let x_exc = &Array2::from_shape_fn((n_ex_eig,n_ex_eig) , |(idx1, idx2)| {
             let vec1 = &e_vecs[idx1];
@@ -883,6 +882,11 @@ pub fn get_dielectric_function(pp_config: &PPConfig, pp: &PolaronPolariton, n_ei
                 .fold(0.0, |acc, val| acc + val)
     });
 
+    // println!("x_exc = {}", PrettyArray2(&x_exc));
+
+    // Diagonalize at the Gamma point
+    // println!("Diagonalizing at the Gamma Point");
+    let (pp_vals, pp_vecs) = diagonalize_pp_sing_ex(pp, n_eig, method, None);
 
     // get <x> in the PP basis
     let n_ph = pp_config.q_values.len() + 1;
@@ -905,13 +909,15 @@ pub fn get_dielectric_function(pp_config: &PPConfig, pp: &PolaronPolariton, n_ei
         }).fold(0.0, |acc, val| acc + val)
     });
 
+    println!("x_pp = {:?}", x_pp);
+
 
     // Compute dielectric function
     let dielectric_function: Array1<c64> = Array1::from_shape_fn(omegas.len(), |idx| {
         let omega = omegas[idx];
 
         let result: c64 = x_pp.iter().enumerate().map(|(pp_ind, x_pp_val)| {
-            x_pp_val * x_pp_val / (omega - pp_vals[pp_ind] + c64::i() * gamma)
+            x_pp_val * x_pp_val / (omega - (pp_vals[pp_ind] - pp_vals[0]) + c64::i() * gamma)
         }).sum();
 
         1.0 + 4.0 * PI * result
@@ -1167,4 +1173,24 @@ pub fn calculate_band_structure_sing_ex(
     save_band_data(filename, (k_points.clone(), eigvals_list.clone())).unwrap();
 
     (k_points, eigvals_list)
+}
+
+use std::fmt;
+
+#[derive(Debug)]
+pub struct PrettyArray2<'a>(&'a Array2<f64>);
+
+impl<'a> fmt::Display for PrettyArray2<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        for row in self.0.rows() {
+            for (i, val) in row.iter().enumerate() {
+                if i > 0 {
+                    write!(f, "    ")?;
+                }
+                write!(f, "{:.4}", val)?;
+            }
+            writeln!(f)?;
+        }
+        Ok(())
+    }
 }

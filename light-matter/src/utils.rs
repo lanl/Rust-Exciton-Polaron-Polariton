@@ -1150,6 +1150,10 @@ impl LMMatrixElementArray {
         
         let m_sign = (m1 * m2).signum();
 
+        if m_sign == 0 && (m1 + m2) < 0 {
+            return 0.0;
+        }
+
         let angular = match m_sign {
             0  => PI * 2.0_f64.sqrt(),
             1  => {
@@ -1184,9 +1188,14 @@ impl LMMatrixElementArray {
         let lag_coeff1 = &lag_coeffs[&(n1, m1.abs())];
         let lag_coeff2 = &lag_coeffs[&(n2, m2.abs())];
 
+        // println!("n1 = {}, m1 = {}, n2 = {}, m2 = {}", n1,m1,n2,m2);
+        // println!("Lag1 = {:?}", lag_coeff1);
+        // println!("Lag2 = {:?}", lag_coeff2);
+
         let radial = lag_coeff1.iter().fold(0.0, |acc1, (i, c1)| {
             acc1 + lag_coeff2.iter().fold(0.0, |acc2, (j, c2)| {
                 // \int e^{-a r} r^b dr = b! / a^(b+1)
+                // println!("j = {}", j);
 
                 // From e^{-beta1 x/2} * e^{-beta2 x/2} = e^{-(beta1 + beta2) x/2}
                 let a = (beta_1 + beta_2) / 2.0;

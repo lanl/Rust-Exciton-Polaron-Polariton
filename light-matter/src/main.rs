@@ -1,5 +1,5 @@
 use exciton_2d::{Exciton2DGridSystem, ExcitonConfig};
-use std::{f64::consts::PI, path::PathBuf};
+use std::{f64::consts::PI, path::PathBuf, io::Write};
 use std::time::Instant;
 use ndarray::{arr1, Array1};
 
@@ -9,7 +9,7 @@ pub mod utils;
 pub use utils::{Vector3D, PhotonMode, Polarization};
 
 pub mod visualization;
-pub use visualization::plot_band_structure;
+pub use visualization::{plot_band_structure, plot_dielectric_function, DielectricPlotType};
 
 use crate::utils::PPConfig;
 
@@ -48,17 +48,18 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     
     // Define photon modes
     // let qx_values = vec![0.0]; // Photon wavevectors along x
-    let qx_values = Array1::linspace(-0.01, 0.01, 8); // Photon wavevectors along x
-    let qy_values = Array1::linspace(-0.01, 0.01, 8);
+    let qx_values = Array1::linspace(-0.01, 0.01, 32); // Photon wavevectors along x
+    let qy_values = Array1::linspace(-0.01, 0.01, 32);
     let qz = omega_0 / C;
     let n_fock = 2;      // Dimension of Fock space
 
-    let n_k_points = 6;  // Number of k-points along the path
+    let n_k_points = 180;  // Number of k-points along the path
     let n_bands = 64;
 
-    let q_values: Vec<Vector3D> = qx_values.iter().map(|qx| {
-            Vector3D { x: *qx, y: 0.0, z: qz }
-        }).collect();
+    let q_values: Vec<Vector3D> = qx_values.iter().flat_map(|qx| {
+        qy_values.iter().map(|qy| {
+            Vector3D { x: *qx, y: *qy, z: qz }
+        })}).collect();
     
 
     // Define phonon parameters
@@ -154,7 +155,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
 
         Method::SingEx => {
             println!("Using Mat-Vec methods for light-matter coupling in single photon limit.");
-            let n_eig = 128;
+            let n_eig = 4096;
             println!("Calculating {} eigenstates", n_eig);
             
             let start_time = Instant::now();
@@ -170,15 +171,15 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
             // Choose which diagonalization method to use
             let diag_method = sing_ex::DiagonalizationMethod::LobpcgNDArray;
             
-            // Benchmark different methods
-            println!("Using {:?} diagonalization method", diag_method);
+            // // Benchmark different methods
+            // println!("Using {:?} diagonalization method", diag_method);
             
-            // Diagonalize at gamma point
-            let (_, _) = sing_ex::diagonalize_pp_sing_ex(&pp, n_eig, &diag_method, None);
+            // // Diagonalize at gamma point
+            // let (_, _) = sing_ex::diagonalize_pp_sing_ex(&pp, n_eig, &diag_method, None);
 
             let time2 = Instant::now();
-            let diag_time = time2.duration_since(time1);
-            println!("Diagonalized gamma point in {:?}", diag_time);
+            // let diag_time = time2.duration_since(time1);
+            // println!("Diagonalized gamma point in {:?}", diag_time);
 
             let omegas = Array1::linspace(-0.3, 0.0, 1000);
             let gamma = 0.01;
@@ -201,6 +202,135 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
 }
 
 /// Main function demonstrating the use of the light-matter coupling framework
+/// Calculate dielectric function for a range of coupling strengths
+fn run_dielectric_scan(e_config: ExcitonConfig) {
+    // Check if we should calculate or just plot
+    let calculate = true; // Set to false to skip calculation and just plot
+    // Parameters for diagonalization
+    let n_rel = 4;      // Number of relative coordinate states
+    let n_ex_eig = 16;  // Number of exciton eigenstates
+    
+    // Light-matter coupling parameters
+    let coupling_values = Array1::linspace(0.00, 0.05, 11); // Scan from weak to strong coupling
+    // let coupling_values = vec![0.001]; // Scan from weak to strong coupling
+    let omega_0 = 0.25;    // Photon frequency
+    
+    // Define photon modes
+    let qx_values = Array1::linspace(-0.01, 0.01, 32); // Photon wavevectors along x
+    let qy_values = Array1::linspace(-0.01, 0.01, 32);
+    let qz = omega_0 / C;
+
+    let q_values: Vec<Vector3D> = qx_values.iter().flat_map(|qx| {
+        qy_values.iter().map(|qy| {
+            Vector3D { x: *qx, y: *qy, z: qz }
+        })}).collect();
+    
+    // Define phonon parameters
+    let pn_coupling = 0.005;
+    let pn_omega = 0.01;
+    let pn_k = arr1(&[0.,0.1]);
+    let pn_n_fock = 16;
+
+    // Parameters for dielectric function calculation
+    let n_eig = 4096;  // Number of eigenstates to use
+    let omegas = Array1::linspace(0.05, 0.2, 10000);  // Frequency range
+    let gamma = 1e-7;  // Broadening parameter
+    let diag_method = sing_ex::DiagonalizationMethod::LobpcgNDArray;
+
+    // Create directory for saving results
+    let save_dir = "dielectric_scan";
+    std::fs::create_dir_all(save_dir).unwrap_or_else(|_| {
+        println!("Directory {} already exists or couldn't be created", save_dir);
+    });
+    
+    if !calculate {
+        // Just plot the existing data
+        println!("Plotting dielectric function from existing data...");
+        match plot_dielectric_function(save_dir, Some("dielectric_function_real.png"), DielectricPlotType::Real, None) {
+            Ok(_) => println!("Successfully plotted real part of dielectric function"),
+            Err(e) => println!("Error plotting dielectric function: {}", e),
+        }
+        
+        match plot_dielectric_function(save_dir, Some("dielectric_function_imag.png"), DielectricPlotType::Imaginary, None) {
+            Ok(_) => println!("Successfully plotted imaginary part of dielectric function"),
+            Err(e) => println!("Error plotting dielectric function: {}", e),
+        }
+        
+        match plot_dielectric_function(save_dir, Some("dielectric_function_both.png"), DielectricPlotType::Both, None) {
+            Ok(_) => println!("Successfully plotted both parts of dielectric function"),
+            Err(e) => println!("Error plotting dielectric function: {}", e),
+        }
+        
+        return;
+    }
+
+    println!("Starting dielectric function scan for {} coupling values", coupling_values.len());
+    
+    // Create progress bar
+    let pb = indicatif::ProgressBar::new(coupling_values.len() as u64);
+    pb.set_style(indicatif::ProgressStyle::default_bar()
+        .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} couplings ({eta})")
+        .unwrap()
+        .progress_chars("#>-"));
+
+    // For each coupling strength
+    for (i, &coupling) in coupling_values.iter().enumerate() {
+        let start_time = Instant::now();
+        
+        // Create PP config
+        let pp_config = PPConfig{
+            e_config: e_config.clone(), n_rel, n_ex_eig, lm_coupling: coupling, omega_0, q_values: q_values.clone(),
+            pn_coupling, pn_omega, pn_k: pn_k.clone(), pn_n_fock, n_k_points: 1, n_bands: 1
+        };
+
+        // Generate polaron-polariton system
+        let mut pp_wrapper = sing_ex::SingExWrapper::new(pp_config.clone());
+        pp_wrapper.generate_pp();
+        let pp = pp_wrapper.polaron_polariton.as_ref().unwrap();
+
+        // Calculate dielectric function
+        let (re_eps, im_eps) = sing_ex::get_dielectric_function(&pp_config, pp, n_eig, omegas.clone(), gamma, &diag_method);
+
+        // Save results to file
+        let filename = format!("{}/dielectric_coupling_{:.3}.dat", save_dir, coupling);
+        let mut file = std::fs::File::create(&filename).unwrap();
+        
+        // Write header
+        writeln!(file, "# omega Re[eps] Im[eps]").unwrap();
+        
+        // Write data
+        for i in 0..omegas.len() {
+            writeln!(file, "{:.6} {:.6} {:.6}", omegas[i], re_eps[i], im_eps[i]).unwrap();
+        }
+
+        let end_time = Instant::now();
+        let duration = end_time.duration_since(start_time);
+        
+        pb.inc(1);
+        pb.println(format!("Completed coupling {:.3} ({}/{}) in {:?}", 
+                          coupling, i+1, coupling_values.len(), duration));
+    }
+    
+    pb.finish_with_message("Dielectric function scan complete");
+    
+    // Plot the results
+    println!("Plotting dielectric function...");
+    match plot_dielectric_function(save_dir, Some("dielectric_function_real.png"), DielectricPlotType::Real, None) {
+        Ok(_) => println!("Successfully plotted real part of dielectric function"),
+        Err(e) => println!("Error plotting dielectric function: {}", e),
+    }
+    
+    match plot_dielectric_function(save_dir, Some("dielectric_function_imag.png"), DielectricPlotType::Imaginary, None) {
+        Ok(_) => println!("Successfully plotted imaginary part of dielectric function"),
+        Err(e) => println!("Error plotting dielectric function: {}", e),
+    }
+    
+    match plot_dielectric_function(save_dir, Some("dielectric_function_both.png"), DielectricPlotType::Both, None) {
+        Ok(_) => println!("Successfully plotted both parts of dielectric function"),
+        Err(e) => println!("Error plotting dielectric function: {}", e),
+    }
+}
+
 fn main() {
 
     // Get the number of available cores
@@ -245,9 +375,22 @@ fn main() {
     };
     // davidson::davidson_test();
 
-    run_bandstructure(Method::SingEx, e_config.clone());
-    // run_bandstructure(Method::Sparse, e_config.clone());
-    // run_bandstructure(Method::Dense, e_config.clone());
+    // Choose which function to run
+    let run_mode = "dielectric_scan"; // Options: "bandstructure", "dielectric_scan"
+    
+    match run_mode {
+        "bandstructure" => {
+            run_bandstructure(Method::SingEx, e_config.clone());
+            // run_bandstructure(Method::Sparse, e_config.clone());
+            // run_bandstructure(Method::Dense, e_config.clone());
+        },
+        "dielectric_scan" => {
+            run_dielectric_scan(e_config.clone());
+        },
+        _ => {
+            println!("Unknown run mode: {}", run_mode);
+        }
+    }
     
     // // Define phonon modes for polaron-polariton calculation
     // let phonon_freq = 0.01;  // Phonon frequency in a.u.
