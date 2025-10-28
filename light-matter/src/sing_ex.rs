@@ -1,6 +1,7 @@
 use exciton_2d::{Exciton2DGridSystem, FullHamiltonian};
 use ndarray::{arr1, Array1, Array2, s, ArrayView2,ArrayViewMut2};
 use arpack::{Config, Operator};
+use ndarray_linalg::Norm;
 use rand::Rng;
 use std::f64::consts::PI;
 use std::sync::Arc;
@@ -183,6 +184,7 @@ impl DiagOperator<f64> for PhononHamiltonian {
     
 }
 
+#[derive(Clone)]
 pub struct PPDiagHamiltonian {
     pub exciton: Arc<ExcitonicHamiltonian>,
     pub photon: Arc<PhotonicHamiltonian>,
@@ -294,6 +296,7 @@ impl ArrayOperator<f64> for PPDiagHamiltonian {
     }
 }
 
+#[derive(Clone)]
 pub struct PPOffHamiltonian {
     pub exciton: Arc<ExcitonicHamiltonian>,
     pub photon: Arc<PhotonicHamiltonian>,
@@ -603,6 +606,8 @@ impl Operator<f64> for PPOffHamiltonian {
 
     }
 }
+
+#[derive(Clone)]
 pub struct PolaronPolariton {
     pub k: Vec<f64>,
     pub pp_off_ham:  PPOffHamiltonian,
@@ -927,7 +932,7 @@ pub fn get_dielectric_function(pp_config: &PPConfig, pp: &PolaronPolariton, n_ei
 }
 
 /// Generates a filename for the band structure data
-fn get_lm_band_structure_filename(
+pub fn get_lm_band_structure_filename(
     pp: &PolaronPolariton,
     pp_config: &PPConfig,
     save_dir: String,
@@ -1026,95 +1031,283 @@ pub fn diagonalize_pp_sing_ex(
             (eigenvalues, eigenvectors)
         },
         DiagonalizationMethod::LobpcgNDArray => {
+            // Block size for LOBPCG
+            let block_size = 128; // Adjust based on your problem
+            
+            // If n_eig is small, use the standard approach
+            if n_eig <= block_size {
+                let mut x = Array2::zeros((n, n_eig));
 
-            let mut x = Array2::zeros((n, n_eig));
-
-            if initial_vec.is_some() {
-                initial_vec.unwrap().to_owned().move_into(&mut x);
-            } 
-            else {
-                // Create initial guess vectors
-                let mut rng = rand::rng();
-                
-                // Fill with random values
-                for i in 0..n_eig {
-                    for j in 0..n {
-                        x[[j, i]] = rng.random_range(-1.0..1.0);
+                if initial_vec.is_some() {
+                    initial_vec.unwrap().to_owned().move_into(&mut x);
+                } 
+                else {
+                    // Create initial guess vectors
+                    let mut rng = rand::rng();
+                    
+                    // Fill with random values
+                    for i in 0..n_eig {
+                        for j in 0..n {
+                            x[[j, i]] = rng.random_range(-1.0..1.0);
+                        }
                     }
                 }
-            }
 
-            
             use ndarray::Axis;
 
-            // Orthonormalize the initial guess
-            let (x, _) = x.qr().unwrap();
-            
-            // Define the operator function
-            let a = |x_view: ArrayView2<f64>| -> Array2<f64> {
-                let mut result = Array2::<f64>::zeros((n, x_view.ncols()));
+                // Orthonormalize the initial guess
+                let (x, _) = x.qr().unwrap();
                 
-                result.axis_iter_mut(Axis(1))
-                    .into_par_iter()
-                    .zip(x_view.axis_iter(Axis(1)).into_par_iter())
-                    .for_each(|(mut r_column, x_column)| {
-                        let mut y_col = vec![0.0; n];
-                        Operator::apply(pp, x_column.as_slice().unwrap(), &mut y_col);
-                        r_column.assign(&Array1::from_vec(y_col));
-                    });
+                // Define the operator function
+                let a = |x_view: ArrayView2<f64>| -> Array2<f64> {
+                    let mut result = Array2::<f64>::zeros((n, x_view.ncols()));
                     
-                result
-            };
+                    result.axis_iter_mut(Axis(1))
+                        .into_par_iter()
+                        .zip(x_view.axis_iter(Axis(1)).into_par_iter())
+                        .for_each(|(mut r_column, x_column)| {
+                            let mut y_col = vec![0.0; n];
+                            Operator::apply(pp, x_column.as_slice().unwrap(), &mut y_col);
+                            r_column.assign(&Array1::from_vec(y_col));
+                        });
+                        
+                    result
+                };
 
-            // Define energy shift to turn positive definite:
-            // Set shift to 4*µ as a buffer since the exciton ground state is ~ -µ
-            let shift = pp.exciton.exciton_ham.rel_ham.mu * 4.0;
-            
-            // Define the preconditioner function
-            let m = |mut r: ArrayViewMut2<f64>| {
-                let diag = Array1::from_vec(pp.get_diagonal()) + shift;
+                // Define energy shift to turn positive definite:
+                // Set shift to 4*µ as a buffer since the exciton ground state is ~ -µ
+                let shift = pp.exciton.exciton_ham.rel_ham.mu * 4.0;
                 
-                // Create safe diagonal values once (outside the loop)
-                let safe_diag = diag.mapv(|x| x.abs().max(1e-10));
+                // Define the preconditioner function
+                let m = |mut r: ArrayViewMut2<f64>| {
+                    let diag = Array1::from_vec(pp.get_diagonal()) + shift;
+                    
+                    // Create safe diagonal values once (outside the loop)
+                    let safe_diag = diag.mapv(|x| x.abs().max(1e-10));
+                    
+                    r.axis_iter_mut(Axis(1)).into_par_iter().for_each(|mut r_column|{
+                        r_column.assign(&(&r_column / &safe_diag));
+                    });
+                };
                 
-                // Apply diagonal preconditioning
-                // for i in 0..r.ncols() {
-                //     let mut column = r.column_mut(i);
-                //     column.assign(&(&column / &safe_diag));
-                // }
-                r.axis_iter_mut(Axis(1)).into_par_iter().for_each(|mut r_column|{
-                    r_column.assign(&(&r_column / &safe_diag));
-                });
-            };
-            
-            // Run LOBPCG
-            let result = lobpcg(
-                a,
-                x,
-                m,
-                None,  // No constraints
-                1e-6,  // Tolerance
-                1000,  // Max iterations
-                TruncatedOrder::Smallest  // Find smallest eigenvalues
-            );
-            
-            // Process the result
-            match result {
-                LobpcgResult::Ok(values, vectors, _) => {
-                    (values - shift, vectors)
-                },
-                LobpcgResult::Err(values, vectors, _, err) => {
-                    println!("Warning: LOBPCG did not fully converge: {:?}", err);
-                    (values - shift, vectors)
-                },
-                LobpcgResult::NoResult(err) => {
-                    panic!("LOBPCG failed: {:?}", err);
+                // Run LOBPCG
+                let result = lobpcg(
+                    a,
+                    x,
+                    m,
+                    None,  // No constraints
+                    1e-6,  // Tolerance
+                    1000,  // Max iterations
+                    TruncatedOrder::Smallest  // Find smallest eigenvalues
+                );
+                
+                // Process the result
+                match result {
+                    LobpcgResult::Ok(values, vectors, _) => {
+                        (values - shift, vectors)
+                    },
+                    LobpcgResult::Err(values, vectors, _, err) => {
+                        println!("Warning: LOBPCG did not fully converge: {:?}", err);
+                        (values - shift, vectors)
+                    },
+                    LobpcgResult::NoResult(err) => {
+                        panic!("LOBPCG failed: {:?}", err);
+                    }
                 }
+            } else {
+                // Use block approach for large eigenvalue counts
+                println!("Using block LOBPCG approach with block size {}", block_size);
+                
+                // Determine how many blocks we need
+                let n_blocks = (n_eig + block_size - 1) / block_size;
+                
+                // Initialize result arrays
+                let mut all_eigenvalues = Vec::with_capacity(n_eig);
+                let mut all_eigenvectors = Array2::<f64>::zeros((n, 0));
+                
+                // Define energy shift to turn positive definite
+                let shift = pp.exciton.exciton_ham.rel_ham.mu * 4.0;
+                
+                use ndarray::Axis;
+                
+                // Process each block
+                for block in 0..n_blocks {
+                    let start_idx = block * block_size;
+                    let end_idx = std::cmp::min((block + 1) * block_size, n_eig);
+                    let current_block_size = end_idx - start_idx;
+                    
+                    println!("Computing eigenvalues {}-{} of {}", start_idx + 1, end_idx, n_eig);
+                    
+                    // Create initial guess for this block
+                    let mut x = if block == 0 && initial_vec.is_some() {
+                        // Use provided initial guess for first block if available
+                        let initial = initial_vec.unwrap();
+                        
+                        // Create vectors in parallel and collect them
+                        let columns: Vec<_> = (0..current_block_size).into_par_iter().map(|i| {
+                            let mut column = Array1::zeros(n);
+                            for j in 0..n {
+                                column[j] = initial[[j, i]];
+                            }
+                            column
+                        }).collect();
+                        
+                        // Assemble the matrix from columns
+                        let mut x_block = Array2::<f64>::zeros((n, current_block_size));
+                        for (i, column) in columns.iter().enumerate() {
+                            x_block.column_mut(i).assign(column);
+                        }
+                        x_block
+                    } else {
+                        // Generate random initial guess in parallel
+                        let columns: Vec<_> = (0..current_block_size).into_par_iter().map(|_| {
+                            let mut local_rng = rand::rng(); // Thread-local RNG
+                            let mut column = Array1::zeros(n);
+                            for j in 0..n {
+                                column[j] = local_rng.random_range(-1.0..1.0);
+                            }
+                            column
+                        }).collect();
+                        
+                        // Assemble the matrix from columns
+                        let mut x_block = Array2::<f64>::zeros((n, current_block_size));
+                        for (i, column) in columns.iter().enumerate() {
+                            x_block.column_mut(i).assign(column);
+                        }
+                        x_block
+                    };
+                    
+                    // Orthogonalize against previously computed eigenvectors
+                    if all_eigenvectors.ncols() > 0 {
+                        // Create a thread-safe copy of x for parallel processing
+                        let x_copy = x.clone();
+                        
+                        // Process each column in parallel
+                        let orthogonalized: Vec<_> = (0..current_block_size).into_par_iter().map(|i| {
+                            let mut col = x_copy.column(i).to_owned();
+                            
+                            // Orthogonalize against all previous eigenvectors
+                            for j in 0..all_eigenvectors.ncols() {
+                                let prev_vec = all_eigenvectors.column(j);
+                                let dot = col.dot(&prev_vec);
+                                col -= &(&prev_vec * dot);
+                            }
+                            
+                            // Normalize
+                            let norm = col.norm_l2();
+                            if norm > 1e-10 {
+                                col /= norm;
+                            }
+                            
+                            (i, col)
+                        }).collect();
+                        
+                        // Copy results back to x
+                        for (i, col) in orthogonalized {
+                            for j in 0..n {
+                                x[[j, i]] = col[j];
+                            }
+                        }
+                    }
+                    
+                    // Orthonormalize the initial guess
+                    let (x, _) = x.qr().unwrap();
+                    
+                    // Define a modified operator that projects out already computed eigenvectors
+                    let a = |x_view: ArrayView2<f64>| -> Array2<f64> {
+                        let mut result = Array2::<f64>::zeros((n, x_view.ncols()));
+                        
+                        // Apply the operator
+                        result.axis_iter_mut(Axis(1))
+                            .into_par_iter()
+                            .zip(x_view.axis_iter(Axis(1)).into_par_iter())
+                            .for_each(|(mut r_column, x_column)| {
+                                let mut y_col = vec![0.0; n];
+                                Operator::apply(pp, x_column.as_slice().unwrap(), &mut y_col);
+                                r_column.assign(&Array1::from_vec(y_col));
+                            });
+                        
+                        // Project out already computed eigenvectors
+                        if all_eigenvectors.ncols() > 0 {
+                            // Pre-compute projections for each column in parallel
+                            let projections: Vec<_> = (0..x_view.ncols()).into_par_iter().map(|i| {
+                                let x_col = x_view.column(i);
+                                let mut projection = Array1::<f64>::zeros(n);
+                                
+                                // Calculate the projection for this column
+                                for j in 0..all_eigenvectors.ncols() {
+                                    let eigvec = all_eigenvectors.column(j);
+                                    let overlap = eigvec.dot(&x_col);
+                                    projection += &(&eigvec * overlap * (all_eigenvalues[j] + shift));
+                                }
+                                
+                                (i, projection)
+                            }).collect();
+                            
+                            // Apply projections
+                            for (i, projection) in projections {
+                                let mut r_col = result.column_mut(i);
+                                r_col -= &projection;
+                            }
+                        }
+                        
+                        result
+                    };
+                    
+                    // Define the preconditioner function
+                    let m = |mut r: ArrayViewMut2<f64>| {
+                        let diag = Array1::from_vec(pp.get_diagonal()) + shift;
+                        
+                        // Create safe diagonal values once (outside the loop)
+                        let safe_diag = diag.mapv(|x| x.abs().max(1e-10));
+                        
+                        r.axis_iter_mut(Axis(1)).into_par_iter().for_each(|mut r_column|{
+                            r_column.assign(&(&r_column / &safe_diag));
+                        });
+                    };
+                    
+                    // Run LOBPCG for this block
+                    let result = lobpcg(
+                        a,
+                        x,
+                        m,
+                        None,  // No constraints
+                        1e-6,  // Tolerance
+                        1000,  // Max iterations
+                        TruncatedOrder::Smallest  // Find smallest eigenvalues
+                    );
+                    
+                    // Process the result
+                    match result {
+                        LobpcgResult::Ok(block_eigenvalues, block_eigenvectors, _) | 
+                        LobpcgResult::Err(block_eigenvalues, block_eigenvectors, _, _) => {
+                            // Append eigenvalues
+                            all_eigenvalues.extend((block_eigenvalues - shift).iter());
+                            
+                            // Concatenate eigenvectors
+                            let mut new_eigenvectors = Array2::<f64>::zeros((n, all_eigenvectors.ncols() + block_eigenvectors.ncols()));
+                            if all_eigenvectors.ncols() > 0 {
+                                new_eigenvectors.slice_mut(s![.., ..all_eigenvectors.ncols()]).assign(&all_eigenvectors);
+                            }
+                            new_eigenvectors.slice_mut(s![.., all_eigenvectors.ncols()..]).assign(&block_eigenvectors);
+                            all_eigenvectors = new_eigenvectors;
+                        },
+                        LobpcgResult::NoResult(err) => {
+                            panic!("LOBPCG failed for block {}: {:?}", block, err);
+                        }
+                    }
+                }
+                
+                (Array1::from_vec(all_eigenvalues), all_eigenvectors)
             }
         },
         DiagonalizationMethod::LobpcgCustom => {
             // Use the custom LOBPCG implementation from our lobpcg module
-            crate::lobpcg::diagonalize_lobpcg(pp, n_eig)
+            if let Some(initial_vec) = initial_vec {
+                crate::lobpcg::diagonalize_lobpcg(pp, n_eig, Some(initial_vec.to_owned()))
+            } else {
+                crate::lobpcg::diagonalize_lobpcg_simple(pp, n_eig)
+            }
         }
     }
 }
@@ -1155,24 +1348,41 @@ pub fn calculate_band_structure_sing_ex(
         .unwrap()
         .progress_chars("#>-"));
 
-    // Calculate eigenvalues at each k-point
-    let mut eig_vec_last: Option<Array2<f64>> = None;
-    let eigvals_list: Vec<Array1<f64>> = k_points.iter().map(|k| {
+    // Create a clone of the PolaronPolariton for each thread
+    let pp_arc = Arc::new(pp.clone());
+    
+    // Calculate eigenvalues at each k-point in parallel
+    let eigvals_list: Vec<(usize, Array1<f64>, Array2<f64>)> = k_points.par_iter().enumerate().map(|(idx, k)| {
         if k.iter().sum::<f64>().is_nan() {
             panic!("Too few k-points must be at least 2x number of high symmetry points");
         }
-        pp.update_k(k.clone());
-        let (eigvals, eig_vec) = diagonalize_pp_sing_ex(pp, n_eig, &method, eig_vec_last.as_ref());
-        eig_vec_last = Some(eig_vec);
+        
+        // Create a thread-local copy of the PolaronPolariton
+        let mut local_pp = (*pp_arc).clone();
+        local_pp.update_k(k.clone());
+        
+        // Diagonalize without initial guess in parallel mode
+        let (eigvals, eig_vec) = diagonalize_pp_sing_ex(&local_pp, n_eig, &method, None);
+        
+        // Update progress bar
         pb.inc(1);
-        eigvals
+        
+        // Return index with results to maintain order
+        (idx, eigvals, eig_vec)
     }).collect();
+    
     pb.finish_with_message("Bandstructure calculation complete");
 
-    // Save the band structure data
-    save_band_data(filename, (k_points.clone(), eigvals_list.clone())).unwrap();
+    // Sort results by index to maintain the original order
+    let mut sorted_eigvals = vec![Array1::<f64>::zeros(0); k_points.len()];
+    for (idx, eigvals, _) in eigvals_list {
+        sorted_eigvals[idx] = eigvals;
+    }
 
-    (k_points, eigvals_list)
+    // Save the band structure data
+    save_band_data(filename, (k_points.clone(), sorted_eigvals.clone())).unwrap();
+
+    (k_points, sorted_eigvals)
 }
 
 use std::fmt;

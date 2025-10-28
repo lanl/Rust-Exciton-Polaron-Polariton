@@ -378,6 +378,7 @@ impl LMMatrixElement {
     }
 }
 
+#[derive(Clone)]
 pub struct LMMatrixElementArray {
     pub cos_mat: HashMap<Vec<i32>, Array2<f64>>, // Cosine matrix elements
     pub p_sin_mat: HashMap<Vec<i32>, Array2<f64>>, // Momentum-sine matrix elements

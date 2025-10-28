@@ -3,6 +3,7 @@ use std::{f64::consts::PI, path::PathBuf, io::Write};
 use std::time::Instant;
 use ndarray::{arr1, Array1};
 
+
 pub mod sparse_methods;
 
 pub mod utils;
@@ -10,6 +11,8 @@ pub use utils::{Vector3D, PhotonMode, Polarization};
 
 pub mod visualization;
 pub use visualization::{plot_band_structure, plot_dielectric_function, DielectricPlotType};
+
+pub mod color_band_plot;
 
 use crate::utils::PPConfig;
 
@@ -48,13 +51,13 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     
     // Define photon modes
     // let qx_values = vec![0.0]; // Photon wavevectors along x
-    let qx_values = Array1::linspace(-0.01, 0.01, 32); // Photon wavevectors along x
-    let qy_values = Array1::linspace(-0.01, 0.01, 32);
+    let qx_values = Array1::linspace(-0.01, 0.01, 64); // Photon wavevectors along x
+    let qy_values = Array1::linspace(-0.01, 0.01, 64);
     let qz = omega_0 / C;
     let n_fock = 2;      // Dimension of Fock space
 
-    let n_k_points = 180;  // Number of k-points along the path
-    let n_bands = 64;
+    let n_k_points = 24;  // Number of k-points along the path
+    let n_bands = 16;
 
     let q_values: Vec<Vector3D> = qx_values.iter().flat_map(|qx| {
         qy_values.iter().map(|qy| {
@@ -63,7 +66,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     
 
     // Define phonon parameters
-    let pn_coupling = 0.005;
+    let pn_coupling = 0.003;
     let pn_omega = 0.01;
     let pn_k = arr1(&[0.,0.1]);
     let pn_n_fock = 16;
@@ -168,35 +171,57 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
             let gen_time = time1.duration_since(start_time);
             println!("Precomputed matrix elements in {:?}", gen_time);
 
+            // Switch to 8 threads for band structure calculation
+            // Configure Rayon thread pool
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(8)
+                .build_global()
+                .expect("Failed to build thread pool");
+            println!("Using 8 threads for band structure calculation");
+            
             // Choose which diagonalization method to use
             let diag_method = sing_ex::DiagonalizationMethod::LobpcgNDArray;
             
-            // // Benchmark different methods
-            // println!("Using {:?} diagonalization method", diag_method);
+            // Benchmark different methods
+            println!("Using {:?} diagonalization method", diag_method);
             
             // // Diagonalize at gamma point
-            // let (_, _) = sing_ex::diagonalize_pp_sing_ex(&pp, n_eig, &diag_method, None);
+            // let (eig_vals, _) = sing_ex::diagonalize_pp_sing_ex(&pp, n_eig, &diag_method, None);
 
-            let time2 = Instant::now();
+            // let time2 = Instant::now();
             // let diag_time = time2.duration_since(time1);
             // println!("Diagonalized gamma point in {:?}", diag_time);
 
-            let omegas = Array1::linspace(-0.3, 0.0, 1000);
-            let gamma = 0.01;
-            let _ = sing_ex::get_dielectric_function(&pp_config, &pp, n_eig, omegas, gamma, &diag_method);
+            // println!("Eigvals: {:?}", eig_vals);
+            // let omegas = Array1::linspace(-0.3, 0.0, 1000);
+            // let gamma = 0.01;
+            // let _ = sing_ex::get_dielectric_function(&pp_config, &pp, n_eig, omegas, gamma, &diag_method);
 
-            let time3 = Instant::now();
-            let dielec_time = time3.duration_since(time2);
-            println!("Calculated Dielectric Function in {:?}", dielec_time);
+            // let time3 = Instant::now();
+            // let dielec_time = time3.duration_since(time2);
+            // println!("Calculated Dielectric Function in {:?}", dielec_time);
             
-            // Calculate band structure
-            let (k_points, eigvals_list) = sing_ex::calculate_band_structure_sing_ex(
-                &mut pp, n_k_points, n_eig, &sym_points, &pp_config, diag_method);
+            // // Calculate band structure
+            // let (k_points, eigvals_list) = sing_ex::calculate_band_structure_sing_ex(
+            //     &mut pp, n_k_points, n_eig, &sym_points, &pp_config, diag_method);
 
-            // Plot the band structure
-            plot_band_structure(
-                &k_points, sym_points, sym_labels, &eigvals_list, n_bands, a0, 
-                Some("sing_ex_disp_plot.png"), false, v0, coupling);
+            // // Plot the band structure
+            // plot_band_structure(
+            //     &k_points, sym_points, sym_labels, &eigvals_list, n_bands, a0, 
+            //     Some("sing_ex_disp_plot.png"), false, v0, coupling);
+                
+            // Calculate and plot color-coded band structure
+            println!("Calculating color-coded band structure...");
+            let (k_points_color, eigvals_list_color, photonic_character_list) = 
+                color_band_plot::calculate_color_band_structure(
+                    &mut pp, n_k_points, n_eig, &sym_points, &pp_config, diag_method, true); // Use cached data if available
+                
+            // Plot using gnuplot
+            if let Err(e) = color_band_plot::plot_color_band_structure(
+                &k_points_color, &sym_points, &sym_labels, &eigvals_list_color,
+                &photonic_character_list, n_eig, a0, "sing_ex_color_disp_plot.png", v0, coupling) {
+                println!("Error plotting color-coded band structure: {}", e);
+            }
         } 
     }
 }
@@ -350,11 +375,11 @@ fn main() {
         std::env::set_var("OMP_PLACES", "cores");
     }
     
-    // // Configure Rayon thread pool
-    // rayon::ThreadPoolBuilder::new()
-    //     .num_threads(num_threads)
-    //     .build_global()
-    //     .unwrap();
+    // Configure Rayon thread pool
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(8)
+        .build_global()
+        .unwrap();
     
     // Create exciton configuration
     let e_config = ExcitonConfig {
@@ -376,7 +401,7 @@ fn main() {
     // davidson::davidson_test();
 
     // Choose which function to run
-    let run_mode = "dielectric_scan"; // Options: "bandstructure", "dielectric_scan"
+    let run_mode = "bandstructure"; // Options: "bandstructure", "dielectric_scan"
     
     match run_mode {
         "bandstructure" => {
