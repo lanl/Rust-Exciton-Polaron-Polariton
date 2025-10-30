@@ -3,6 +3,7 @@ use crate::hamiltonian::FullHamiltonian;
 use crate::utils::apply_symmetry;
 use log::info;
 use ndarray::Array1;
+use core::panic;
 use std::collections::HashMap;
 use std::path::Path;
 use rayon::{prelude::*, ThreadPoolBuilder};
@@ -93,17 +94,7 @@ impl BandStructureCalculator {
                 info!("Loading band structure data from {}", filename);
             }
             
-            // In a real implementation, we'd deserialize from JSON
-            // For now, we'll create dummy data
-            let k_points = vec![vec![0.0, 0.0]; n_points];
-            let eigvals_list = vec![Array1::zeros(n_bands); n_points];
-            let parities_list = vec![Array1::from_elem(n_bands, 1); n_points];
-            
-            if self.verbose {
-                info!("Loaded band structure with {} k-points", k_points.len());
-            }
-            
-            return (k_points, eigvals_list, parities_list);
+            panic!("Loading data not implemented yet");
         }
         
         // Define high-symmetry points in the Brillouin zone

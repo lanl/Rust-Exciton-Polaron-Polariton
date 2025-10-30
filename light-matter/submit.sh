@@ -7,8 +7,8 @@
 #
 #SBATCH --time=2-00:00:00
 #SBATCH --nodes=1
-#SBATCH --ntasks=24
-#SBATCH --mem=1000G
+#SBATCH --ntasks=64
+#SBATCH --mem=500G
 #SBATCH --qos=long
 
 ulimit -c 0  # Disable core dumps

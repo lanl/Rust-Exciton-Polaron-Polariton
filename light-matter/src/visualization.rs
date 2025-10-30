@@ -12,6 +12,7 @@ pub fn plot_dielectric_function(
     save_path: Option<&str>,       // Path to save the plot
     plot_type: DielectricPlotType, // Which part of the dielectric function to plot
     omega_range: Option<(f64, f64)>, // Optional frequency range to plot
+    coupling_values: &Array1<f64>
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Get all dielectric function files in the directory
     let dir = Path::new(dir_path);
@@ -42,12 +43,23 @@ pub fn plot_dielectric_function(
     let mut all_data: HashMap<PathBuf, (Vec<f64>, Vec<f64>, Vec<f64>)> = HashMap::new();
     let mut omega_min = f64::INFINITY;
     let mut omega_max = f64::NEG_INFINITY;
-    let mut eps_min = f64::INFINITY;
-    let mut eps_max = f64::NEG_INFINITY;
+    let mut eps_min: (f64, f64)   = (f64::INFINITY, f64::INFINITY);
+    let mut eps_max: (f64, f64)   = (f64::NEG_INFINITY, f64::NEG_INFINITY);
     
     for file_path in &files {
-        let coupling = extract_coupling_from_filename(file_path);
         let (omegas, re_eps, im_eps) = load_dielectric_data(file_path)?;
+
+        let coupling = extract_coupling_from_filename(file_path).unwrap_or(f64::NAN);
+
+        if coupling.is_nan() {
+            continue;
+        }
+
+        let coupling_match = (coupling_values - coupling).abs().into_iter().min_by(|x, y| x.partial_cmp(y).unwrap()).unwrap() > 1e-10;
+
+        if coupling_match{
+            continue;
+        }
         
         // Update min/max values
         if let Some(&min_omega) = omegas.iter().min_by(|a, b| a.partial_cmp(b).unwrap()) {
@@ -57,45 +69,21 @@ pub fn plot_dielectric_function(
             omega_max = omega_max.max(max_omega);
         }
         
-        match plot_type {
-            DielectricPlotType::Real => {
-                if let Some(&min_eps) = re_eps.iter().min_by(|a, b| a.partial_cmp(b).unwrap()) {
-                    eps_min = eps_min.min(min_eps);
-                }
-                if let Some(&max_eps) = re_eps.iter().max_by(|a, b| a.partial_cmp(b).unwrap()) {
-                    eps_max = eps_max.max(max_eps);
-                }
-            },
-            DielectricPlotType::Imaginary => {
-                if let Some(&min_eps) = im_eps.iter().min_by(|a, b| a.partial_cmp(b).unwrap()) {
-                    eps_min = eps_min.min(min_eps);
-                }
-                if let Some(&max_eps) = im_eps.iter().max_by(|a, b| a.partial_cmp(b).unwrap()) {
-                    eps_max = eps_max.max(max_eps);
-                }
-            },
-            DielectricPlotType::Both => {
-                if let Some(&min_re) = re_eps.iter().min_by(|a, b| a.partial_cmp(b).unwrap()) {
-                    eps_min = eps_min.min(min_re);
-                }
-                if let Some(&min_im) = im_eps.iter().min_by(|a, b| a.partial_cmp(b).unwrap()) {
-                    eps_min = eps_min.min(min_im);
-                }
-                if let Some(&max_re) = re_eps.iter().max_by(|a, b| a.partial_cmp(b).unwrap()) {
-                    eps_max = eps_max.max(max_re);
-                }
-                if let Some(&max_im) = im_eps.iter().max_by(|a, b| a.partial_cmp(b).unwrap()) {
-                    eps_max = eps_max.max(max_im);
-                }
-            },
-        }
 
-        // eps_max = eps_max.min( 100.0);
-        // eps_min = eps_min.max(-100.0);
+
+        let chart_data = (Array1::from_vec(re_eps.clone()), Array1::from_vec(im_eps.clone()));
+
+        let mean = (chart_data.0.mean().unwrap(), chart_data.1.mean().unwrap());
+        let mean2 = ((&chart_data.0*&chart_data.0).mean().unwrap(), (&chart_data.1*&chart_data.1).mean().unwrap());
         
-        println!("Coupling = {:?}", coupling);
-        println!("Max eps = {}", eps_max);
-        println!("Min eps = {}", eps_min);
+        // println!("Mean is {:?}", mean);
+        let sigma = ((mean2.0 - mean.0 * mean.0).sqrt(), (mean2.1 - mean.1* mean.1).sqrt());
+        // println!("Standard Deviation is {:?}", sigma);
+
+        let factor = 1.0;
+        eps_min = (eps_min.0.min(mean.0-factor*sigma.0), eps_min.1.min(mean.1-factor*sigma.1));
+        eps_max = (eps_max.0.max(mean.0+factor*sigma.0), eps_max.1.max(mean.1+factor*sigma.1));
+        
         all_data.insert(file_path.clone(), (omegas, re_eps, im_eps));
     }
     
@@ -105,14 +93,14 @@ pub fn plot_dielectric_function(
         omega_max = max;
     }
     
-    // Add padding to the eps range (5%)
-    let eps_padding = (eps_max - eps_min) * 0.05;
-    eps_min -= eps_padding;
-    eps_max += eps_padding;
+    // // Add padding to the eps range (5%)
+    // let eps_padding = (eps_max - eps_min) * 0.05;
+    // eps_min -= eps_padding;
+    // eps_max += eps_padding;
     
     // Create the plot
-    let save_path = save_path.unwrap_or("dielectric_function.png");
-    let root = BitMapBackend::new(save_path, (1200, 900)).into_drawing_area();
+    let save_path = save_path.unwrap_or("dielectric_function.svg");
+    let root = SVGBackend::new(save_path, (1200, 900)).into_drawing_area();
     root.fill(&WHITE)?;
     
     // Split the drawing area for multiple plots if needed
@@ -146,7 +134,7 @@ pub fn plot_dielectric_function(
             .margin_bottom(10)
             .x_label_area_size(40)
             .y_label_area_size(60)
-            .build_cartesian_2d(omega_min..omega_max, eps_min..eps_max)?;
+            .build_cartesian_2d(omega_min..omega_max, eps_min.0..eps_max.0)?;
         
         chart.configure_mesh()
             .x_desc("Frequency (a.u.)")
@@ -178,8 +166,8 @@ pub fn plot_dielectric_function(
                 points,
                 ShapeStyle {
                     color: color.into(),
-                    filled: false,
-                    stroke_width: 3,
+                    filled: true,
+                    stroke_width: 5,
                 }
             ))?.label(format!("g = {:.3}", coupling))
               .legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], color));
@@ -204,7 +192,7 @@ pub fn plot_dielectric_function(
             .margin_bottom(10)
             .x_label_area_size(40)
             .y_label_area_size(60)
-            .build_cartesian_2d(omega_min..omega_max, eps_min..eps_max)?;
+            .build_cartesian_2d(omega_min..omega_max, eps_min.1..eps_max.1)?;
         
         chart.configure_mesh()
             .x_desc("Frequency (a.u.)")
@@ -235,8 +223,8 @@ pub fn plot_dielectric_function(
                 points,
                 ShapeStyle {
                     color: color.into(),
-                    filled: false,
-                    stroke_width: 3,
+                    filled: true,
+                    stroke_width: 5,
                 }
             ))?.label(format!("g = {:.3}", coupling))
               .legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], color));

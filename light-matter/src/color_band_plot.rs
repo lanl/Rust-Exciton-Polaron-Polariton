@@ -1,4 +1,4 @@
-use ndarray::{Array1, s};
+use ndarray::{Array1, Array2, s};
 use std::fs::File;
 use std::io::{Write};
 use std::path::Path;
@@ -8,6 +8,7 @@ use crate::utils::PPConfig;
 use bincode::{serialize, deserialize};
 use serde::{Serialize, Deserialize};
 use std::error::Error;
+
 
 /// Calculate the photonic character of an eigenstate
 /// Returns a value between 0 (purely excitonic) and 1 (purely photonic)
@@ -51,9 +52,6 @@ pub fn calculate_photonic_character(
     // Return the fraction of probability in photonic states
     photonic_prob / total_prob
 }
-
-use rayon::prelude::*;
-use std::sync::Arc;
 
 /// Data structure for saving/loading color band structure data
 #[derive(Serialize, Deserialize)]
@@ -116,7 +114,7 @@ pub fn calculate_color_band_structure(
     sym_points: &Vec<Vec<f64>>,
     pp_config: &PPConfig,
     method: DiagonalizationMethod,
-    use_cached: bool  // Flag to determine whether to load existing data
+    use_cached: bool,  // Flag to determine whether to load existing data
 ) -> (Vec<Vec<f64>>, Vec<Array1<f64>>, Vec<Vec<f64>>) {
 
     let save_dir = "pp_data".to_string();
@@ -170,30 +168,33 @@ pub fn calculate_color_band_structure(
         .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} k-points ({eta})")
         .unwrap()
         .progress_chars("#>-"));
-
-    // Create a clone of the PolaronPolariton for each thread
-    let pp_arc = Arc::new(pp.clone());
     
-    // Calculate eigenvalues and photonic character at each k-point in parallel
-    let results: Vec<(usize, Array1<f64>, Vec<f64>)> = k_points.par_iter().enumerate().map(|(idx, k)| {
+    // Calculate eigenvalues and photonic character at each k-point sequentially
+    // to use previous eigenvectors as initial guesses for better convergence
+    let mut results: Vec<(usize, Array1<f64>, Vec<f64>)> = Vec::with_capacity(k_points.len());
+    let mut prev_eigvecs: Option<Array2<f64>> = None;
+    
+    for (idx, k) in k_points.iter().enumerate() {
         // Create a thread-local copy of the PolaronPolariton
-        let mut local_pp = (*pp_arc).clone();
-        local_pp.update_k(k.clone());
-        
-        // Diagonalize without initial guess in parallel mode
-        let (eigvals, eigvecs) = diagonalize_pp_sing_ex(&local_pp, n_eig, &method, None);
+        pp.update_k(k.clone());
+
+        // Diagonalize with initial guess from previous k-point if available
+        let (eigvals, eigvecs) = diagonalize_pp_sing_ex(&pp, n_eig, &method, prev_eigvecs.as_ref());
         
         // Calculate photonic character for each eigenstate
         let photonic_character: Vec<f64> = (0..n_eig)
-            .map(|i| calculate_photonic_character(&local_pp, &eigvecs.column(i).to_owned()))
+            .map(|i| calculate_photonic_character(&pp, &eigvecs.column(i).to_owned()))
             .collect();
+        
+        // Store eigenvectors for next iteration
+        prev_eigvecs = Some(eigvecs);
         
         // Update progress bar
         pb.inc(1);
         
         // Return index with results to maintain order
-        (idx, eigvals, photonic_character)
-    }).collect();
+        results.push((idx, eigvals, photonic_character));
+    }
     
     pb.finish_with_message("Bandstructure calculation complete");
 

@@ -99,12 +99,12 @@ impl ExcitonicHamiltonian {
     /// Calculates the center-of-mass momentum matrix element P·field_vec
     pub fn get_p_com(&self, field_vec: &Array1<f64>, diag: bool) -> Array2<f64> {
         let e_vecs = self.e_vecs.as_ref().expect("Eigenvectors not computed. Call compute_eigenstates() first.");
+        let parities = self.parities.as_ref().expect("Parities not computed. Call compute_eigenstates() first.");
         let kappas= &self.exciton_ham.kappa_vectors;
         let k = &self.exciton_ham.k;
 
         let n_com = kappas.len();
         let n_eig = e_vecs.len();
-        let n_rel = e_vecs[0].len() / n_com;
         
         // Convert k to Array1 once for efficiency
         let k_arr = arr1(&k);
@@ -121,6 +121,7 @@ impl ExcitonicHamiltonian {
             Array2::from_shape_fn((n_eig,1), |(idx1,_)| {
                 // For each eigenvector
                 let vec1 = &e_vecs[idx1];
+                let n_rel = vec1.len() / n_com;
 
                 // Compute P_ii using iterator operations
                 // This is a purely diagonal operator
@@ -141,6 +142,12 @@ impl ExcitonicHamiltonian {
                 // For each pair of eigenvectors
                 let vec1 = &e_vecs[idx1];
                 let vec2 = &e_vecs[idx2];
+
+                if parities[idx1] != parities[idx2]  {
+                    return 0.0;
+                }
+                
+                let n_rel = vec1.len() / n_com;
 
                 // Compute P_ij using iterator operations
                 // This is a purely diagonal operator
@@ -856,7 +863,7 @@ pub fn get_dielectric_function(pp_config: &PPConfig, pp: &PolaronPolariton, n_ei
         pp.pp_off_ham.matrix_element_arrays.as_ref().unwrap().get_x(&states[r_ind1], &states[r_ind2], mu, &lag_coeffs)
     });
 
-    // println!("x_rel = {}", PrettyArray2(&x_rel));
+    // println!("x_rel = {}", PrettyArray2(&x_rel,2));
 
     // Get <x> in the Exciton basis
     let x_exc = &Array2::from_shape_fn((n_ex_eig,n_ex_eig) , |(idx1, idx2)| {
@@ -865,6 +872,10 @@ pub fn get_dielectric_function(pp_config: &PPConfig, pp: &PolaronPolariton, n_ei
 
             let idx1_par = parity_indices[idx1];
             let idx2_par = parity_indices[idx2];
+
+            // if idx1 == idx2 && idx1 == 1 {
+            //     print!("vec1 = {:?}", vec1)
+            // }
 
             // Calculate the matrix elements using iterators
             (0..n_rel_par[idx1_par])
@@ -887,7 +898,7 @@ pub fn get_dielectric_function(pp_config: &PPConfig, pp: &PolaronPolariton, n_ei
                 .fold(0.0, |acc, val| acc + val)
     });
 
-    // println!("x_exc = {}", PrettyArray2(&x_exc));
+    // println!("x_exc = {}", PrettyArray2(&x_exc,2));
 
     // Diagonalize at the Gamma point
     // println!("Diagonalizing at the Gamma Point");
@@ -898,6 +909,31 @@ pub fn get_dielectric_function(pp_config: &PPConfig, pp: &PolaronPolariton, n_ei
     let n_pn = pp_config.pn_n_fock;
 
     let vec0 = pp_vecs.column(0);
+
+    println!("Relative energies = {:?}", pp_vals.slice(s![0..50]).to_owned() - pp_vals[0]);
+
+    // println!("pp_vecs shape = {:?}", pp_vecs.shape());
+    // println!("vec 0 = {:?}", vec0);
+    // println!("E 0 = {:?}", pp_vals[0]);
+    // println!("vec 1 = {:?}", pp_vecs.column(1));
+    // println!("E 1 = {:?}", pp_vals[1]);
+
+    // // Find <0|x|0> as a test
+
+    // let test = (0.. n_ex_eig).flat_map(|ex_ind1| {
+    //         (0 .. n_ex_eig).flat_map(move |ex_ind2|{
+    //             let x_element = x_exc[[ex_ind1,ex_ind2]];
+    //             (0 .. n_ph*n_pn).map(move | bos_ind | {
+    //                 let pp_ind1 = ex_ind1 * n_ph*n_pn + bos_ind;
+    //                 let pp_ind2 = ex_ind2 * n_ph*n_pn + bos_ind;
+
+    //                 vec0[pp_ind1] * vec0[pp_ind2] * x_element
+    //             })
+    //         })
+    //     }).fold(0.0, |acc, val| acc + val);
+
+    // println!("test = {:?}", test);
+
     let x_pp = &Array1::from_shape_fn(n_eig, |idx| {
         let vec1 = pp_vecs.column(idx);
 
@@ -905,8 +941,8 @@ pub fn get_dielectric_function(pp_config: &PPConfig, pp: &PolaronPolariton, n_ei
             (0 .. n_ex_eig).flat_map(move |ex_ind2|{
                 let x_element = x_exc[[ex_ind1,ex_ind2]];
                 (0 .. n_ph*n_pn).map(move | bos_ind | {
-                    let pp_ind1 = ex_ind1 * bos_ind;
-                    let pp_ind2 = ex_ind2 * bos_ind;
+                    let pp_ind1 = ex_ind1 * n_ph*n_pn + bos_ind;
+                    let pp_ind2 = ex_ind2 * n_ph*n_pn + bos_ind;
 
                     vec0[pp_ind1] * vec1[pp_ind2] * x_element
                 })
@@ -914,7 +950,7 @@ pub fn get_dielectric_function(pp_config: &PPConfig, pp: &PolaronPolariton, n_ei
         }).fold(0.0, |acc, val| acc + val)
     });
 
-    println!("x_pp = {:?}", x_pp);
+    // println!("x_pp = {:?}", x_pp);
 
 
     // Compute dielectric function
@@ -964,6 +1000,72 @@ pub enum DiagonalizationMethod {
     LobpcgCustom,
 }
 
+/// A deflated operator that projects out already computed eigenvectors
+/// This is used for block-based eigenvalue computation with Arpack
+struct DeflatedOperator<'a, T: Operator<f64>> {
+    base_operator: &'a T,
+    eigenvectors: Array2<f64>,
+    eigenvalues: Array1<f64>,
+}
+
+impl<'a, T: Operator<f64>> Operator<f64> for DeflatedOperator<'a, T> {
+    fn apply(&self, x: &[f64], y: &mut [f64]) {
+        // Apply base operator
+        self.base_operator.apply(x, y);
+        
+        // Project out already computed eigenvectors
+        let x_vec = Array1::from_vec(x.to_vec());
+        
+        // Calculate projections for each eigenvector
+        for i in 0..self.eigenvectors.ncols() {
+            let eigvec = self.eigenvectors.column(i);
+            let overlap = eigvec.dot(&x_vec);
+            
+            // Subtract projection with large shift to push eigenvalues up
+            for j in 0..y.len() {
+                y[j] -= overlap * eigvec[j] * (self.eigenvalues[i] + 1000.0);
+            }
+        }
+    }
+}
+
+/// A deflated operator that projects out already computed eigenvectors
+/// This is used for block-based eigenvalue computation with Davidson
+struct DeflatedDavidsonOperator<'a, T: DavidsonOperator<f64>> {
+    base_operator: &'a T,
+    eigenvectors: Array2<f64>,
+    eigenvalues: Array1<f64>,
+}
+
+impl<'a, T: DavidsonOperator<f64>> DavidsonOperator<f64> for DeflatedDavidsonOperator<'a, T> {
+    fn apply(&self, x: &[f64], y: &mut [f64]) {
+        // Apply base operator
+        self.base_operator.apply(x, y);
+        
+        // Project out already computed eigenvectors
+        let x_vec = Array1::from_vec(x.to_vec());
+        
+        // Calculate projections for each eigenvector
+        for i in 0..self.eigenvectors.ncols() {
+            let eigvec = self.eigenvectors.column(i);
+            let overlap = eigvec.dot(&x_vec);
+            
+            // Subtract projection with large shift to push eigenvalues up
+            for j in 0..y.len() {
+                y[j] -= overlap * eigvec[j] * (self.eigenvalues[i] + 1000.0);
+            }
+        }
+    }
+    
+    fn get_diagonal(&self) -> Vec<f64> {
+        self.base_operator.get_diagonal()
+    }
+    
+    fn dimension(&self) -> usize {
+        self.base_operator.dimension()
+    }
+}
+
 // Then replace all diagonalization functions with a single unified function
 pub fn diagonalize_pp_sing_ex(
     pp: &PolaronPolariton, 
@@ -972,63 +1074,216 @@ pub fn diagonalize_pp_sing_ex(
     initial_vec: Option<&Array2<f64>>
 ) -> (Array1<f64>, Array2<f64>) {
     let n = pp.dimension();
+
+
+    let block_size = 128;
     
     match method {
         DiagonalizationMethod::Arpack => {
-            // Configure ARPACK
-            let config = Config::new()
-                .which(arpack::Which::SA)  // Smallest algebraic eigenvalues
-                .tol(1e-6)                // Tolerance
-                .max_iter(1000);          // Maximum iterations
-            
-            // Solve eigenvalue problem using ARPACK
-            let result = arpack::eigs(pp, n, n_eig, config).unwrap();
+            // Use block approach for large eigenvalue counts
+            if n_eig > block_size {
+                println!("Using block Arpack approach with block size {}", block_size);
+                                
+                // Determine how many blocks we need
+                let n_blocks = (n_eig + block_size - 1) / block_size;
                 
-            // Convert to ndarray format
-            let eigenvalues = Array1::from_vec(result.values);
-            
-            // Convert eigenvectors to ndarray format
-            let mut eigenvectors = Array2::zeros((n, n_eig));
-            
-            for i in 0..n_eig {
-                for j in 0..n {
-                    eigenvectors[[j, i]] = result.vectors[i * n + j];
+                // Initialize result arrays
+                let mut all_eigenvalues = Vec::with_capacity(n_eig);
+                let mut all_eigenvectors = Array2::<f64>::zeros((n, 0));
+                
+                // Process each block
+                for block in 0..n_blocks {
+                    let start_idx = block * block_size;
+                    let end_idx = std::cmp::min((block + 1) * block_size, n_eig);
+                    let current_block_size = end_idx - start_idx;
+                    
+                    println!("Computing eigenvalues {}-{} of {}", start_idx + 1, end_idx, n_eig);
+                    
+                    // Configure ARPACK for this block with improved convergence settings
+                    let config = Config::new()
+                        .which(arpack::Which::SA)  // Smallest algebraic eigenvalues
+                        .tol(1e-10)               // Tighter tolerance for better convergence
+                        .max_iter(2000)           // More iterations allowed
+                        .ncv(std::cmp::min(n, 2*current_block_size + 50)); // Larger subspace dimension
+                    
+                    // Create a deflated operator if we have previous eigenvectors
+                    let result = if all_eigenvectors.ncols() > 0 {
+                        // Create a deflated operator that projects out already computed eigenvectors
+                        let deflated_op = DeflatedOperator {
+                            base_operator: pp,
+                            eigenvectors: all_eigenvectors.clone(),
+                            eigenvalues: Array1::from_vec(all_eigenvalues.clone()),
+                        };
+                        
+                        // Solve eigenvalue problem using ARPACK with deflated operator
+                        arpack::eigs(&deflated_op, n, current_block_size, config).unwrap()
+                    } else {
+                        // Solve eigenvalue problem using ARPACK with original operator
+                        arpack::eigs(pp, n, current_block_size, config).unwrap()
+                    };
+                    
+                    // Convert to ndarray format
+                    let block_eigenvalues = result.values;
+                    
+                    // Convert eigenvectors to ndarray format
+                    let mut block_eigenvectors = Array2::zeros((n, current_block_size));
+                    
+                    for i in 0..current_block_size {
+                        for j in 0..n {
+                            block_eigenvectors[[j, i]] = result.vectors[i * n + j];
+                        }
+                    }
+                    
+                    // Append eigenvalues
+                    all_eigenvalues.extend(block_eigenvalues);
+                    
+                    // Concatenate eigenvectors
+                    let mut new_eigenvectors = Array2::<f64>::zeros((n, all_eigenvectors.ncols() + block_eigenvectors.ncols()));
+                    if all_eigenvectors.ncols() > 0 {
+                        new_eigenvectors.slice_mut(s![.., ..all_eigenvectors.ncols()]).assign(&all_eigenvectors);
+                    }
+                    new_eigenvectors.slice_mut(s![.., all_eigenvectors.ncols()..]).assign(&block_eigenvectors);
+                    all_eigenvectors = new_eigenvectors;
                 }
+                
+                (Array1::from_vec(all_eigenvalues), all_eigenvectors)
+            } else {
+                // Standard approach for smaller eigenvalue counts
+                // Configure ARPACK with improved convergence settings
+                let config = Config::new()
+                    .which(arpack::Which::SA)  // Smallest algebraic eigenvalues
+                    .tol(1e-10)               // Tighter tolerance for better convergence
+                    .max_iter(2000)           // More iterations allowed
+                    .ncv(std::cmp::min(n, 2*n_eig + 50)); // Larger subspace dimension
+                
+                // Solve eigenvalue problem using ARPACK
+                let result = arpack::eigs(pp, n, n_eig, config).unwrap();
+                    
+                // Convert to ndarray format
+                let eigenvalues = Array1::from_vec(result.values);
+                
+                // Convert eigenvectors to ndarray format
+                let mut eigenvectors = Array2::zeros((n, n_eig));
+                
+                for i in 0..n_eig {
+                    for j in 0..n {
+                        eigenvectors[[j, i]] = result.vectors[i * n + j];
+                    }
+                }
+                
+                (eigenvalues, eigenvectors)
             }
-            
-            (eigenvalues, eigenvectors)
         },
         DiagonalizationMethod::Davidson => {
-            // Configure Davidson solver
-            let config = DavidsonConfig {
-                max_iter: 1000,
-                max_subspace_size: n_eig * 4,  // Adjust based on problem size
-                min_subspace_size: n_eig * 2,
-                tolerance: 1e-6,
-                num_eigenvalues: n_eig,
-                which: DavidsonWhich::Smallest,
-            };
-            
-            // Solve eigenvalue problem using Davidson algorithm
-            let result = davidson(pp, &config).unwrap();
-            
-            if !result.converged {
-                println!("Warning: Davidson algorithm did not converge after {} iterations", result.iterations);
-                println!("Final residuals: {:?}", result.residuals);
-            }
-            
-            // Convert to ndarray format
-            let eigenvalues = Array1::from_vec(result.values);
-            
-            let mut eigenvectors = Array2::zeros((n, n_eig));
-            
-            for i in 0..n_eig {
-                for j in 0..n {
-                    eigenvectors[[j, i]] = result.vectors[i * n + j];
+            // Use block approach for large eigenvalue counts
+            if n_eig > block_size {
+                println!("Using block Davidson approach with block size {}", block_size);
+                
+                // Determine how many blocks we need
+                let n_blocks = (n_eig + block_size - 1) / block_size;
+                
+                // Initialize result arrays
+                let mut all_eigenvalues = Vec::with_capacity(n_eig);
+                let mut all_eigenvectors = Array2::<f64>::zeros((n, 0));
+                
+                // Process each block
+                for block in 0..n_blocks {
+                    let start_idx = block * block_size;
+                    let end_idx = std::cmp::min((block + 1) * block_size, n_eig);
+                    let current_block_size = end_idx - start_idx;
+                    
+                    println!("Computing eigenvalues {}-{} of {}", start_idx + 1, end_idx, n_eig);
+                    
+                    // Configure Davidson solver for this block
+                    let config = DavidsonConfig {
+                        max_iter: 1000,
+                        max_subspace_size: current_block_size * 4,  // Adjust based on problem size
+                        min_subspace_size: current_block_size * 2,
+                        tolerance: 1e-6,
+                        num_eigenvalues: current_block_size,
+                        which: DavidsonWhich::Smallest,
+                    };
+                    
+                    // Create a deflated operator if we have previous eigenvectors
+                    let result = if all_eigenvectors.ncols() > 0 {
+                        // Create a deflated operator that projects out already computed eigenvectors
+                        let deflated_op = DeflatedDavidsonOperator {
+                            base_operator: pp,
+                            eigenvectors: all_eigenvectors.clone(),
+                            eigenvalues: Array1::from_vec(all_eigenvalues.clone()),
+                        };
+                        
+                        // Solve eigenvalue problem using Davidson with deflated operator
+                        davidson(&deflated_op, &config).unwrap()
+                    } else {
+                        // Solve eigenvalue problem using Davidson with original operator
+                        davidson(pp, &config).unwrap()
+                    };
+                    
+                    if !result.converged {
+                        println!("Warning: Davidson algorithm did not converge after {} iterations for block {}", 
+                                 result.iterations, block);
+                        println!("Final residuals: {:?}", result.residuals);
+                    }
+                    
+                    // Convert to ndarray format
+                    let block_eigenvalues = result.values;
+                    
+                    // Convert eigenvectors to ndarray format
+                    let mut block_eigenvectors = Array2::zeros((n, current_block_size));
+                    
+                    for i in 0..current_block_size {
+                        for j in 0..n {
+                            block_eigenvectors[[j, i]] = result.vectors[i * n + j];
+                        }
+                    }
+                    
+                    // Append eigenvalues
+                    all_eigenvalues.extend(block_eigenvalues);
+                    
+                    // Concatenate eigenvectors
+                    let mut new_eigenvectors = Array2::<f64>::zeros((n, all_eigenvectors.ncols() + block_eigenvectors.ncols()));
+                    if all_eigenvectors.ncols() > 0 {
+                        new_eigenvectors.slice_mut(s![.., ..all_eigenvectors.ncols()]).assign(&all_eigenvectors);
+                    }
+                    new_eigenvectors.slice_mut(s![.., all_eigenvectors.ncols()..]).assign(&block_eigenvectors);
+                    all_eigenvectors = new_eigenvectors;
                 }
+                
+                (Array1::from_vec(all_eigenvalues), all_eigenvectors)
+            } else {
+                // Standard approach for smaller eigenvalue counts
+                // Configure Davidson solver
+                let config = DavidsonConfig {
+                    max_iter: 1000,
+                    max_subspace_size: n_eig * 4,  // Adjust based on problem size
+                    min_subspace_size: n_eig * 2,
+                    tolerance: 1e-6,
+                    num_eigenvalues: n_eig,
+                    which: DavidsonWhich::Smallest,
+                };
+                
+                // Solve eigenvalue problem using Davidson algorithm
+                let result = davidson(pp, &config).unwrap();
+                
+                if !result.converged {
+                    println!("Warning: Davidson algorithm did not converge after {} iterations", result.iterations);
+                    println!("Final residuals: {:?}", result.residuals);
+                }
+                
+                // Convert to ndarray format
+                let eigenvalues = Array1::from_vec(result.values);
+                
+                let mut eigenvectors = Array2::zeros((n, n_eig));
+                
+                for i in 0..n_eig {
+                    for j in 0..n {
+                        eigenvectors[[j, i]] = result.vectors[i * n + j];
+                    }
+                }
+                
+                (eigenvalues, eigenvectors)
             }
-            
-            (eigenvalues, eigenvectors)
         },
         DiagonalizationMethod::LobpcgNDArray => {
             // Block size for LOBPCG
@@ -1057,7 +1312,11 @@ pub fn diagonalize_pp_sing_ex(
 
                 // Orthonormalize the initial guess
                 let (x, _) = x.qr().unwrap();
-                
+
+                // Define energy shift to turn positive definite:
+                // Set shift to 10x the ground state energy
+                let shift = (pp.exciton.e_vals.as_ref().unwrap()[0].abs()) * 10.0;
+                                
                 // Define the operator function
                 let a = |x_view: ArrayView2<f64>| -> Array2<f64> {
                     let mut result = Array2::<f64>::zeros((n, x_view.ncols()));
@@ -1068,16 +1327,12 @@ pub fn diagonalize_pp_sing_ex(
                         .for_each(|(mut r_column, x_column)| {
                             let mut y_col = vec![0.0; n];
                             Operator::apply(pp, x_column.as_slice().unwrap(), &mut y_col);
-                            r_column.assign(&Array1::from_vec(y_col));
+                            r_column.assign(&(Array1::from_vec(y_col) + (&x_column * shift)));
                         });
                         
                     result
                 };
 
-                // Define energy shift to turn positive definite:
-                // Set shift to 4*µ as a buffer since the exciton ground state is ~ -µ
-                let shift = pp.exciton.exciton_ham.rel_ham.mu * 4.0;
-                
                 // Define the preconditioner function
                 let m = |mut r: ArrayViewMut2<f64>| {
                     let diag = Array1::from_vec(pp.get_diagonal()) + shift;
@@ -1388,19 +1643,61 @@ pub fn calculate_band_structure_sing_ex(
 use std::fmt;
 
 #[derive(Debug)]
-pub struct PrettyArray2<'a>(&'a Array2<f64>);
+pub struct PrettyArray2<'a>(&'a Array2<f64>, usize); // Second parameter is precision
 
 impl<'a> fmt::Display for PrettyArray2<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let precision = self.1;
+        
+        // First pass: determine the maximum width for each column
+        let mut max_widths = vec![0; self.0.ncols()];
+        
         for row in self.0.rows() {
             for (i, val) in row.iter().enumerate() {
-                if i > 0 {
-                    write!(f, "    ")?;
-                }
-                write!(f, "{:.4}", val)?;
+                // Format the number in scientific notation with the specified precision
+                let formatted = format!("{:.*e}", precision, val);
+                max_widths[i] = max_widths[i].max(formatted.len());
+            }
+        }
+        
+        // Calculate the total width of each column including padding and divider
+        let col_widths: Vec<usize> = max_widths.iter().map(|w| w + 2).collect(); // +2 for padding
+        
+        // Function to create a horizontal divider line
+        let create_divider = |widths: &[usize]| {
+            let mut divider = String::from("+");
+            for width in widths {
+                divider.push_str(&"-".repeat(*width));
+                divider.push('+');
+            }
+            divider
+        };
+        
+        let divider = create_divider(&col_widths);
+        
+        // Add a newline at the beginning
+        writeln!(f)?;
+        
+        // Print the top divider
+        writeln!(f, "{}", divider)?;
+        
+        // Second pass: print with proper alignment and dividers
+        for row in self.0.rows() {
+            write!(f, "|")?; // Start each row with a divider
+            
+            for (i, val) in row.iter().enumerate() {
+                // Right-align each number within its column width
+                write!(f, " {:>width$.prec$e} |", val, width = max_widths[i], prec = precision)?;
             }
             writeln!(f)?;
+            
+            // Print a horizontal divider after each row
+            writeln!(f, "{}", divider)?;
         }
+        
+        // Add a newline at the end
+        writeln!(f)?;
+        
         Ok(())
     }
 }

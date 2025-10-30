@@ -41,7 +41,7 @@ struct Args {
     n_jobs: i32,
     
     /// Number of relative coordinate eigenstates
-    #[clap(long, default_value_t = 5)]
+    #[clap(long, default_value_t = 9)]
     n_rel_states: usize,
     
     /// Number of bands to calculate

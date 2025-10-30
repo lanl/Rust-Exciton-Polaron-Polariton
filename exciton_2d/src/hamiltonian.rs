@@ -340,6 +340,8 @@ impl FullHamiltonian {
     pub fn build_hamiltonian_no_k(&self, n_rel_states: usize, parity: i32) -> (Array2<f64>, Array1<f64>, Array2<f64>) {
         // Solve for relative coordinate eigenstates
         let (rel_eigvals_np, rel_eigvecs_np, parities) = self.rel_ham.solve(n_rel_states);
+
+        let _temp = parities.to_vec();
         
         // Filter by parity
         let mut rel_eigvals = Vec::new();
