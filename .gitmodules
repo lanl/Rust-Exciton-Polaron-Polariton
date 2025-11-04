@@ -1,0 +1,3 @@
+[submodule "slepc_rust"]
+	path = slepc_rust
+	url = ssh://git@lisdi-git.lanl.gov:10022/mike_tay/slepc_rust.git
