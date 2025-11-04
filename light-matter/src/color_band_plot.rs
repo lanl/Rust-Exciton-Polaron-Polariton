@@ -9,6 +9,7 @@ use bincode::{serialize, deserialize};
 use serde::{Serialize, Deserialize};
 use std::error::Error;
 
+use crate::timed_println;
 
 /// Calculate the photonic character of an eigenstate
 /// Returns a value between 0 (purely excitonic) and 1 (purely photonic)
@@ -138,10 +139,10 @@ pub fn calculate_color_band_structure(
     
     // Check if cached data exists and should be used
     if use_cached && Path::new(&filename).exists() {
-        println!("Loading cached color band structure data from {}", filename);
+        timed_println!("Loading cached color band structure data from {}", filename);
         match ColorBandData::load_from_file(&filename) {
             Ok(data) => return data.to_results(),
-            Err(e) => println!("Failed to load cached data: {}, recalculating...", e)
+            Err(e) => timed_println!("Failed to load cached data: {}, recalculating...", e)
         }
     }
 
@@ -210,8 +211,8 @@ pub fn calculate_color_band_structure(
     // Save the results to file
     let band_data = ColorBandData::from_results(k_points.clone(), sorted_eigvals.clone(), sorted_photonic.clone());
     match band_data.save_to_file(&filename) {
-        Ok(_) => println!("Color band structure data saved to {}", filename),
-        Err(e) => println!("Failed to save color band structure data: {}", e)
+        Ok(_) => timed_println!("Color band structure data saved to {}", filename),
+        Err(e) => timed_println!("Failed to save color band structure data: {}", e)
     }
 
     (k_points, sorted_eigvals, sorted_photonic)
@@ -343,6 +344,6 @@ pub fn plot_color_band_structure(
         return Err("Failed to execute gnuplot".into());
     }
     
-    println!("Band structure plot saved to {}", save_path);
+    timed_println!("Band structure plot saved to {}", save_path);
     Ok(())
 }

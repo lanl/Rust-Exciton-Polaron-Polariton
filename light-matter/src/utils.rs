@@ -8,6 +8,8 @@ use scilib::math::basic::factorial;
 use std::{collections::HashMap, f64::consts::PI};
 use rayon::prelude::*;
 
+use crate::timed_println;
+
 // Speed of light in atomic units
 const C: f64 = 137.036;
 
@@ -497,7 +499,7 @@ impl LMMatrixElementArray {
         }
 
         // let test = cos_mat.clone().into_keys().collect::<Vec<Vec<i32>>>();
-        // println!("cos_mat in populate_mat_elements {:?}",test);
+        // timed_println!("cos_mat in populate_mat_elements {:?}",test);
 
         Self { cos_mat, p_sin_mat }
     }
@@ -554,7 +556,7 @@ impl LMMatrixElementArray {
         let mut n_rel_even = 0;
         let mut n_rel_odd = 0;
 
-        // println!("All q_ind = {:?}", all_q_ind);
+        // timed_println!("All q_ind = {:?}", all_q_ind);
 
         for (idx, &parity) in parities.iter().enumerate() {
             if parity == 1 && n_rel_even == 0 {
@@ -938,7 +940,7 @@ impl LMMatrixElementArray {
         }) * prefactor;
 
         // if n1 == 0 {
-        //     println!("States (n1={},m1={}), (n2={},m2={}): Radial dtheta = {}, Radial dr = {}", n1, m1, n2, m2, rad_dtheta, rad_dr);
+        //     timed_println!("States (n1={},m1={}), (n2={},m2={}): Radial dtheta = {}, Radial dr = {}", n1, m1, n2, m2, rad_dtheta, rad_dr);
         // }
 
         ang_dtheta * rad_dtheta + ang_dr * rad_dr
@@ -1080,7 +1082,7 @@ impl LMMatrixElementArray {
         }) * prefactor;
 
         // if n1 == 0 {
-            // println!("States (n1={},m1={}), (n2={},m2={}): Angular = {}, Radial = {}, Overlap = {}", n1, m1, n2, m2, angular, radial, overlap);
+            // timed_println!("States (n1={},m1={}), (n2={},m2={}): Angular = {}, Radial = {}, Overlap = {}", n1, m1, n2, m2, angular, radial, overlap);
         // }
 
         overlap - angular * radial
@@ -1123,7 +1125,7 @@ impl LMMatrixElementArray {
 
             let psi_norm = 2. * PI * norm.powi(2) * integral;
 
-            println!("State (n={},m={}): Norm = {}", n, m, psi_norm);
+            timed_println!("State (n={},m={}): Norm = {}", n, m, psi_norm);
         });
     }
 
@@ -1189,14 +1191,14 @@ impl LMMatrixElementArray {
         let lag_coeff1 = &lag_coeffs[&(n1, m1.abs())];
         let lag_coeff2 = &lag_coeffs[&(n2, m2.abs())];
 
-        // println!("n1 = {}, m1 = {}, n2 = {}, m2 = {}", n1,m1,n2,m2);
-        // println!("Lag1 = {:?}", lag_coeff1);
-        // println!("Lag2 = {:?}", lag_coeff2);
+        // timed_println!("n1 = {}, m1 = {}, n2 = {}, m2 = {}", n1,m1,n2,m2);
+        // timed_println!("Lag1 = {:?}", lag_coeff1);
+        // timed_println!("Lag2 = {:?}", lag_coeff2);
 
         let radial = lag_coeff1.iter().fold(0.0, |acc1, (i, c1)| {
             acc1 + lag_coeff2.iter().fold(0.0, |acc2, (j, c2)| {
                 // \int e^{-a r} r^b dr = b! / a^(b+1)
-                // println!("j = {}", j);
+                // timed_println!("j = {}", j);
 
                 // From e^{-beta1 x/2} * e^{-beta2 x/2} = e^{-(beta1 + beta2) x/2}
                 let a = (beta_1 + beta_2) / 2.0;

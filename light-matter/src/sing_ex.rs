@@ -13,6 +13,8 @@ use ndarray_linalg::QR;
 
 use crate::davidson::{DavidsonOperator, DavidsonConfig, DavidsonWhich, davidson};
 
+use crate::timed_println;
+
 use crate::utils::{LMMatrixElement, LMMatrixElementArray, PPConfig, PhotonMode, Polarization, save_band_data};
 
 pub fn kron_1d(a: &Array1<f64>, b: &Array1<f64>) -> Array1<f64> {
@@ -89,7 +91,7 @@ impl ExcitonicHamiltonian {
             = self.exciton_ham.diagonalize_full_hamiltonian(self.n_rel, self.n_ex_eig, self.parity);
         
         self.e_vals = Some(exciton_energies.slice(s![..self.n_ex_eig]).to_owned());
-        // println!("Exciton energies: {:?}", self.e_vals);
+        // timed_println!("Exciton energies: {:?}", self.e_vals);
 
         self.e_vecs = Some(e_vecs[0..self.n_ex_eig].to_vec());
         self.r_vecs = Some(r_vecs);
@@ -354,7 +356,7 @@ impl PPOffHamiltonian {
         let cos_mat = &self.matrix_element_arrays.as_ref().unwrap().cos_mat;
 
         // let test = cos_mat.clone().into_keys().collect::<Vec<Vec<i32>>>();
-        // println!("{:?}",test);
+        // timed_println!("{:?}",test);
         
         let mut p_cos: Vec<Array2<f64>> = Vec::new();
         let mut p_q: Vec<Array2<f64>> = Vec::new();
@@ -698,15 +700,15 @@ impl Operator<f64> for PolaronPolariton {
         // Avoid unnecessary allocation and copying
         let x_arr = Array1::from_shape_fn(x.len(), |i| x[i]);
 
-        // println!("Applying Mat-Vec");
-        // println!("Applying Diag");
+        // timed_println!("Applying Mat-Vec");
+        // timed_println!("Applying Diag");
         // Apply diagonal part directly to y
         let diag_part = self.pp_diag_ham.apply(&x_arr);
         for i in 0..y.len() {
             y[i] = diag_part[i];
         }
         
-        // println!("Applying Off-Diag");
+        // timed_println!("Applying Off-Diag");
         // Apply off-diagonal part and add to y
         self.pp_off_ham.apply(x, y);
     }
@@ -863,7 +865,7 @@ pub fn get_dielectric_function(pp_config: &PPConfig, pp: &PolaronPolariton, n_ei
         pp.pp_off_ham.matrix_element_arrays.as_ref().unwrap().get_x(&states[r_ind1], &states[r_ind2], mu, &lag_coeffs)
     });
 
-    // println!("x_rel = {}", PrettyArray2(&x_rel,2));
+    // timed_println!("x_rel = {}", PrettyArray2(&x_rel,2));
 
     // Get <x> in the Exciton basis
     let x_exc = &Array2::from_shape_fn((n_ex_eig,n_ex_eig) , |(idx1, idx2)| {
@@ -898,10 +900,10 @@ pub fn get_dielectric_function(pp_config: &PPConfig, pp: &PolaronPolariton, n_ei
                 .fold(0.0, |acc, val| acc + val)
     });
 
-    // println!("x_exc = {}", PrettyArray2(&x_exc,2));
+    // timed_println!("x_exc = {}", PrettyArray2(&x_exc,2));
 
     // Diagonalize at the Gamma point
-    // println!("Diagonalizing at the Gamma Point");
+    // timed_println!("Diagonalizing at the Gamma Point");
     let (pp_vals, pp_vecs) = diagonalize_pp_sing_ex(pp, n_eig, method, None);
 
     // get <x> in the PP basis
@@ -910,13 +912,13 @@ pub fn get_dielectric_function(pp_config: &PPConfig, pp: &PolaronPolariton, n_ei
 
     let vec0 = pp_vecs.column(0);
 
-    println!("Relative energies = {:?}", pp_vals.slice(s![0..50]).to_owned() - pp_vals[0]);
+    timed_println!("Relative energies = {:?}", pp_vals.slice(s![0..50]).to_owned() - pp_vals[0]);
 
-    // println!("pp_vecs shape = {:?}", pp_vecs.shape());
-    // println!("vec 0 = {:?}", vec0);
-    // println!("E 0 = {:?}", pp_vals[0]);
-    // println!("vec 1 = {:?}", pp_vecs.column(1));
-    // println!("E 1 = {:?}", pp_vals[1]);
+    // timed_println!("pp_vecs shape = {:?}", pp_vecs.shape());
+    // timed_println!("vec 0 = {:?}", vec0);
+    // timed_println!("E 0 = {:?}", pp_vals[0]);
+    // timed_println!("vec 1 = {:?}", pp_vecs.column(1));
+    // timed_println!("E 1 = {:?}", pp_vals[1]);
 
     // // Find <0|x|0> as a test
 
@@ -932,7 +934,7 @@ pub fn get_dielectric_function(pp_config: &PPConfig, pp: &PolaronPolariton, n_ei
     //         })
     //     }).fold(0.0, |acc, val| acc + val);
 
-    // println!("test = {:?}", test);
+    // timed_println!("test = {:?}", test);
 
     let x_pp = &Array1::from_shape_fn(n_eig, |idx| {
         let vec1 = pp_vecs.column(idx);
@@ -950,7 +952,7 @@ pub fn get_dielectric_function(pp_config: &PPConfig, pp: &PolaronPolariton, n_ei
         }).fold(0.0, |acc, val| acc + val)
     });
 
-    // println!("x_pp = {:?}", x_pp);
+    // timed_println!("x_pp = {:?}", x_pp);
 
 
     // Compute dielectric function
@@ -1077,13 +1079,13 @@ pub fn diagonalize_pp_sing_ex(
     let n = pp.dimension();
 
 
-    let block_size = 128;
+    let block_size = 32;
     
     match method {
         DiagonalizationMethod::Arpack => {
             // Use block approach for large eigenvalue counts
             if n_eig > block_size {
-                println!("Using block Arpack approach with block size {}", block_size);
+                timed_println!("Using block Arpack approach with block size {}", block_size);
                                 
                 // Determine how many blocks we need
                 let n_blocks = (n_eig + block_size - 1) / block_size;
@@ -1098,7 +1100,7 @@ pub fn diagonalize_pp_sing_ex(
                     let end_idx = std::cmp::min((block + 1) * block_size, n_eig);
                     let current_block_size = end_idx - start_idx;
                     
-                    println!("Computing eigenvalues {}-{} of {}", start_idx + 1, end_idx, n_eig);
+                    timed_println!("Computing eigenvalues {}-{} of {}", start_idx + 1, end_idx, n_eig);
                     
                     // Configure ARPACK for this block with improved convergence settings
                     let config = Config::new()
@@ -1178,7 +1180,7 @@ pub fn diagonalize_pp_sing_ex(
         DiagonalizationMethod::Davidson => {
             // Use block approach for large eigenvalue counts
             if n_eig > block_size {
-                println!("Using block Davidson approach with block size {}", block_size);
+                timed_println!("Using block Davidson approach with block size {}", block_size);
                 
                 // Determine how many blocks we need
                 let n_blocks = (n_eig + block_size - 1) / block_size;
@@ -1193,7 +1195,7 @@ pub fn diagonalize_pp_sing_ex(
                     let end_idx = std::cmp::min((block + 1) * block_size, n_eig);
                     let current_block_size = end_idx - start_idx;
                     
-                    println!("Computing eigenvalues {}-{} of {}", start_idx + 1, end_idx, n_eig);
+                    timed_println!("Computing eigenvalues {}-{} of {}", start_idx + 1, end_idx, n_eig);
                     
                     // Configure Davidson solver for this block
                     let config = DavidsonConfig {
@@ -1222,9 +1224,9 @@ pub fn diagonalize_pp_sing_ex(
                     };
                     
                     if !result.converged {
-                        println!("Warning: Davidson algorithm did not converge after {} iterations for block {}", 
+                        timed_println!("Warning: Davidson algorithm did not converge after {} iterations for block {}", 
                                  result.iterations, block);
-                        println!("Final residuals: {:?}", result.residuals);
+                        timed_println!("Final residuals: {:?}", result.residuals);
                     }
                     
                     // Convert to ndarray format
@@ -1268,8 +1270,8 @@ pub fn diagonalize_pp_sing_ex(
                 let result = davidson(pp, &config).unwrap();
                 
                 if !result.converged {
-                    println!("Warning: Davidson algorithm did not converge after {} iterations", result.iterations);
-                    println!("Final residuals: {:?}", result.residuals);
+                    timed_println!("Warning: Davidson algorithm did not converge after {} iterations", result.iterations);
+                    timed_println!("Final residuals: {:?}", result.residuals);
                 }
                 
                 // Convert to ndarray format
@@ -1363,7 +1365,7 @@ pub fn diagonalize_pp_sing_ex(
                         (values - shift, vectors)
                     },
                     LobpcgResult::Err(values, vectors, _, err) => {
-                        println!("Warning: LOBPCG did not fully converge: {:?}", err);
+                        timed_println!("Warning: LOBPCG did not fully converge: {:?}", err);
                         (values - shift, vectors)
                     },
                     LobpcgResult::NoResult(err) => {
@@ -1372,7 +1374,7 @@ pub fn diagonalize_pp_sing_ex(
                 }
             } else {
                 // Use block approach for large eigenvalue counts
-                println!("Using block LOBPCG approach with block size {}", block_size);
+                timed_println!("Using block LOBPCG approach with block size {}", block_size);
                 
                 // Determine how many blocks we need
                 let n_blocks = (n_eig + block_size - 1) / block_size;
@@ -1392,7 +1394,7 @@ pub fn diagonalize_pp_sing_ex(
                     let end_idx = std::cmp::min((block + 1) * block_size, n_eig);
                     let current_block_size = end_idx - start_idx;
                     
-                    println!("Computing eigenvalues {}-{} of {}", start_idx + 1, end_idx, n_eig);
+                    timed_println!("Computing eigenvalues {}-{} of {}", start_idx + 1, end_idx, n_eig);
                     
                     // Create initial guess for this block
                     let mut x = if block == 0 && initial_vec.is_some() {
@@ -1568,15 +1570,17 @@ pub fn diagonalize_pp_sing_ex(
         
         DiagonalizationMethod::SLEPc => {
             use crate::slepc::diagonalize_slepc;
-            use rust_slepc_bindings::EPSType;
+            use rust_slepc_bindings::{EPSType};
 
-            if initial_vec.is_none() {
-                let (_, e_vecs) = diagonalize_slepc(&pp, n_eig, None, Some(EPSType::KrylovSchur), None);
-                diagonalize_slepc(&pp, n_eig, None, Some(EPSType::JacobiDavidson), Some(&e_vecs))
-            }
-            else {
-                diagonalize_slepc(&pp, n_eig, None, Some(EPSType::JacobiDavidson), initial_vec)
-            }           
+            // if initial_vec.is_none() {
+            //     let (_, e_vecs) = diagonalize_slepc(&pp, n_eig, block_size, Some(EPSType::KrylovSchur), initial_vec);
+            //     diagonalize_slepc(&pp, n_eig, block_size, Some(EPSType::JacobiDavidson), Some(&e_vecs))
+            // }
+            // else {
+            //     timed_println!("Initial Vector shape: {:?}", initial_vec.unwrap().shape());
+            //     diagonalize_slepc(&pp, n_eig, block_size, Some(EPSType::JacobiDavidson), initial_vec)
+            // }
+            diagonalize_slepc(&pp, n_eig, block_size, Some(EPSType::KrylovSchur), initial_vec)           
         }
     }
 }

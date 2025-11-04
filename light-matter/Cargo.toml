@@ -32,3 +32,4 @@ scilib = "1.0.0"
 num_threads = "0.1.7"
 num_cpus = "1.17.0"
 rust_slepc_bindings = {path = "../slepc_rust"}
+chrono = "0.4"

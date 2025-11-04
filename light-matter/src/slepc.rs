@@ -5,8 +5,10 @@ use std::ffi::{c_int, c_double, c_void};
 use rust_slepc_bindings::{
     Eigensolver, EPS_WHICH_SMALLEST_REAL,
     Mat, PETSC_COMM_WORLD,
-    create_vector, destroy_vector, get_vector_array, EPSType, PetscError
+    create_vector, destroy_vector, get_vector_array, EPSType, PetscError,
+    EPSGDSetBlockSize, EPSJDSetBlockSize
 };
+use crate::timed_println;
 
 // PETSc/SLEPc function declarations needed for shell matrix
 unsafe extern "C" {
@@ -58,7 +60,7 @@ extern "C" fn mv_product(mat: Mat, x: rust_slepc_bindings::Vec, y: rust_slepc_bi
 pub fn diagonalize_slepc(
     pp: &PolaronPolariton, 
     n_eig: usize,
-    mpd: Option<usize>, 
+    block_size: usize, 
     solve_type: Option<EPSType>,
     initial_guess: Option<&Array2<f64>>
 ) -> (Array1<f64>, Array2<f64>) {
@@ -66,7 +68,7 @@ pub fn diagonalize_slepc(
     let mut a = std::ptr::null_mut();
     let n = pp.dimension() as c_int;
     
-    println!("Creating shell matrix of dimension {}", n);
+    timed_println!("Creating shell matrix of dimension {}", n);
     
     unsafe {
         // Create shell matrix
@@ -81,15 +83,27 @@ pub fn diagonalize_slepc(
     let mut solver = Eigensolver::new().expect("Failed to create eigensolver");
     solver.set_operators(a, None).expect("Failed to set operators");
     
-    // Use a more modest ncv value
-    let ncv = std::cmp::min(pp.dimension(), 3 * n_eig + 10);
-    let mpd_val = match mpd {
-        Some(m) => std::cmp::min(m, ncv),
-        None => ncv
-    };
+    // // Use a more modest ncv value
+    // let mut ncv = std::cmp::min(pp.dimension(), 3 * n_eig + 10);
+    // let mpd_val = match mpd {
+    //     Some(m) => std::cmp::min(m, ncv),
+    //     None => ncv
+    // };
+
+    // ncv = ncv.min(n_eig + mpd_val);
     
     // Set dimensions with proper values
-    solver.set_dimensions(n_eig, Some(ncv), Some(mpd_val)).expect("Failed to set dimensions");
+    solver.set_dimensions(n_eig, None, None).expect("Failed to set dimensions");
+
+    // For Davidson, set block size
+    match solve_type {
+        Some(EPSType::JacobiDavidson) =>      unsafe {
+            EPSJDSetBlockSize(solver.eps, block_size as c_int);
+
+        },
+        Some(EPSType::GeneralizedDavidson) => unsafe {EPSGDSetBlockSize(solver.eps, block_size as c_int);},
+        _ => {}
+    }
     
     solver.set_which_eigenpairs(EPS_WHICH_SMALLEST_REAL).expect("Failed to set which eigenpairs");
     
@@ -97,11 +111,11 @@ pub fn diagonalize_slepc(
     solver.set_problem_type(rust_slepc_bindings::EPSProblemType::NonHermitian).expect("Failed to set problem type");
     
     // Set more lenient tolerances and more iterations
-    solver.set_tolerances(1e-4, 10000).expect("Failed to set tolerances");
+    solver.set_tolerances(1e-8, 10000).expect("Failed to set tolerances");
     
     // Set the solver type - try ARPACK which is often more robust
     let solver_type = solve_type.unwrap_or(EPSType::ARPACK);
-    println!("Using solver type: {:?}", solver_type);
+    timed_println!("Using solver type: {:?}", solver_type);
     solver.set_type(solver_type).expect("Failed to set eigensolver");
     
     // Apply options to ensure DS is properly initialized
@@ -118,13 +132,13 @@ pub fn diagonalize_slepc(
     
     // Set initial guess if provided
     if let Some(initial_vecs) = initial_guess {
-        println!("Using provided initial guess with {} vectors", initial_vecs.ncols());
+        timed_println!("Using provided initial guess with {} vectors", initial_vecs.ncols());
         unsafe {
             // Convert Array2 to Vec<Vec>
             let petsc_vecs = match create_petsc_vecs_from_array2(initial_vecs) {
                 Ok(vecs) => vecs,
                 Err(e) => {
-                    println!("Error creating PETSc vectors from initial guess: {:?}", e);
+                    timed_println!("Error creating PETSc vectors from initial guess: {:?}", e);
                     Vec::new()
                 }
             };
@@ -132,7 +146,7 @@ pub fn diagonalize_slepc(
             if !petsc_vecs.is_empty() {
                 // Set the initial space
                 if let Err(e) = solver.set_initial_space(&petsc_vecs) {
-                    println!("Error setting initial space: {:?}", e);
+                    timed_println!("Error setting initial space: {:?}", e);
                 }
                 
                 // Clean up the vectors
@@ -143,21 +157,21 @@ pub fn diagonalize_slepc(
         }
     }
     
-    println!("Starting eigenvalue computation...");
+    timed_println!("Starting eigenvalue computation...");
     
     // Solve the eigenvalue problem
     let solve_result = unsafe { rust_slepc_bindings::EPSSolve(solver.eps) };
     if solve_result != 0 {
-        println!("Warning: EPSSolve returned error code {}", solve_result);
+        timed_println!("Warning: EPSSolve returned error code {}", solve_result);
     }
     
     // Get the eigenvalues
     let nconv = solver.get_converged().expect("Failed to get converged eigenvalues");
-    println!("SLEPc converged {} out of {} requested eigenvalues", nconv, n_eig);
+    timed_println!("SLEPc converged {} out of {} requested eigenvalues", nconv, n_eig);
     
     // Get iteration count
     let iterations = solver.get_iteration_number().expect("Failed to get iteration count");
-    println!("Solver took {} iterations", iterations);
+    timed_println!("Solver took {} iterations", iterations);
     
     // Always create arrays of the requested size
     let mut eigenvalues = Array1::zeros(n_eig);

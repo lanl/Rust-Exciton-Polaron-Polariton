@@ -27,6 +27,10 @@ pub mod lobpcg;
 
 pub mod slepc;
 
+mod logging;
+
+use crate::logging::init_logging;
+
 // Speed of light in atomic units
 const C: f64 = 137.036;
 
@@ -41,7 +45,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     // Create the 2D exciton system
     let a0 = (&e_config).a0;
     let v0 = (&e_config).v0;
-    println!("v0 = {}", v0);
+    timed_println!("v0 = {}", v0);
     let exciton = Exciton2DGridSystem::from_config(e_config.clone());
     
     // Parameters for diagonalization
@@ -55,8 +59,8 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     
     // Define photon modes
     // let qx_values = vec![0.0]; // Photon wavevectors along x
-    let qx_values = Array1::linspace(-0.001, 0.001, 8); // Photon wavevectors along x
-    let qy_values = Array1::linspace(-0.001, 0.001, 8);
+    let qx_values = Array1::linspace(-0.001, 0.001, 16); // Photon wavevectors along x
+    let qy_values = Array1::linspace(-0.001, 0.001, 16);
     let qz = omega_0 / C;
     let n_fock = 2;      // Dimension of Fock space
 
@@ -91,12 +95,12 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     let sym_points = vec![ vec![0.0,0.0], vec![PI / a0, 0.0], vec![PI / a0, PI / a0]];
     let sym_labels = vec!["Γ".to_string(), "X".to_string(), "M".to_string()];
     
-    println!("Running with {} modes", photon_modes.len());
+    timed_println!("Running with {} modes", photon_modes.len());
 
     match method {
         Method::Sparse => {
 
-            println!("Using sparse methods for light-matter coupling.");
+            timed_println!("Using sparse methods for light-matter coupling.");
 
             // Create light-matter system
             let light_matter = sparse_methods::LightMatter::new(exciton.full_ham, photon_modes, coupling,
@@ -117,7 +121,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
             // End timing and print duration
             let end_time = Instant::now();
             let duration = end_time.duration_since(start_time);
-            println!("Calc dispersion in {:?}", duration);
+            timed_println!("Calc dispersion in {:?}", duration);
 
             // Plot the band structure
             plot_band_structure(
@@ -127,7 +131,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
         },
         Method::Dense => {
             
-            println!("Using dense methods for light-matter coupling.");
+            timed_println!("Using dense methods for light-matter coupling.");
 
             // Create light-matter system
             let light_matter = dense_methods::LightMatter::new(exciton.full_ham, photon_modes, coupling,
@@ -151,7 +155,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
             // End timing and print duration
             let end_time = Instant::now();
             let duration = end_time.duration_since(start_time);
-            println!("Calc dispersion in {:?}", duration);
+            timed_println!("Calc dispersion in {:?}", duration);
 
             // Plot the band structure
             plot_band_structure(
@@ -161,9 +165,9 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
         },   
 
         Method::SingEx => {
-            println!("Using Mat-Vec methods for light-matter coupling in single photon limit.");
-            let n_eig = 64;
-            println!("Calculating {} eigenstates", n_eig);
+            timed_println!("Using Mat-Vec methods for light-matter coupling in single photon limit.");
+            let n_eig = 256 + 128;
+            timed_println!("Calculating {} eigenstates", n_eig);
             
             let start_time = Instant::now();
 
@@ -173,29 +177,29 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
 
             let time1 = Instant::now();
             let gen_time = time1.duration_since(start_time);
-            println!("Precomputed matrix elements in {:?}", gen_time);
+            timed_println!("Precomputed matrix elements in {:?}", gen_time);
             
             // Choose which diagonalization method to use
             let diag_method = sing_ex::DiagonalizationMethod::SLEPc;
             
             // // Benchmark different methods
-            // println!("Using {:?} diagonalization method", diag_method);
+            // timed_println!("Using {:?} diagonalization method", diag_method);
             
             // // Diagonalize at gamma point
             // let (_, _) = sing_ex::diagonalize_pp_sing_ex(&pp, n_eig, &diag_method, None);
 
             // let time2 = Instant::now();
             // let diag_time = time2.duration_since(time1);
-            // println!("Diagonalized gamma point in {:?}", diag_time);
+            // timed_println!("Diagonalized gamma point in {:?}", diag_time);
 
-            // println!("Eigvals: {:?}", eig_vals);
+            // timed_println!("Eigvals: {:?}", eig_vals);
             // let omegas = Array1::linspace(-0.3, 0.0, 1000);
             // let gamma = 0.01;
             // let _ = sing_ex::get_dielectric_function(&pp_config, &pp, n_eig, omegas, gamma, &diag_method);
 
             // let time3 = Instant::now();
             // let dielec_time = time3.duration_since(time2);
-            // println!("Calculated Dielectric Function in {:?}", dielec_time);
+            // timed_println!("Calculated Dielectric Function in {:?}", dielec_time);
             
             // // Calculate band structure
             // let (k_points, eigvals_list) = sing_ex::calculate_band_structure_sing_ex(
@@ -207,16 +211,18 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
             //     Some("sing_ex_disp_plot.png"), false, v0, coupling);
                 
             // Calculate and plot color-coded band structure
-            println!("Calculating color-coded band structure...");
+            timed_println!("Calculating color-coded band structure...");
             let (k_points_color, eigvals_list_color, photonic_character_list) = 
                 color_band_plot::calculate_color_band_structure(
                     &mut pp, n_k_points, n_eig, &sym_points, &pp_config, diag_method, false); // Use cached data if available, sort bands for continuity
+
+            timed_println!("Calculated Band Structure in {:?}", Instant::now().duration_since(time1));
                 
             // Plot using gnuplot
             if let Err(e) = color_band_plot::plot_color_band_structure(
                 &k_points_color, &sym_points, &sym_labels, &eigvals_list_color,
                 &photonic_character_list, n_eig, a0, "sing_ex_color_disp_plot.png", v0, coupling) {
-                println!("Error plotting color-coded band structure: {}", e);
+                timed_println!("Error plotting color-coded band structure: {}", e);
             }
         } 
     }
@@ -261,31 +267,31 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
     // Create directory for saving results
     let save_dir = "dielectric_scan";
     std::fs::create_dir_all(save_dir).unwrap_or_else(|_| {
-        println!("Directory {} already exists or couldn't be created", save_dir);
+        timed_println!("Directory {} already exists or couldn't be created", save_dir);
     });
     
     if !calculate {
         // Just plot the existing data
-        println!("Plotting dielectric function from existing data...");
+        timed_println!("Plotting dielectric function from existing data...");
         match plot_dielectric_function(save_dir, Some("dielectric_function_real.svg"), DielectricPlotType::Real, Some((0.15,0.23)), &coupling_values) {
-            Ok(_) => println!("Successfully plotted real part of dielectric function"),
-            Err(e) => println!("Error plotting dielectric function: {}", e),
+            Ok(_) => timed_println!("Successfully plotted real part of dielectric function"),
+            Err(e) => timed_println!("Error plotting dielectric function: {}", e),
         }
         
         match plot_dielectric_function(save_dir, Some("dielectric_function_imag.svg"), DielectricPlotType::Imaginary, Some((0.15,0.23)), &coupling_values) {
-            Ok(_) => println!("Successfully plotted imaginary part of dielectric function"),
-            Err(e) => println!("Error plotting dielectric function: {}", e),
+            Ok(_) => timed_println!("Successfully plotted imaginary part of dielectric function"),
+            Err(e) => timed_println!("Error plotting dielectric function: {}", e),
         }
         
         match plot_dielectric_function(save_dir, Some("dielectric_function_both.svg"), DielectricPlotType::Both, Some((0.15,0.23)), &coupling_values) {
-            Ok(_) => println!("Successfully plotted both parts of dielectric function"),
-            Err(e) => println!("Error plotting dielectric function: {}", e),
+            Ok(_) => timed_println!("Successfully plotted both parts of dielectric function"),
+            Err(e) => timed_println!("Error plotting dielectric function: {}", e),
         }
         
         return;
     }
 
-    println!("Starting dielectric function scan for {} coupling values", coupling_values.len());
+    timed_println!("Starting dielectric function scan for {} coupling values", coupling_values.len());
     
     // Create progress bar
     let pb = indicatif::ProgressBar::new(coupling_values.len() as u64);
@@ -335,24 +341,26 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
     pb.finish_with_message("Dielectric function scan complete");
     
     // Plot the results
-    println!("Plotting dielectric function...");
+    timed_println!("Plotting dielectric function...");
     match plot_dielectric_function(save_dir, Some("dielectric_function_real.svg"), DielectricPlotType::Real, None, &coupling_values) {
-        Ok(_) => println!("Successfully plotted real part of dielectric function"),
-        Err(e) => println!("Error plotting dielectric function: {}", e),
+        Ok(_) => timed_println!("Successfully plotted real part of dielectric function"),
+        Err(e) => timed_println!("Error plotting dielectric function: {}", e),
     }
     
     match plot_dielectric_function(save_dir, Some("dielectric_function_imag.svg"), DielectricPlotType::Imaginary, None, &coupling_values) {
-        Ok(_) => println!("Successfully plotted imaginary part of dielectric function"),
-        Err(e) => println!("Error plotting dielectric function: {}", e),
+        Ok(_) => timed_println!("Successfully plotted imaginary part of dielectric function"),
+        Err(e) => timed_println!("Error plotting dielectric function: {}", e),
     }
     
     match plot_dielectric_function(save_dir, Some("dielectric_function_both.svg"), DielectricPlotType::Both, None, &coupling_values) {
-        Ok(_) => println!("Successfully plotted both parts of dielectric function"),
-        Err(e) => println!("Error plotting dielectric function: {}", e),
+        Ok(_) => timed_println!("Successfully plotted both parts of dielectric function"),
+        Err(e) => timed_println!("Error plotting dielectric function: {}", e),
     }
 }
 
 fn main() {
+    // Initialize logging
+    init_logging();
 
     // Get the number of available cores
     let num_threads = num_cpus::get();
@@ -373,7 +381,7 @@ fn main() {
     
     // Configure Rayon thread pool
     rayon::ThreadPoolBuilder::new()
-        .num_threads(8)
+        .num_threads(num_threads)
         .build_global()
         .unwrap();
     
@@ -411,7 +419,7 @@ fn main() {
             run_dielectric_scan(e_config.clone());
         },
         _ => {
-            println!("Unknown run mode: {}", run_mode);
+            timed_println!("Unknown run mode: {}", run_mode);
         }
     }
     

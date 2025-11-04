@@ -5,7 +5,7 @@
 #SBATCH --error myjob_%j.err
 #SBATCH --partition=general
 #
-#SBATCH --time=6:00:00
+#SBATCH --time=2-00:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=64
 #SBATCH --mem=100G

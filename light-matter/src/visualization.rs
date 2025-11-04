@@ -6,6 +6,8 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 
+use crate::timed_println;
+
 /// Plots the dielectric function for different coupling strengths
 pub fn plot_dielectric_function(
     dir_path: &str,                // Directory containing dielectric function data files
@@ -76,9 +78,9 @@ pub fn plot_dielectric_function(
         let mean = (chart_data.0.mean().unwrap(), chart_data.1.mean().unwrap());
         let mean2 = ((&chart_data.0*&chart_data.0).mean().unwrap(), (&chart_data.1*&chart_data.1).mean().unwrap());
         
-        // println!("Mean is {:?}", mean);
+        // timed_println!("Mean is {:?}", mean);
         let sigma = ((mean2.0 - mean.0 * mean.0).sqrt(), (mean2.1 - mean.1* mean.1).sqrt());
-        // println!("Standard Deviation is {:?}", sigma);
+        // timed_println!("Standard Deviation is {:?}", sigma);
 
         let factor = 1.0;
         eps_min = (eps_min.0.min(mean.0-factor*sigma.0), eps_min.1.min(mean.1-factor*sigma.1));
@@ -419,7 +421,7 @@ pub fn plot_band_structure(
         
         // Draw each band with the same color (blue)
         let num_bands = (&eigvals_list[0]).len();
-        println!("Number of bands: {}", num_bands );
+        timed_println!("Number of bands: {}", num_bands );
         
         for band_idx in 0..num_bands {
             let color = BLACK;

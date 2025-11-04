@@ -8,6 +8,8 @@ use rayon::prelude::*;
 
 use crate::davidson::DavidsonOperator;
 
+use crate::timed_println;
+
 /// Configuration options for the LOBPCG algorithm
 pub struct LobpcgConfig {
     pub max_iter: usize,
@@ -185,13 +187,13 @@ pub fn lobpcg<T: DavidsonOperator<f64> + Sync>(operator: &T, config: &LobpcgConf
             Err(e) => {
                 // If we're using 3-term recurrence, fall back to 2-term
                 if iterations > 1 {
-                    println!("Warning: 3-term recurrence failed, falling back to 2-term recurrence");
+                    timed_println!("Warning: 3-term recurrence failed, falling back to 2-term recurrence");
                     form_rayleigh_matrices(&x, &p, None, &ax, &ap, None, &mut a_rayleigh, &mut b_rayleigh, 2*m);
                     match solve_generalized_eigenproblem(&a_rayleigh, &b_rayleigh, m) {
                         Ok(pairs) => pairs,
                         Err(_) => {
                             // If that still fails, try with regularization
-                            println!("Warning: 2-term recurrence failed, trying with regularization");
+                            timed_println!("Warning: 2-term recurrence failed, trying with regularization");
                             // Add small regularization to diagonal of B
                             for i in 0..2*m {
                                 b_rayleigh[[i, i]] += 1e-10;
@@ -215,7 +217,7 @@ pub fn lobpcg<T: DavidsonOperator<f64> + Sync>(operator: &T, config: &LobpcgConf
                     }
                 } else {
                     // First iteration, try with regularization
-                    println!("Warning: Initial eigenvalue problem failed, trying with regularization");
+                    timed_println!("Warning: Initial eigenvalue problem failed, trying with regularization");
                     // Add small regularization to diagonal of B
                     for i in 0..2*m {
                         b_rayleigh[[i, i]] += 1e-10;
@@ -832,12 +834,12 @@ pub fn diagonalize_lobpcg<T: DavidsonOperator<f64> + Sync>(
     }
     
     if !result.converged {
-        println!("Warning: LOBPCG algorithm did not converge after {} iterations", result.iterations);
-        println!("Final residuals: {:?}", result.residuals);
+        timed_println!("Warning: LOBPCG algorithm did not converge after {} iterations", result.iterations);
+        timed_println!("Final residuals: {:?}", result.residuals);
     }
     
     // // Print convergence information
-    // println!("Converged in {} iterations", result.iterations);
+    // timed_println!("Converged in {} iterations", result.iterations);
 
     // Convert to ndarray format
     let eigenvalues = Array1::from_vec(result.values);
@@ -852,7 +854,7 @@ pub fn diagonalize_lobpcg<T: DavidsonOperator<f64> + Sync>(
         }
     }
 
-    println!("Eigvals: {:?}", eigenvalues);
+    timed_println!("Eigvals: {:?}", eigenvalues);
     
     (eigenvalues, eigenvectors)
 }

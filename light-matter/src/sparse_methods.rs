@@ -10,8 +10,6 @@ use arpack::{Config, Operator};
 use crate::utils::{PhotonMode, LMMatrixElement};//, save_band_data};
 
 
-
-
 /// Represents the photonic part of the Hamiltonian
 pub struct PhotonicHamiltonian {
     pub photon_modes: Vec<PhotonMode>,
@@ -411,7 +409,7 @@ impl LightMatter {
         // Build the sparse Hamiltonian
         let h_lm = self.build_lm_hamiltonian_sparse();
 
-        // println!("Sparse Hamiltonian of density {}% built.", h_lm.density() * 100.0);
+        // timed_println!("Sparse Hamiltonian of density {}% built.", h_lm.density() * 100.0);
         let (n, _) = h_lm.shape();
         
         // Create ARPACK operator

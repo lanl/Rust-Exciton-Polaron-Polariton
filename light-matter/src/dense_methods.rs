@@ -955,7 +955,7 @@ impl PPIntHamiltonian {
 //     // End timing and print duration
 //     let end_time = Instant::now();
 //     let duration = end_time.duration_since(start_time);
-//     println!("Calc dispersion in {:?}", duration);
+//     timed_println!("Calc dispersion in {:?}", duration);
 
 //     // Plot the band structure, showing 40 bands
 //     let n_bands = 40;
@@ -971,33 +971,33 @@ impl PPIntHamiltonian {
 //     // let (sorted_eigvals, _, _, _, _) 
 //     //     = exciton.diagonalize_full_hamiltonian(n_rel, n_ex_eig, parity);
 //     // let h_ex = Array2::from_diag(&sorted_eigvals);
-//     // println!("Exciton Hamiltonian of size: {:?}", h_ex.shape());
+//     // timed_println!("Exciton Hamiltonian of size: {:?}", h_ex.shape());
 //     // let end_time = Instant::now();
 //     // let duration = end_time.duration_since(start_time);
-//     // println!("Built Exciton Hamiltonian in {:?}", duration);
+//     // timed_println!("Built Exciton Hamiltonian in {:?}", duration);
     
 //     // // Build and time photonic Hamiltonian
 //     // let start_time = Instant::now();
 //     // let h_ph = light_matter.photon.get_h_ph();
-//     // println!("Photonic Hamiltonian of size: {:?}", h_ph.shape());
+//     // timed_println!("Photonic Hamiltonian of size: {:?}", h_ph.shape());
 //     // let end_time = Instant::now();
 //     // let duration = end_time.duration_since(start_time);
-//     // println!("Built Photonic Hamiltonian in {:?}", duration);
+//     // timed_println!("Built Photonic Hamiltonian in {:?}", duration);
 
 //     // // Build and time interaction Hamiltonian
 //     // let start_time = Instant::now();
 //     // let h_int = light_matter.interaction.get_int_h();
-//     // println!("Interaction Hamiltonian of size: {:?}", h_int.shape());
+//     // timed_println!("Interaction Hamiltonian of size: {:?}", h_int.shape());
 //     // let end_time = Instant::now();
 //     // let duration = end_time.duration_since(start_time);
-//     // println!("Built Interaction Hamiltonian in {:?}", duration);
+//     // timed_println!("Built Interaction Hamiltonian in {:?}", duration);
 
 //     // // Build and time full Hamiltonian
 //     // let start_time = Instant::now();
 //     // let h = light_matter.build_lm_hamiltonian();
-//     // println!("Full Hamiltonian of size: {:?}", h.shape());
+//     // timed_println!("Full Hamiltonian of size: {:?}", h.shape());
 //     // let end_time = Instant::now();
 //     // let duration = end_time.duration_since(start_time);
-//     // println!("Built Full Hamiltonian in {:?}", duration);
+//     // timed_println!("Built Full Hamiltonian in {:?}", duration);
 // }
 
