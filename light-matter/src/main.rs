@@ -2,6 +2,7 @@ use exciton_2d::{Exciton2DGridSystem, ExcitonConfig};
 use std::{f64::consts::PI, path::PathBuf, io::Write};
 use std::time::Instant;
 use ndarray::{arr1, Array1};
+use rust_slepc_bindings::{initialize, finalize};
 
 
 pub mod sparse_methods;
@@ -23,6 +24,8 @@ pub mod dense_methods;
 pub mod davidson;
 
 pub mod lobpcg;
+
+pub mod slepc;
 
 // Speed of light in atomic units
 const C: f64 = 137.036;
@@ -159,7 +162,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
 
         Method::SingEx => {
             println!("Using Mat-Vec methods for light-matter coupling in single photon limit.");
-            let n_eig = 128;
+            let n_eig = 64;
             println!("Calculating {} eigenstates", n_eig);
             
             let start_time = Instant::now();
@@ -173,7 +176,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
             println!("Precomputed matrix elements in {:?}", gen_time);
             
             // Choose which diagonalization method to use
-            let diag_method = sing_ex::DiagonalizationMethod::Arpack;
+            let diag_method = sing_ex::DiagonalizationMethod::SLEPc;
             
             // // Benchmark different methods
             // println!("Using {:?} diagonalization method", diag_method);
@@ -370,7 +373,7 @@ fn main() {
     
     // Configure Rayon thread pool
     rayon::ThreadPoolBuilder::new()
-        .num_threads(num_threads)
+        .num_threads(8)
         .build_global()
         .unwrap();
     
@@ -395,6 +398,8 @@ fn main() {
 
     // Choose which function to run
     let run_mode = "bandstructure"; // Options: "bandstructure", "dielectric_scan"
+
+    initialize().expect("Failed to initialize SLEPc");
     
     match run_mode {
         "bandstructure" => {
@@ -410,4 +415,7 @@ fn main() {
         }
     }
     
+
+    // Finalize SLEPc
+    finalize().expect("Failed to finalize SLEPc");
 }

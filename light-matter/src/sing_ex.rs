@@ -998,6 +998,7 @@ pub enum DiagonalizationMethod {
     Davidson,
     LobpcgNDArray,
     LobpcgCustom,
+    SLEPc,
 }
 
 /// A deflated operator that projects out already computed eigenvectors
@@ -1563,6 +1564,19 @@ pub fn diagonalize_pp_sing_ex(
             } else {
                 crate::lobpcg::diagonalize_lobpcg_simple(pp, n_eig)
             }
+        },
+        
+        DiagonalizationMethod::SLEPc => {
+            use crate::slepc::diagonalize_slepc;
+            use rust_slepc_bindings::EPSType;
+
+            if initial_vec.is_none() {
+                let (_, e_vecs) = diagonalize_slepc(&pp, n_eig, None, Some(EPSType::KrylovSchur), None);
+                diagonalize_slepc(&pp, n_eig, None, Some(EPSType::JacobiDavidson), Some(&e_vecs))
+            }
+            else {
+                diagonalize_slepc(&pp, n_eig, None, Some(EPSType::JacobiDavidson), initial_vec)
+            }           
         }
     }
 }
