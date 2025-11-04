@@ -1,0 +1,33 @@
+--- src/lib.rs
++++ src/lib.rs
+@@ -142,9 +142,9 @@
+         unsafe {
+             arpack_int::dsaupd_c(
+                 &mut ido,
+-                bmat,
++                bmat as *mut i8,
+                 n as i32,
+-                which,
++                which as *mut i8,
+                 nev as i32,
+                 tol,
+                 resid.as_mut_ptr(),
+@@ -213,16 +213,16 @@
+     unsafe {
+         arpack_int::dseupd_c(
+             rvec,
+-            howmny,
++            howmny as *mut i8,
+             select.as_mut_ptr(),
+             d.as_mut_ptr(),
+             z.as_mut_ptr(),
+             n as i32,
+             sigma,
+-            bmat,
++            bmat as *mut i8,
+             n as i32,
+-            which,
++            which as *mut i8,
+             nev as i32,
+             tol,
+             resid.as_mut_ptr(),

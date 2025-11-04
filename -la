@@ -1,0 +1,257 @@
+[33mcommit 2924c930f1376d7ad53848f3e31df0c9b8c84473[m[33m ([m[1;36mHEAD[m[33m -> [m[1;32mmaster[m[33m)[m
+Author: Michael Anthony David Taylor - 409067 <mike_tay@darwin-fe1.lanl.gov>
+Date:   Tue Nov 4 13:57:58 2025 -0700
+
+    Added Logging
+
+[33mcommit a095777a2d581549e3bedebbc2eb2eb4883a90d7[m
+Author: Michael Anthony David Taylor - 409067 <mike_tay@darwin-fe1.lanl.gov>
+Date:   Mon Nov 3 17:15:37 2025 -0700
+
+    Forgot to add slepc.rs
+
+[33mcommit 0297275cac1ba816772ed6565e350a3a0e756d26[m
+Author: Michael Anthony David Taylor - 409067 <mike_tay@darwin-fe1.lanl.gov>
+Date:   Mon Nov 3 17:14:54 2025 -0700
+
+    First working SLEPc integration
+
+[33mcommit 6d9ec0895cb1b5e7090249aaedf8f2039df90e1b[m
+Author: Michael Anthony David Taylor - 409067 <mike_tay@darwin-fe1.lanl.gov>
+Date:   Thu Oct 30 09:46:03 2025 -0600
+
+    Fixed Dielectric function
+
+[33mcommit b8cc16b215b80278a9bffb359f00a94216adbe3c[m
+Author: Michael Anthony David Taylor - 409067 <mike_tay@darwin-fe1.lanl.gov>
+Date:   Tue Oct 28 13:26:35 2025 -0600
+
+    Added parallelization for bandstructure and color bands by photon number
+
+[33mcommit e875222ff555d5bcbd242430ab025f012298a55c[m
+Author: Michael Anthony David Taylor - 409067 <mike_tay@darwin-fe1.lanl.gov>
+Date:   Mon Oct 27 10:12:18 2025 -0600
+
+    Added dispersion scan
+
+[33mcommit cfb5bee03beddbba722b47f82817319a3302cfa7[m
+Author: Michael Anthony David Taylor - 409067 <mike_tay@darwin-fe1.lanl.gov>
+Date:   Wed Oct 22 12:20:21 2025 -0600
+
+    Unified methods
+
+[33mcommit c98295ab0e4305c925227416f849f2d4fe833675[m
+Author: Michael Anthony David Taylor - 409067 <mike_tay@darwin-fe1.lanl.gov>
+Date:   Tue Oct 21 14:42:14 2025 -0600
+
+    Added LOBPCG methods
+
+[33mcommit 5e6bcbe0eba5413caf05f14fd12f4ea2763d0a3f[m
+Author: Michael Anthony David Taylor - 409067 <mike_tay@darwin-fe1.lanl.gov>
+Date:   Fri Oct 17 16:33:56 2025 -0600
+
+    Added error handling for too few k-points
+
+[33mcommit 452631a977998f36a3c504a70d6e9f9b06ce8fa1[m
+Author: Michael Anthony David Taylor - 409067 <mike_tay@darwin-fe1.lanl.gov>
+Date:   Fri Oct 17 15:16:13 2025 -0600
+
+    Added sync_environments
+
+[33mcommit 1a4baf8a9d0bd95c84d7559c3d8cbb649e8a3f87[m
+Author: L409067 <l409067@pn2505221.lanl.gov>
+Date:   Fri Oct 17 13:56:53 2025 -0600
+
+    Functioning Band Structure for sing-ex
+
+[33mcommit 6e1b640cfd5f4e98428d7681bff1126ee0be8150[m[33m ([m[1;32menv-specific-linux[m[33m)[m
+Author: L409067 <l409067@pn2505221.lanl.gov>
+Date:   Wed Oct 15 10:03:52 2025 -0600
+
+    Much faster diag, up to 4096 modes
+
+[33mcommit 99bc8ad10bae7aab55f4635b92ff5be696b2238f[m
+Author: L409067 <l409067@pn2505221.lanl.gov>
+Date:   Thu Oct 9 16:58:26 2025 -0600
+
+    Move to xcode
+
+[33mcommit 5a4e67657bbd275bef8676b67f33e8aba9245445[m
+Author: L409067 <l409067@pn2505221.lanl.gov>
+Date:   Thu Oct 9 15:49:56 2025 -0600
+
+    Fixed beta_n value still some disagreement
+
+[33mcommit 390e1c74b5f0cc2833f773a2643b0e8abf62b2c2[m
+Author: L409067 <l409067@pn2505221.lanl.gov>
+Date:   Thu Oct 9 09:32:23 2025 -0600
+
+    Fixed laguerre norm, tay_matrix_elements still really big
+
+[33mcommit e4780d78676c7e255674dfb678746b5adfc01c62[m
+Author: L409067 <l409067@pn2505221.lanl.gov>
+Date:   Wed Oct 8 12:50:52 2025 -0600
+
+    Fixed formatting
+
+[33mcommit 47754f3942850c44241e55fdf5a54d49953e0e16[m
+Author: L409067 <l409067@pn2505221.lanl.gov>
+Date:   Wed Oct 8 12:02:08 2025 -0600
+
+    Added taylor series matrix elements
+
+[33mcommit 57b5c8e925f1c8e1bb6a44d93bf38cd3ec6ddf68[m
+Author: L409067 <l409067@pn2505221.lanl.gov>
+Date:   Thu Oct 2 13:49:37 2025 -0600
+
+    Fixing h_rel norm and parallelized OffDiagHamiltonian
+
+[33mcommit ed8d07b129a6d932e4541d0860e21fab99ed3dd2[m
+Author: L409067 <l409067@pn2505221.lanl.gov>
+Date:   Wed Oct 1 15:31:47 2025 -0600
+
+    Optimized iterators and added Operator trait for OffDiagHamiltonian
+
+[33mcommit 59a22c76c9955d7af42e99957db91ccdeb61d724[m
+Author: L409067 <l409067@pn2505221.lanl.gov>
+Date:   Wed Oct 1 15:01:06 2025 -0600
+
+    Added phonon and fixed indexing for new apply for OffDiagHamiltonian
+
+[33mcommit 123f38932b30b4afd768cc7caee56d90ef6f5ef4[m
+Author: L409067 <l409067@pn2505221.lanl.gov>
+Date:   Tue Sep 30 16:57:34 2025 -0600
+
+    Started new apply for OffDiagHamiltonian no phonon int yet
+
+[33mcommit 330216b2181f5f80d7f381395a841596ee089150[m
+Author: L409067 <l409067@pn2505221.lanl.gov>
+Date:   Fri Sep 26 14:23:01 2025 -0600
+
+    Suggestions from Claude
+
+[33mcommit 4faab6186150add11d862185fbc080fb99a22761[m
+Author: L409067 <l409067@pn2505221.lanl.gov>
+Date:   Fri Sep 26 11:29:48 2025 -0600
+
+    Functioning sing_ex method, still slow
+
+[33mcommit 1ebe0279defbcc20bd68e7a89f921361397b4b38[m
+Author: L409067 <l409067@pn2505221.lanl.gov>
+Date:   Thu Sep 25 16:27:38 2025 -0600
+
+    Created visualization.rs
+
+[33mcommit 8433da9aee40c118c2c8a63e95efa30d709497d4[m
+Author: L409067 <l409067@pn2505221.lanl.gov>
+Date:   Thu Sep 25 15:26:01 2025 -0600
+
+    Added diagonalization and update k for sing_ex
+
+[33mcommit 745fdb18570c51d273e0fbb28b664b6f7e945e16[m
+Author: L409067 <l409067@pn2505221.lanl.gov>
+Date:   Thu Sep 25 12:22:13 2025 -0600
+
+    Added memory efficiency suggestions from Claude
+
+[33mcommit 985b7f0a10aa99d553ea6d5f16ceec319dbafeb2[m
+Author: L409067 <l409067@pn2505221.lanl.gov>
+Date:   Thu Sep 25 11:29:37 2025 -0600
+
+    First full draft of PPOffHamiltonian
+
+[33mcommit 6a97c57341f1cb5040e3286fe0d57814b7b62fc6[m
+Author: L409067 <l409067@pn2505221.lanl.gov>
+Date:   Thu Sep 25 09:38:17 2025 -0600
+
+    Fixed get_psin_elements such that p is now a 2D DVR
+
+[33mcommit 07a2b893a1580eddbb00a67b29f8d760c2a3da85[m
+Author: L409067 <l409067@pn2505221.lanl.gov>
+Date:   Wed Sep 24 17:55:33 2025 -0600
+
+    Now expressing cosx and sinx in exciton eig basis
+
+[33mcommit d5e11c5ad5728bcc386fb6fb936b47adaace148d[m
+Author: L409067 <l409067@pn2505221.lanl.gov>
+Date:   Wed Sep 24 16:58:58 2025 -0600
+
+    Trying to rewrite matrix element methods
+
+[33mcommit 6071c68a3f616830fd52088cc068addeeada51d5[m
+Author: L409067 <l409067@pn2505221.lanl.gov>
+Date:   Tue Sep 23 10:49:18 2025 -0600
+
+    Split dense, sparse, and utils into modules
+
+[33mcommit 56ab2c52d523d0280f34b92e3bfd095466b8760d[m
+Author: L409067 <l409067@pn2505221.lanl.gov>
+Date:   Mon Sep 22 16:05:49 2025 -0600
+
+    Sparse implementation seems to work
+
+[33mcommit 426f17ebd9cea1428ddfab712061f8007a22309f[m
+Author: L409067 <l409067@pn2505221.lanl.gov>
+Date:   Mon Sep 22 13:36:22 2025 -0600
+
+    Forgot to add arpack to git earlier
+
+[33mcommit 8a9cf76e57596668e0abd2c857c91337e21634f9[m
+Author: L409067 <l409067@pn2505221.lanl.gov>
+Date:   Mon Sep 22 11:50:45 2025 -0600
+
+    Sparse runs but is really slow
+
+[33mcommit 7110166947c0b83837d90b38cd9a2a0e84b24d2b[m
+Author: L409067 <l409067@pn2505221.lanl.gov>
+Date:   Mon Sep 22 10:50:34 2025 -0600
+
+    Try at rewriting sparse implementation
+
+[33mcommit e517165fb82811c54a48a1268ef3988306217996[m
+Author: L409067 <l409067@pn2505221.lanl.gov>
+Date:   Wed Sep 17 15:10:15 2025 -0600
+
+    Fully commented
+
+[33mcommit 21642cfa0706da243932b156e412b3e91ea8538e[m
+Author: L409067 <l409067@pn2505221.lanl.gov>
+Date:   Wed Sep 17 13:51:07 2025 -0600
+
+    First pass at added phonon dof
+
+[33mcommit f983f9dfdfec8303d5a261af51757f7936ddbcdc[m
+Author: L409067 <l409067@pn2505221.lanl.gov>
+Date:   Wed Sep 3 21:48:53 2025 -0600
+
+    Functioning band structure
+
+[33mcommit 9268aaf0e9d22db2bda574d00b896701c104a5b1[m
+Author: L409067 <l409067@pn2505221.lanl.gov>
+Date:   Wed Sep 3 16:36:03 2025 -0600
+
+    Added precomputation of matrix elements
+
+[33mcommit bd4dc6292ddb3d88fca94d83c860710a8dfd157a[m
+Author: L409067 <l409067@pn2505221.lanl.gov>
+Date:   Tue Sep 2 17:11:20 2025 -0600
+
+    Finished first draft of h_int
+
+[33mcommit 102336d683727feb1a15a337b3ff4272b0ac59a5[m
+Author: L409067 <l409067@pn2505221.lanl.gov>
+Date:   Tue Sep 2 15:15:01 2025 -0600
+
+    Started interaction Hamiltonian, fixed MatrixElementCalculator
+
+[33mcommit 861fa63f8f18a9bd6ee8af5d4f9a1b0b372d665c[m
+Author: L409067 <l409067@pn2505221.lanl.gov>
+Date:   Fri Aug 29 16:03:17 2025 -0600
+
+    Started Polariton in rust
+
+[33mcommit 61d55f136d2766d0ab2cd329889beee9ef3b435a[m
+Author: L409067 <l409067@pn2505221.lanl.gov>
+Date:   Fri Aug 29 13:08:05 2025 -0600
+
+    Reorganized directories

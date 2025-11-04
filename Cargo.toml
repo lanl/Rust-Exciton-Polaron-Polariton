@@ -1,0 +1,14 @@
+[workspace]
+members = [
+  "./exciton_2d",
+  "./light-matter",
+  "./slepc_rust"
+]
+resolver = "3"
+
+[patch.crates-io]
+arpack-ng-sys = { path = "./arpack-ng-sys" }
+arpack = { path = "./arpack" }
+
+[workspace.dependencies]
+ndarray-linalg = { version = "0.17.0", features = ["intel-mkl-static"] }

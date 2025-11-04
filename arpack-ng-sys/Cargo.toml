@@ -1,0 +1,29 @@
+[package]
+name = "arpack-ng-sys"
+version = "0.2.1"
+authors = ["Toshiki Teramura <toshiki.teramura@gmail.com>"]
+edition = "2018"
+build = "build.rs"
+links = "arpack"
+license = "MIT"
+description = "FFI binding to ARPACK-ng"
+documentation = "https://docs.rs/arpack-ng-sys"
+repository = "https://github.com/termoshtt/arpack-ng-rust"
+keywords = ["ffi", "arpack", "eigenvalue"]
+categories = ["external-ffi-bindings", "science"]
+
+[features]
+default = ["static"]
+system = ["pkg-config"]
+static = ["cmake"]
+cmake = ["dep:cmake"]
+pkg-config = ["dep:pkg-config"]
+stub = []
+
+[dependencies]
+
+[build-dependencies]
+bindgen = "0.66.1"
+pkg-config = { version = "0.3.30", optional = true }
+cmake = { version = "0.1.54", optional = true }
+cc = "1.0"

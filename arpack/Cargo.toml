@@ -1,0 +1,16 @@
+[package]
+name = "arpack"
+version = "0.1.2"
+authors = ["Toshiki Teramura <toshiki.teramura@gmail.com>"]
+edition = "2018"
+license = "MIT"
+description = "Safe Rust binding to ARPACK-ng"
+documentation = "https://docs.rs/arpack"
+repository = "https://github.com/termoshtt/arpack-ng-rust"
+keywords = ["eigenvalue", "eigenvector", "arpack"]
+categories = ["algorithms", "science"]
+
+[dependencies]
+arpack-ng-sys = "0.2.1"
+num-complex = "0.4.4"
+num-traits = "0.2.17"

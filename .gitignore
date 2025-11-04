@@ -1,0 +1,25 @@
+# Common files to ignore
+*.png
+*.txt
+*.h5
+*.npz
+*.pkl
+*.pyc
+**/target
+**/build
+**/*.egg*
+*.svg
+*.bin
+*.out
+*.err
+*.dat
+core.*
+
+# Environment-specific directories (ignored by default)
+/.cargo/
+/.vscode/
+/crates/
+
+# Exception: Keep tracking rust directory
+!/light-matter/src/**
+!/exciton/src/**
