@@ -9,9 +9,9 @@ debug = true
 
 [dependencies]
 indicatif = { version = "0.18", features = ["rayon"] } 
-ndarray = { version = "0.16.1", features = ["rayon"] }
+ndarray = {  workspace = true  }
 ndarray-linalg = { workspace = true }
-sprs = "0.11"
+# sprs = "0.11.3"
 plotters = "0.3"
 rayon = "1.7"
 num-complex = "0.4"

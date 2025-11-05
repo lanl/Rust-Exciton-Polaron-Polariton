@@ -44,12 +44,6 @@ pub fn calculate_photonic_character(
         }
     }
 
-    // // Calculate the total probability in photonic states (excluding ground state)
-    // let total_prob: f64 = eigenvector.iter().map(|a| a*a).sum();
-    // let photonic_prob: f64 = eigenvector.to_shape((n_ex, n_ph, n_pn)).unwrap()
-    //     .slice(s![..,0,..])
-    //     .sum();
-
     // Return the fraction of probability in photonic states
     photonic_prob / total_prob
 }
@@ -260,7 +254,7 @@ pub fn plot_color_band_structure(
     }
     
     // Set max energy to 0.3 or use calculated max
-    max_energy = max_energy.max(0.3);
+    max_energy = 0.0;
 
     // Add padding to the energy range (5%)
     let energy_padding = (max_energy - min_energy) * 0.05;
@@ -284,6 +278,8 @@ pub fn plot_color_band_structure(
             if band_idx < eigvals_list[i].len() && band_idx < photonic_character_list[i].len() {
                 let energy = eigvals_list[i][band_idx];
                 let photonic = photonic_character_list[i][band_idx];
+                
+                // We'll handle transparency in the gnuplot script
                 writeln!(file, "{} {} {}", x_val, energy, photonic)?;
             }
         }
@@ -294,8 +290,15 @@ pub fn plot_color_band_structure(
     let mut script = File::create(&script_path)?;
     
     // Write gnuplot script
-    writeln!(script, "set terminal pngcairo enhanced font 'Arial,12' size 1200,900")?;
+    writeln!(script, "set terminal pngcairo enhanced font 'Arial,40' size 2400,1800")?;
     writeln!(script, "set output '{}'", save_path)?;
+    
+    // Set margins to make room for the colorbar
+    writeln!(script, "set lmargin 10")?;
+    writeln!(script, "set rmargin 10")?;
+    writeln!(script, "set tmargin 3")?;
+    writeln!(script, "set bmargin 3")?;
+    
     writeln!(script, "set title 'Exciton-Polariton Band Structure (a₀={:.1}, V₀={:.1}, g={:.3})' font 'Arial,16'", a0, v0, coupling)?;
     writeln!(script, "set xlabel 'Wave vector'")?;
     writeln!(script, "set ylabel 'Energy (a.u.)'")?;
@@ -303,10 +306,33 @@ pub fn plot_color_band_structure(
     writeln!(script, "set yrange [{}:{}]", min_energy, max_energy)?;
     
     // Set up color palette - blue (excitonic) to red (photonic)
-    writeln!(script, "set palette defined (0 'blue', 0.5 'purple', 1 'red')")?;
-    writeln!(script, "set colorbox")?;
+    writeln!(script, "set palette rgbformulae 22,13,-22")?;
+    writeln!(script, "set colorbox vertical user origin 0.88,0.1 size 0.03,0.8")?;
     writeln!(script, "set cbrange [0:1]")?;
-    writeln!(script, "set cblabel 'Photonic Character'")?;
+    writeln!(script, "set cblabel 'Photonic Character' offset 2,0")?;
+    writeln!(script, "set cbtics 0.2")?;
+    
+    // Define color functions based on photonic character with transparency support
+    writeln!(script, "# Define RGB components for our color gradient - exactly matching the palette")?;
+    writeln!(script, "set angle degrees")?;
+    writeln!(script, "r(x) = 3*x-1 < 0 ? 0: (3*x-1 > 1) ? 1 : 3*x-1")?;
+    writeln!(script, "g(x) = sin(180*x)")?;
+    writeln!(script, "b(x) = 1-(3*x-1) < 0 ? 0: (1-(3*x-1) > 1) ? 1 : 1-(3*x-1)")?;
+    
+    writeln!(script, "# Define transparency function based on photonic character")?;
+    writeln!(script, "alpha(x) = x > 0.9 ? int(((x-0.9)/0.1*0.95)*255) : 0")?;
+    
+    writeln!(script, "# Create full ARGB color")?;
+    writeln!(script, "myColor(x) = (alpha(x)<<24) + (int(r(x)*0xff)<<16) + (int(g(x)*0xff)<<8) + int(b(x)*0xff)")?;
+    
+    // Create a dummy file for the colorbar
+    writeln!(script, "# Create a dummy file for the colorbar")?;
+    let colorbar_file = data_dir.join("colorbar.dat");
+    let mut cb_file = File::create(&colorbar_file)?;
+    for i in 0..101 {
+        let val = i as f64 / 100.0;
+        writeln!(cb_file, "{} 0 {}", val, val)?;
+    }
     
     // Set up x-axis with symmetry point labels
     write!(script, "set xtics (")?;
@@ -320,17 +346,22 @@ pub fn plot_color_band_structure(
     
     // Draw vertical lines at symmetry points
     for &pos in &sym_positions {
-        writeln!(script, "set arrow from {},{} to {},{} nohead lc rgb '#888888'", 
+        writeln!(script, "set arrow from {},{} to {},{} nohead lc rgb '#888888' lw 6", 
                  pos, min_energy, pos, max_energy)?;
     }
     
-    // Plot all bands with color mapping
+    // Plot all bands with color mapping and transparency
     write!(script, "plot ")?;
+    
+    // First add a dummy plot for the colorbar using palette
+    write!(script, "'{}' using 1:2:3 with points pt 7 ps 0 lc palette notitle", 
+           colorbar_file.display())?;
+    
+    // Then add all the bands
     for band_idx in 0..n_bands {
-        if band_idx > 0 {
-            write!(script, ", ")?;
-        }
-        write!(script, "'{}' using 1:2:3 with lines lw 2.5 palette notitle", 
+        write!(script, ", ")?;
+        // Use the myColor function that handles both color and transparency
+        write!(script, "'{}' using 1:2:(myColor($3)) with lines lw 8 lc rgb var notitle", 
                data_dir.join(format!("band_{}.dat", band_idx)).display())?;
     }
     writeln!(script)?;

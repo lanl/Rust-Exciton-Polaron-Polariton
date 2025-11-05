@@ -54,13 +54,15 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     let parity = 0;      // Parity of states to consider
     
     // Light-matter coupling parameters
-    let coupling = 0.005;  // Coupling strength
+    let total_coupling = 0.04;  // Coupling strength
     let omega_0 = 0.2;    // Photon frequency
-    
+    let n_modes = 16;
+    let coupling = total_coupling / (n_modes as f64);
+
     // Define photon modes
     // let qx_values = vec![0.0]; // Photon wavevectors along x
-    let qx_values = Array1::linspace(-0.001, 0.001, 16); // Photon wavevectors along x
-    let qy_values = Array1::linspace(-0.001, 0.001, 16);
+    let qx_values = Array1::linspace(-0.001, 0.001, n_modes); // Photon wavevectors along x
+    let qy_values = Array1::linspace(-0.001, 0.001, n_modes);
     let qz = omega_0 / C;
     let n_fock = 2;      // Dimension of Fock space
 
@@ -166,7 +168,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
 
         Method::SingEx => {
             timed_println!("Using Mat-Vec methods for light-matter coupling in single photon limit.");
-            let n_eig = 256 + 128;
+            let n_eig = 512;
             timed_println!("Calculating {} eigenstates", n_eig);
             
             let start_time = Instant::now();
@@ -214,7 +216,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
             timed_println!("Calculating color-coded band structure...");
             let (k_points_color, eigvals_list_color, photonic_character_list) = 
                 color_band_plot::calculate_color_band_structure(
-                    &mut pp, n_k_points, n_eig, &sym_points, &pp_config, diag_method, false); // Use cached data if available, sort bands for continuity
+                    &mut pp, n_k_points, n_eig, &sym_points, &pp_config, diag_method, true); // Use cached data if available, sort bands for continuity
 
             timed_println!("Calculated Band Structure in {:?}", Instant::now().duration_since(time1));
                 
@@ -239,12 +241,14 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
     
     // Light-matter coupling parameters
     // let coupling_values = Array1::linspace(0.00, 0.05, 1); // Scan from weak to strong coupling
-    let coupling_values = Array1::from_vec(vec![0.0, 0.0025, 0.005, 0.0075, 0.01]); // Scan from weak to strong coupling
+    let total_coupling_values = Array1::from_vec(vec![0.0, 0.02, 0.04, 0.06, 0.08]); // Scan from weak to strong coupling
     let omega_0 = 0.2;    // Photon frequency
+    let n_modes = 16;
+    let coupling_values = total_coupling_values /( n_modes as f64);
     
     // Define photon modes
-    let qx_values = Array1::linspace(-0.001, 0.001, 8); // Photon wavevectors along x
-    let qy_values = Array1::linspace(-0.001, 0.001, 8);
+    let qx_values = Array1::linspace(-0.001, 0.001, n_modes); // Photon wavevectors along x
+    let qy_values = Array1::linspace(-0.001, 0.001, n_modes);
     let qz = omega_0 / C;
 
     let q_values: Vec<Vector3D> = qx_values.iter().flat_map(|qx| {
@@ -259,10 +263,10 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
     let pn_n_fock = 16;
 
     // Parameters for dielectric function calculation
-    let n_eig = 1024 + 128;  // Number of eigenstates to use
+    let n_eig = 4096+128;  // Number of eigenstates to use
     let omegas = Array1::linspace(0.1, 0.25, 10000);  // Frequency range
     let gamma = 1e-5;  // Broadening parameter
-    let diag_method = sing_ex::DiagonalizationMethod::Arpack;
+    let diag_method = sing_ex::DiagonalizationMethod::SLEPc;
 
     // Create directory for saving results
     let save_dir = "dielectric_scan";

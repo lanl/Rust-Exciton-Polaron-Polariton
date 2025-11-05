@@ -4,7 +4,7 @@ use ndarray::{arr1, Array1, Array2};
 use std::path::Path;
 use indicatif::{ProgressBar, ProgressStyle};
 
-use sprs::{kronecker_product as kron, smmp::mul_csr_csr, CsMat, CsMatBase, TriMat};
+use sprs::{kronecker_product as kron, smmp::mul_csr_csr, CsMat, TriMat};
 use arpack::{Config, Operator}; 
 
 use crate::utils::{PhotonMode, LMMatrixElement};//, save_band_data};
@@ -31,7 +31,15 @@ impl PhotonicHamiltonian {
             &Array1::linspace(0.0, mode.omega * n_max, mode.n_fock)
         );
 
-        sprs::CsMatI::csr_from_dense(dense.view(), 1e-10)
+        // Convert to sparse matrix manually to avoid ndarray version mismatch
+        let mut tri_mat = TriMat::new((n_fock, n_fock));
+        for i in 0..n_fock {
+            let val = dense[[i, i]];
+            if val.abs() > 1e-10 {
+                tri_mat.add_triplet(i, i, val);
+            }
+        }
+        tri_mat.to_csr()
     } 
 
     pub fn get_h_ph_sing_full_sprs(&self, mode_i: usize) -> CsMat<f64> {
@@ -390,7 +398,15 @@ impl LightMatter {
             .fold(1, |acc, mode| acc * mode.n_fock);
                 
         // Add exciton Hamiltonian terms (diagonal in exciton basis)
-        let h_ex: CsMat<f64> = CsMatBase::csr_from_dense(Array2::from_diag(&self.exciton_energies).view(), 1e-10);
+        // Create sparse matrix manually to avoid ndarray version mismatch
+        let mut tri_mat = TriMat::new((n_ex, n_ex));
+        for i in 0..n_ex {
+            let val = self.exciton_energies[i];
+            if val.abs() > 1e-10 {
+                tri_mat.add_triplet(i, i, val);
+            }
+        }
+        let h_ex: CsMat<f64> = tri_mat.to_csr();
         
         // Get photonic Hamiltonian (sparse)
         let h_ph = self.photon.get_h_ph_sparse();

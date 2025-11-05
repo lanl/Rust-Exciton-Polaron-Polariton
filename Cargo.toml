@@ -12,3 +12,4 @@ arpack = { path = "./arpack" }
 
 [workspace.dependencies]
 ndarray-linalg = { version = "0.17.0", features = ["intel-mkl-static"] }
+ndarray = { version = "0.16.1", features = ["rayon"]  }
