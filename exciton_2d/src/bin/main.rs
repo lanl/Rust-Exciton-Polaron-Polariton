@@ -33,7 +33,7 @@ struct Args {
     recalculate: bool,
     
     /// Force recalculation of band structure
-    #[clap(long)]
+    #[clap(long, default_value_t = true)]
     recalculate_bands: bool,
     
     /// Number of parallel jobs (-1 for all cores)
@@ -45,7 +45,7 @@ struct Args {
     n_rel_states: usize,
     
     /// Number of bands to calculate
-    #[clap(long, default_value_t = 5)]
+    #[clap(long, default_value_t = 16)]
     n_bands: usize,
     
     /// Directory to save output figures
@@ -65,18 +65,32 @@ struct Args {
     n_kappa: usize,
 }
 
-fn main() {
-    // Parse command-line arguments
-    let args = Args::parse();
+fn plot_n_colored_bands(system: &Exciton2DGridSystem, args: &Args) {
+    println!("Calculating n-colored band structure...");
     
-    // Set up logging
-    env_logger::Builder::new()
-        .filter_level(LevelFilter::Info)
-        .init();
+    // Calculate band structure with n-expectation values
+    let (k_points, eigvals_list, n_expectation_list) = system.calculate_n_colored_band_structure(
+        600,
+        args.n_rel_states,
+        args.n_bands,
+        args.recalculate_bands,
+        0, // select_parity = 0 means both parities
+    );
     
-    // Create output directory if it doesn't exist
-    std::fs::create_dir_all(&args.output_dir).expect("Failed to create output directory");
+    // Plot the band structure
+    let band_path = format!("{}/n_colored_band_structure_a0{}_v0{}.png", 
+                           args.output_dir, system.a0, system.v0);
     
+    system.plot_n_colored_band_structure(
+        &k_points, 
+        &eigvals_list, 
+        &n_expectation_list, 
+        args.n_bands,
+        band_path.as_str()
+    ).unwrap_or_else(|e| println!("Failed to plot n-colored band structure: {}", e));
+}
+
+fn scan_parameters(args: &Args) {
     // List of lattice constants and potential strengths to run
     let a0_list = vec![3.5];
     let v0_list = vec![0.1, 0.2];
@@ -149,4 +163,44 @@ fn main() {
             system.plot_band_structure(&k_points, &eigvals_list, &parities_list, Some(&band_path));
         }
     }
+}
+
+fn main() {
+    // Parse command-line arguments
+    let args = Args::parse();
+    
+    // Set up logging
+    env_logger::Builder::new()
+        .filter_level(LevelFilter::Info)
+        .init();
+    
+    // Create output directory if it doesn't exist
+    std::fs::create_dir_all(&args.output_dir).expect("Failed to create output directory");
+
+    // Create configuration
+    let config = ExcitonConfig {
+        n_kappa: 11,
+        a0: 9.0,
+        v0: 0.05,
+        k: vec![0.0, 0.0],
+        m_e: 0.3,
+        m_h: 0.3,
+        verbose: false,
+        grid_size: 64,
+        box_size: 3.0,
+        save_dir: PathBuf::from(&args.save_dir),
+        recalculate: false,
+        n_jobs: 32,
+        use_gpu: false,
+        batch_size: 32,
+    };
+    
+    // Create the 2D exciton system
+    let system = Exciton2DGridSystem::from_config(config);
+
+    plot_n_colored_bands(&system, &args);
+
+    scan_parameters(&args);
+
+    
 }

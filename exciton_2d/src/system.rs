@@ -294,4 +294,44 @@ impl Exciton2DGridSystem {
     ) {
         plot_band_structure(k_points, eigvals_list, parities_list, self.a0, save_path, false);
     }
+
+    pub fn calculate_n_colored_band_structure(
+        &self,
+        n_points: usize,
+        n_rel_states: usize,
+        n_bands: usize,
+        recalculate_bands: bool,
+        select_parity: i32,
+    ) -> (Vec<Vec<f64>>, Vec<Array1<f64>>, Vec<Vec<f64>>) {
+        crate::visualization::calculate_n_colored_band_structure(
+            &self.full_ham,
+            n_points,
+            n_rel_states,
+            n_bands,
+            self.a0,
+            self.v0,
+            select_parity,
+            &self.save_dir,
+            recalculate_bands,
+        )
+    }
+
+    pub fn plot_n_colored_band_structure(
+        &self,
+        k_points: &Vec<Vec<f64>>,
+        eigvals_list: &Vec<Array1<f64>>,
+        n_expectation_list: &Vec<Vec<f64>>,
+        n_bands: usize,
+        save_path: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        crate::visualization::plot_n_colored_band_structure(
+            k_points,
+            eigvals_list,
+            n_expectation_list,
+            n_bands,
+            self.a0,
+            save_path,
+            self.v0,
+        )
+    }
 }

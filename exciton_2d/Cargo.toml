@@ -24,6 +24,7 @@ clap = { version = "4.3", features = ["derive"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 ordered-float = "5.0.0"
+bincode = "1.3"
 
 [patch.crates-io]
 arpack-ng-sys = { version = "0.2.1", features = ["system"] }
