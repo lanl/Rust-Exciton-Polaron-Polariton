@@ -1,10 +1,15 @@
-// src/bin/main.rs
+//! Main executable for the exciton 2D simulation
+//!
+//! This program calculates exciton properties in 2D materials with periodic potentials.
+//! It can compute band structures, eigenstates, and other properties of the system.
+
 use clap::Parser;
 use exciton_2d::{Exciton2DGridSystem, ExcitonConfig};
 use log::{LevelFilter};
 use std::path::PathBuf;
 use std::time::Instant;
 
+/// Command-line arguments for the exciton 2D simulation
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
 struct Args {
@@ -65,6 +70,11 @@ struct Args {
     n_kappa: usize,
 }
 
+/// Calculates and plots band structure with n-expectation values as colors
+///
+/// # Arguments
+/// * `system` - The exciton system
+/// * `args` - Command-line arguments
 fn plot_n_colored_bands(system: &Exciton2DGridSystem, args: &Args) {
     println!("Calculating n-colored band structure...");
     
@@ -90,6 +100,10 @@ fn plot_n_colored_bands(system: &Exciton2DGridSystem, args: &Args) {
     ).unwrap_or_else(|e| println!("Failed to plot n-colored band structure: {}", e));
 }
 
+/// Scans over multiple parameter values and calculates properties
+///
+/// # Arguments
+/// * `args` - Command-line arguments
 fn scan_parameters(args: &Args) {
     // List of lattice constants and potential strengths to run
     let a0_list = vec![3.5];
@@ -165,6 +179,9 @@ fn scan_parameters(args: &Args) {
     }
 }
 
+/// Main function
+///
+/// Parses command-line arguments, sets up the system, and runs calculations.
 fn main() {
     // Parse command-line arguments
     let args = Args::parse();
@@ -175,7 +192,10 @@ fn main() {
         .init();
     
     // Create output directory if it doesn't exist
-    std::fs::create_dir_all(&args.output_dir).expect("Failed to create output directory");
+    if let Err(e) = std::fs::create_dir_all(&args.output_dir) {
+        eprintln!("Warning: Failed to create output directory {}: {}", args.output_dir, e);
+        eprintln!("Will attempt to continue, but saving outputs may fail.");
+    }
 
     // Create configuration
     let config = ExcitonConfig {

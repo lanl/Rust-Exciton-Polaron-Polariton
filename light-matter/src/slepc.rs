@@ -102,6 +102,10 @@ pub fn diagonalize_slepc(
 
         },
         Some(EPSType::GeneralizedDavidson) => unsafe {EPSGDSetBlockSize(solver.eps, block_size as c_int);},
+        Some(EPSType::KrylovSchur) => {
+            let mpd = Some(block_size * 4);
+            let ncv = Some(mpd.unwrap() + n_eig);
+            solver.set_dimensions(n_eig, ncv, Some(block_size * 4)).expect("Failed to set dimensions");}
         _ => {}
     }
     

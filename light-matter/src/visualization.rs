@@ -8,60 +8,196 @@ use std::collections::HashMap;
 
 use crate::timed_println;
 
+/// Structure to hold parameters extracted from dielectric function filenames
+#[derive(Debug, Clone)]
+pub struct DielectricParams {
+    pub a0: f64,
+    pub v0: f64,
+    pub n_rel: usize,
+    pub lm_coupling: f64,
+    pub n_modes: usize,
+    pub pn_coupling: f64,
+    pub pn_n_fock: usize,
+    pub n_eig: usize,
+    pub gamma: f64,
+}
+
+/// Helper function to extract all parameters from a dielectric function filename
+fn extract_params_from_filename(path: &Path) -> Option<DielectricParams> {
+    let filename = path.file_name()?.to_str()?;
+    
+    // Skip if not a dielectric function file
+    if !filename.starts_with("dielectric_") {
+        return None;
+    }
+    
+    let parts: Vec<&str> = filename.split('_').collect();
+    let mut params = DielectricParams {
+        a0: 0.0,
+        v0: 0.0,
+        n_rel: 0,
+        lm_coupling: 0.0,
+        n_modes: 0,
+        pn_coupling: 0.0,
+        pn_n_fock: 0,
+        n_eig: 0,
+        gamma: 0.0,
+    };
+    
+    for part in parts.iter() {
+        if part.starts_with("a0") {
+            params.a0 = part[2..].parse::<f64>().unwrap_or(0.0);
+        } else if part.starts_with("V0") {
+            params.v0 = part[2..].parse::<f64>().unwrap_or(0.0);
+        } else if part.starts_with("nrel") {
+            params.n_rel = part[4..].parse::<usize>().unwrap_or(0);
+        } else if part.starts_with("lmcoup") {
+            params.lm_coupling = part[6..].parse::<f64>().unwrap_or(0.0);
+        } else if part.starts_with("nmodes") {
+            params.n_modes = part[6..].parse::<usize>().unwrap_or(0);
+        } else if part.starts_with("pncoup") {
+            params.pn_coupling = part[6..].parse::<f64>().unwrap_or(0.0);
+        } else if part.starts_with("npn") {
+            params.pn_n_fock = part[3..].parse::<usize>().unwrap_or(0);
+        } else if part.starts_with("neig") {
+            params.n_eig = part[4..].parse::<usize>().unwrap_or(0);
+        } else if part.starts_with("gamma") {
+            let gamma_str = part[5..].trim_end_matches(".dat");
+            params.gamma = gamma_str.parse::<f64>().unwrap_or(0.0);
+        }
+    }
+    
+    Some(params)
+}
+
 /// Plots the dielectric function for different coupling strengths
 pub fn plot_dielectric_function(
     dir_path: &str,                // Directory containing dielectric function data files
     save_path: Option<&str>,       // Path to save the plot
     plot_type: DielectricPlotType, // Which part of the dielectric function to plot
     omega_range: Option<(f64, f64)>, // Optional frequency range to plot
-    coupling_values: &Array1<f64>
+    coupling_values: &Array1<f64>,
+    reference_params: Option<&DielectricParams> // Optional reference parameters to match against
 ) -> Result<(), Box<dyn std::error::Error>> {
+    timed_println!("Plotting dielectric function from directory: {}", dir_path);
     // Get all dielectric function files in the directory
     let dir = Path::new(dir_path);
-    let mut files = std::fs::read_dir(dir)?
+    let mut files_with_params = std::fs::read_dir(dir)?
         .filter_map(|entry| {
             let entry = entry.ok()?;
             let path = entry.path();
             if path.is_file() && path.extension()?.to_str()? == "dat" {
-                Some(path)
-            } else {
-                None
+                // Extract parameters from filename
+                if let Some(params) = extract_params_from_filename(&path) {
+                    // Check if this coupling value is EXACTLY in our list (with small tolerance)
+                    let coupling_match = coupling_values.iter().any(|&c| (c - params.lm_coupling).abs() < 1e-10);
+                    
+                    // Check if other parameters match the reference parameters (if provided)
+                    let params_match = if let Some(ref_params) = reference_params {
+                        // Allow small tolerance for floating point comparisons
+                        let a0_match = (params.a0 - ref_params.a0).abs() < 1e-6;
+                        let v0_match = (params.v0 - ref_params.v0).abs() < 1e-6;
+                        let n_rel_match = params.n_rel == ref_params.n_rel;
+                        let n_modes_match = params.n_modes == ref_params.n_modes;
+                        let pn_coupling_match = (params.pn_coupling - ref_params.pn_coupling).abs() < 1e-6;
+                        let pn_n_fock_match = params.pn_n_fock == ref_params.pn_n_fock;
+                        
+                        // We don't check n_eig and gamma as they might vary between calculations
+                        
+                        let all_match = a0_match && v0_match && n_rel_match && n_modes_match && 
+                                       pn_coupling_match && pn_n_fock_match;
+                        
+                        if !all_match {
+                            timed_println!("Parameter mismatch for file with coupling {:.4}: {}", 
+                                         params.lm_coupling, path.display());
+                            if !a0_match { timed_println!("  a0: {} vs {}", params.a0, ref_params.a0); }
+                            if !v0_match { timed_println!("  v0: {} vs {}", params.v0, ref_params.v0); }
+                            if !n_rel_match { timed_println!("  n_rel: {} vs {}", params.n_rel, ref_params.n_rel); }
+                            if !n_modes_match { timed_println!("  n_modes: {} vs {}", params.n_modes, ref_params.n_modes); }
+                            if !pn_coupling_match { timed_println!("  pn_coupling: {} vs {}", params.pn_coupling, ref_params.pn_coupling); }
+                            if !pn_n_fock_match { timed_println!("  pn_n_fock: {} vs {}", params.pn_n_fock, ref_params.pn_n_fock); }
+                        }
+                        
+                        all_match
+                    } else {
+                        // If no reference parameters provided, only match on coupling
+                        true
+                    };
+                    
+                    if coupling_match && params_match {
+                        timed_println!("Found matching file for coupling {:.4}: {}", params.lm_coupling, path.display());
+                        return Some((path, params));
+                    } else {
+                        // Debug: print skipped files and their coupling values
+                        timed_println!("Skipping file with coupling {:.4} (not in requested list): {}", 
+                                     params.lm_coupling, path.display());
+                    }
+                } else if let Some(coupling) = extract_coupling_from_filename(&path) {
+                    // Fall back to old format
+                    let coupling_match = coupling_values.iter().any(|&c| (c - coupling).abs() < 1e-10);
+                    if coupling_match {
+                        // Create a default params object with just the coupling
+                        let default_params = DielectricParams {
+                            a0: 0.0,
+                            v0: 0.0,
+                            n_rel: 0,
+                            lm_coupling: coupling,
+                            n_modes: 0,
+                            pn_coupling: 0.0,
+                            pn_n_fock: 0,
+                            n_eig: 0,
+                            gamma: 0.0,
+                        };
+                        timed_println!("Found matching file (old format) for coupling {:.4}: {}", coupling, path.display());
+                        return Some((path, default_params));
+                    } else {
+                        timed_println!("Skipping file with coupling {:.4} (old format, not in requested list): {}", 
+                                     coupling, path.display());
+                    }
+                } else {
+                    timed_println!("Skipping file (couldn't extract coupling): {}", path.display());
+                }
             }
+            None
         })
         .collect::<Vec<_>>();
+        
+    // Print the requested coupling values for comparison
+    timed_println!("Requested coupling values: {:?}", coupling_values);
     
     // Sort files by coupling strength
-    files.sort_by(|a, b| {
-        let coupling_a = extract_coupling_from_filename(a).unwrap_or(0.0);
-        let coupling_b = extract_coupling_from_filename(b).unwrap_or(0.0);
-        coupling_a.partial_cmp(&coupling_b).unwrap()
+    files_with_params.sort_by(|(_, params_a), (_, params_b)| {
+        params_a.lm_coupling.partial_cmp(&params_b.lm_coupling).unwrap()
     });
     
-    if files.is_empty() {
-        return Err("No dielectric function data files found".into());
+    if files_with_params.is_empty() {
+        return Err("No matching dielectric function data files found".into());
+    }
+    
+    // Check if we found exactly the number of files we expected
+    if files_with_params.len() != coupling_values.len() {
+        timed_println!("Warning: Found {} files but expected {} (one for each coupling value)", 
+                     files_with_params.len(), coupling_values.len());
+        
+        // Print what we found vs what we expected
+        let found_couplings: Vec<f64> = files_with_params.iter()
+            .map(|(_, params)| params.lm_coupling)
+            .collect();
+        timed_println!("Found couplings: {:?}", found_couplings);
+        timed_println!("Expected couplings: {:?}", coupling_values);
+    } else {
+        timed_println!("Found exactly {} matching dielectric function files as expected", files_with_params.len());
     }
     
     // Load data from files
-    let mut all_data: HashMap<PathBuf, (Vec<f64>, Vec<f64>, Vec<f64>)> = HashMap::new();
+    let mut all_data: HashMap<PathBuf, (Vec<f64>, Vec<f64>, Vec<f64>, DielectricParams)> = HashMap::new();
     let mut omega_min = f64::INFINITY;
     let mut omega_max = f64::NEG_INFINITY;
     let mut eps_min: (f64, f64)   = (f64::INFINITY, f64::INFINITY);
     let mut eps_max: (f64, f64)   = (f64::NEG_INFINITY, f64::NEG_INFINITY);
     
-    for file_path in &files {
+    for (file_path, params) in &files_with_params {
         let (omegas, re_eps, im_eps) = load_dielectric_data(file_path)?;
-
-        let coupling = extract_coupling_from_filename(file_path).unwrap_or(f64::NAN);
-
-        if coupling.is_nan() {
-            continue;
-        }
-
-        let coupling_match = (coupling_values - coupling).abs().into_iter().min_by(|x, y| x.partial_cmp(y).unwrap()).unwrap() > 1e-10;
-
-        if coupling_match{
-            continue;
-        }
         
         // Update min/max values
         if let Some(&min_omega) = omegas.iter().min_by(|a, b| a.partial_cmp(b).unwrap()) {
@@ -71,22 +207,18 @@ pub fn plot_dielectric_function(
             omega_max = omega_max.max(max_omega);
         }
         
-
-
         let chart_data = (Array1::from_vec(re_eps.clone()), Array1::from_vec(im_eps.clone()));
 
         let mean = (chart_data.0.mean().unwrap(), chart_data.1.mean().unwrap());
         let mean2 = ((&chart_data.0*&chart_data.0).mean().unwrap(), (&chart_data.1*&chart_data.1).mean().unwrap());
         
-        // timed_println!("Mean is {:?}", mean);
         let sigma = ((mean2.0 - mean.0 * mean.0).sqrt(), (mean2.1 - mean.1* mean.1).sqrt());
-        // timed_println!("Standard Deviation is {:?}", sigma);
 
         let factor = 1.0;
         eps_min = (eps_min.0.min(mean.0-factor*sigma.0), eps_min.1.min(mean.1-factor*sigma.1));
         eps_max = (eps_max.0.max(mean.0+factor*sigma.0), eps_max.1.max(mean.1+factor*sigma.1));
         
-        all_data.insert(file_path.clone(), (omegas, re_eps, im_eps));
+        all_data.insert(file_path.clone(), (omegas, re_eps, im_eps, params.clone()));
     }
     
     // Apply omega range if specified
@@ -102,35 +234,54 @@ pub fn plot_dielectric_function(
     
     // Create the plot
     let save_path = save_path.unwrap_or("dielectric_function.svg");
-    let root = SVGBackend::new(save_path, (1200, 900)).into_drawing_area();
+    let root = SVGBackend::new(save_path, (1600, 1000)).into_drawing_area(); // Increased plot size
     root.fill(&WHITE)?;
     
     // Split the drawing area for multiple plots if needed
     let areas = if plot_type == DielectricPlotType::Both {
-        let (top, bottom) = root.split_vertically(450);
+        let (top, bottom) = root.split_vertically(500); // Adjusted for new dimensions
         vec![top, bottom]
     } else {
         vec![root.clone()]
     };
     
-    // Get sorted couplings
-    let mut couplings: Vec<(PathBuf,f64)> = all_data.keys().map(|file_path| {
-        (file_path.clone(), extract_coupling_from_filename(file_path).unwrap_or(0.0))
+    // Get sorted couplings with file paths
+    let mut couplings: Vec<(PathBuf, f64)> = all_data.iter().map(|(file_path, (_, _, _, params))| {
+        (file_path.clone(), params.lm_coupling)
     }).collect();
-    couplings.sort_by(|(_,a), (_,b)| a.partial_cmp(b).unwrap());
+    couplings.sort_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap());
     
-    // Plot title
-    let title = match plot_type {
+    // Extract common parameters for the title
+    let mut common_params = None;
+    for (_, (_, _, _, params)) in all_data.iter() {
+        if common_params.is_none() {
+            common_params = Some(params.clone());
+        }
+    }
+    
+    // Plot title with parameters
+    let title_base = match plot_type {
         DielectricPlotType::Real => "Real Part of Dielectric Function",
         DielectricPlotType::Imaginary => "Imaginary Part of Dielectric Function",
         DielectricPlotType::Both => "Dielectric Function",
+    };
+    
+    let title = if let Some(params) = common_params {
+        if params.n_modes > 0 {
+            format!("{} (a₀={:.1}, V₀={:.3}, {} modes)", 
+                   title_base, params.a0, params.v0, params.n_modes)
+        } else {
+            title_base.to_string()
+        }
+    } else {
+        title_base.to_string()
     };
     
     // Plot the real part
     if plot_type == DielectricPlotType::Real || plot_type == DielectricPlotType::Both {
         let area_index = if plot_type == DielectricPlotType::Both { 0 } else { 0 };
         let mut chart = ChartBuilder::on(&areas[area_index])
-            .caption(format!("{} - Real Part", title), ("sans-serif", 30).into_font())
+            .caption(format!("{} - Real Part", title), ("sans-serif", 30).into_font().color(&BLACK))
             .margin(10)
             .margin_top(20)
             .margin_bottom(10)
@@ -143,12 +294,13 @@ pub fn plot_dielectric_function(
             .y_desc("Re[ε(ω)]")
             .axis_desc_style(("sans-serif", 20))
             .label_style(("sans-serif", 18))
+            .disable_mesh() // Remove fine grid lines
             .draw()?;
         
 
         
         for (i, (key, coupling)) in couplings.iter().enumerate() {
-            let (omegas, re_eps, _) = &all_data[key];
+            let (omegas, re_eps, _, params) = &all_data[key];
             
             // Create a color gradient from blue to red
             let color = RGBColor(
@@ -164,23 +316,31 @@ pub fn plot_dielectric_function(
                 .map(|(&omega, &eps)| (omega, eps))
                 .collect();
             
+            // Create a more detailed label if we have the parameters
+            let label = if params.n_modes > 0 {
+                format!("g = {:.3}, {} modes", coupling, params.n_modes)
+            } else {
+                format!("g = {:.3}", coupling)
+            };
+            
             chart.draw_series(LineSeries::new(
                 points,
                 ShapeStyle {
                     color: color.into(),
                     filled: true,
-                    stroke_width: 5,
+                    stroke_width: 6, // Increased line thickness
                 }
-            ))?.label(format!("g = {:.3}", coupling))
+            ))?.label(label)
               .legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], color));
         }
          
         // Add legend
         chart.configure_series_labels()
-            .background_style(&WHITE.mix(0.8))
+            .background_style(&WHITE.mix(0.9)) // More opaque background
             .border_style(&BLACK)
-            .label_font(("sans-serif", 15))
+            .label_font(("sans-serif", 16)) // Slightly larger font
             .position(SeriesLabelPosition::UpperRight)
+            .margin(15) // Add some margin around the legend text
             .draw()?;
     }
     
@@ -188,24 +348,25 @@ pub fn plot_dielectric_function(
     if plot_type == DielectricPlotType::Imaginary || plot_type == DielectricPlotType::Both {
         let area_index = if plot_type == DielectricPlotType::Both { 1 } else { 0 };
         let mut chart = ChartBuilder::on(&areas[area_index])
-            .caption(format!("{} - Imaginary Part", title), ("sans-serif", 30).into_font())
+            .caption(format!("{} - Imaginary Part", title), ("sans-serif", 30).into_font().color(&BLACK))
             .margin(10)
             .margin_top(20)
             .margin_bottom(10)
             .x_label_area_size(40)
             .y_label_area_size(60)
-            .build_cartesian_2d(omega_min..omega_max, eps_min.1..eps_max.1)?;
+            .build_cartesian_2d(omega_min..omega_max, 2.0*eps_min.1..eps_max.0 * 0.05)?;
         
         chart.configure_mesh()
             .x_desc("Frequency (a.u.)")
             .y_desc("Im[ε(ω)]")
             .axis_desc_style(("sans-serif", 20))
             .label_style(("sans-serif", 18))
+            .disable_mesh() // Remove fine grid lines
             .draw()?;
         
         // Draw each coupling strength with a different color
         for (i, (key, coupling)) in couplings.iter().enumerate() {
-            let (omegas, _, im_eps) = &all_data[key];
+            let (omegas, _, im_eps, params) = &all_data[key];
             
             // Create a color gradient from blue to red
             let color = RGBColor(
@@ -221,24 +382,34 @@ pub fn plot_dielectric_function(
                 .map(|(&omega, &eps)| (omega, eps))
                 .collect();
             
+            // Create a more detailed label if we have the parameters
+            let label = if params.n_modes > 0 {
+                format!("g = {:.3}, {} modes", coupling, params.n_modes)
+            } else {
+                format!("g = {:.3}", coupling)
+            };
+            
             chart.draw_series(LineSeries::new(
                 points,
                 ShapeStyle {
                     color: color.into(),
                     filled: true,
-                    stroke_width: 5,
+                    stroke_width: 6, // Increased line thickness
                 }
-            ))?.label(format!("g = {:.3}", coupling))
+            ))?.label(label)
               .legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], color));
         }
         
-        // Add legend
-        chart.configure_series_labels()
-            .background_style(&WHITE.mix(0.8))
-            .border_style(&BLACK)
-            .label_font(("sans-serif", 15))
-            .position(SeriesLabelPosition::UpperRight)
-            .draw()?;
+        if plot_type == DielectricPlotType::Imaginary {
+            // Add legend
+            chart.configure_series_labels()
+                .background_style(&WHITE.mix(0.9)) // More opaque background
+                .border_style(&BLACK)
+                .label_font(("sans-serif", 16)) // Slightly larger font
+                .position(SeriesLabelPosition::LowerRight)
+                .margin(15) // Add some margin around the legend text
+                .draw()?;
+        }
     }
     
     // Present the final plot
@@ -253,6 +424,14 @@ fn extract_coupling_from_filename(path: &Path) -> Option<f64> {
     let filename = path.file_name()?.to_str()?;
     let parts: Vec<&str> = filename.split('_').collect();
     
+    // Try the new format first
+    for part in parts.iter() {
+        if part.starts_with("lmcoup") {
+            return part[6..].parse::<f64>().ok();
+        }
+    }
+    
+    // Fall back to the old format
     for (i, part) in parts.iter().enumerate() {
         if *part == "coupling" && i + 1 < parts.len() {
             return parts[i + 1].trim_end_matches(".dat").parse::<f64>().ok();
@@ -263,7 +442,7 @@ fn extract_coupling_from_filename(path: &Path) -> Option<f64> {
 }
 
 /// Helper function to load dielectric function data from a file
-fn load_dielectric_data(path: &Path) -> Result<(Vec<f64>, Vec<f64>, Vec<f64>), Box<dyn std::error::Error>> {
+pub fn load_dielectric_data(path: &Path) -> Result<(Vec<f64>, Vec<f64>, Vec<f64>), Box<dyn std::error::Error>> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
     

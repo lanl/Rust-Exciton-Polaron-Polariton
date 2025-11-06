@@ -1,4 +1,8 @@
-// src/system.rs
+//! Main system module for exciton simulations
+//!
+//! This module provides the main system class that integrates all components
+//! for simulating excitons in 2D materials.
+
 use crate::band_structure::BandStructureCalculator;
 use crate::config::ExcitonConfig;
 use crate::grid::Grid;
@@ -6,6 +10,7 @@ use crate::hamiltonian::{FullHamiltonian, RelativeHamiltonian};
 use crate::matrix_elements::MatrixElementCalculator;
 use crate::utils::print_memory_usage;
 use crate::visualization::{plot_band_structure, plot_rel_eigenstate, plot_spectrum};
+use crate::band_structure::calculate_n_colored_band_structure;
 
 use log::{info, warn};
 use ndarray::{Array1, Array2};
@@ -15,6 +20,17 @@ use std::path::Path;
 use std::time::Instant;
 use ordered_float::OrderedFloat;
 
+/// Main system class for exciton simulations in 2D materials
+///
+/// This struct serves as the central interface for simulating excitons in 2D materials
+/// with periodic potentials. It integrates all components needed for the simulation:
+/// - Grid for spatial discretization
+/// - Hamiltonian for energy calculations
+/// - Matrix element calculator for potential terms
+/// - Band structure calculator for dispersion relations
+///
+/// It provides methods for solving the exciton Hamiltonian, calculating band structures,
+/// and visualizing results.
 pub struct Exciton2DGridSystem {
     pub n_kappa: usize,
     pub a0: f64,
@@ -43,6 +59,23 @@ pub struct Exciton2DGridSystem {
 }
 
 impl Exciton2DGridSystem {
+    /// Creates a new exciton system with the specified parameters
+    ///
+    /// # Arguments
+    /// * `n_kappa` - Number of reciprocal lattice vectors in each dimension
+    /// * `a0` - Lattice constant
+    /// * `v0` - Potential strength
+    /// * `k` - Wave vector
+    /// * `m_e` - Electron effective mass
+    /// * `m_h` - Hole effective mass
+    /// * `verbose` - Whether to print detailed information
+    /// * `grid_size` - Number of grid points in each dimension
+    /// * `box_size` - Physical size of the simulation box
+    /// * `save_dir` - Directory to save/load data
+    /// * `recalculate` - Whether to force recalculation of results
+    /// * `n_jobs` - Number of parallel jobs (-1 for all cores)
+    /// * `use_gpu` - Whether to use GPU acceleration
+    /// * `batch_size` - Batch size for memory-intensive operations
     pub fn new(
         n_kappa: usize,
         a0: f64,
@@ -61,7 +94,17 @@ impl Exciton2DGridSystem {
     ) -> Self {
         // Create save directory if it doesn't exist
         if !Path::new(&save_dir).exists() {
-            fs::create_dir_all(&save_dir).expect("Failed to create save directory");
+            match fs::create_dir_all(&save_dir) {
+                Ok(_) => {
+                    if verbose {
+                        info!("Created save directory: {}", save_dir);
+                    }
+                },
+                Err(e) => {
+                    warn!("Failed to create save directory {}: {}", save_dir, e);
+                    // Continue anyway, operations that need the directory will fail later
+                }
+            }
         }
         
         // Masses for CoM and relative motion
@@ -128,6 +171,10 @@ impl Exciton2DGridSystem {
         }
     }
     
+    /// Creates a new exciton system from a configuration object
+    ///
+    /// # Arguments
+    /// * `config` - Configuration object with all parameters
     pub fn from_config(config: ExcitonConfig) -> Self {
         Self::new(
             config.n_kappa,
@@ -147,6 +194,26 @@ impl Exciton2DGridSystem {
         )
     }
     
+    /// Sets up the reciprocal lattice vectors and potential terms
+    ///
+    /// This method constructs the reciprocal lattice vectors for a 2D square lattice
+    /// and computes the Fourier coefficients of the periodic potential. It also builds
+    /// a lookup table for efficient vector sum calculations.
+    ///
+    /// The potential is assumed to have the form V(r) = v0 * (cos(2π*x/a0) + cos(2π*y/a0)),
+    /// which corresponds to a square lattice with lattice constant a0.
+    ///
+    /// # Arguments
+    /// * `n_kappa` - Number of reciprocal lattice vectors in each dimension
+    /// * `a0` - Lattice constant
+    /// * `v0` - Potential strength
+    /// * `verbose` - Whether to print detailed information
+    ///
+    /// # Returns
+    /// * Tuple containing:
+    ///   - Vector of reciprocal lattice vectors
+    ///   - HashMap mapping vectors to potential coefficients
+    ///   - HashMap for efficient vector sum lookups
     fn setup_reciprocal_lattice(
         n_kappa: usize,
         a0: f64,
@@ -246,10 +313,27 @@ impl Exciton2DGridSystem {
     }
 
     
+    /// Solves the relative coordinate Hamiltonian
+    ///
+    /// # Arguments
+    /// * `k_eigvals` - Number of eigenvalues to compute
+    ///
+    /// # Returns
+    /// * Tuple containing eigenvalues, eigenvectors, and parity values
     pub fn solve_rel_hamiltonian(&self, k_eigvals: usize) -> (Array1<f64>, Array2<f64>, Array1<i32>) {
         self.rel_ham.solve(k_eigvals)
     }
     
+    /// Diagonalizes the full Hamiltonian including center-of-mass motion
+    ///
+    /// # Arguments
+    /// * `n_rel_states` - Number of relative coordinate states to include
+    /// * `k_eigvals` - Number of eigenvalues to compute
+    /// * `select_parity` - Parity selection (0: both, 1: even, -1: odd)
+    ///
+    /// # Returns
+    /// * Tuple containing eigenvalues, eigenvectors, relative eigenvalues,
+    ///   relative eigenvectors, and parity values
     pub fn diagonalize_full_hamiltonian(
         &self,
         n_rel_states: usize,
@@ -259,14 +343,36 @@ impl Exciton2DGridSystem {
         self.full_ham.diagonalize_full_hamiltonian(n_rel_states, k_eigvals, select_parity)
     }
     
+    /// Plots a relative coordinate eigenstate
+    ///
+    /// # Arguments
+    /// * `eigvec` - Eigenstate vector to plot
+    /// * `title` - Optional title for the plot
+    /// * `save_path` - Optional path to save the plot
     pub fn plot_rel_eigenstate(&self, eigvec: &Array1<f64>, title: Option<&str>, save_path: Option<&str>) {
         plot_rel_eigenstate(&self.grid, eigvec, title, save_path);
     }
     
+    /// Plots the energy spectrum
+    ///
+    /// # Arguments
+    /// * `eigvals` - Eigenvalues to plot
+    /// * `save_path` - Optional path to save the plot
     pub fn plot_spectrum(&self, eigvals: &Array1<f64>, save_path: Option<&str>) {
         plot_spectrum(eigvals, &self.k, save_path);
     }
     
+    /// Calculates the band structure along high-symmetry paths
+    ///
+    /// # Arguments
+    /// * `n_points` - Number of k-points along each path segment
+    /// * `n_rel_states` - Number of relative coordinate states to include
+    /// * `n_bands` - Number of bands to calculate
+    /// * `recalculate_bands` - Whether to force recalculation
+    /// * `select_parity` - Parity selection (0: both, 1: even, -1: odd)
+    ///
+    /// # Returns
+    /// * Tuple containing k-points, eigenvalues, and parity values
     pub fn calculate_band_structure(
         &self,
         n_points: usize,
@@ -285,6 +391,13 @@ impl Exciton2DGridSystem {
         )
     }
     
+    /// Plots the band structure
+    ///
+    /// # Arguments
+    /// * `k_points` - k-points along the path
+    /// * `eigvals_list` - List of eigenvalues at each k-point
+    /// * `parities_list` - List of parity values at each k-point
+    /// * `save_path` - Optional path to save the plot
     pub fn plot_band_structure(
         &self,
         k_points: &[Vec<f64>],
@@ -295,6 +408,22 @@ impl Exciton2DGridSystem {
         plot_band_structure(k_points, eigvals_list, parities_list, self.a0, save_path, false);
     }
 
+    /// Calculates the band structure with n-expectation values
+    ///
+    /// This method computes the band structure along high-symmetry paths in the
+    /// Brillouin zone, including the expectation value of the principal quantum number
+    /// for each eigenstate. These expectation values indicate which relative coordinate
+    /// state contributes most to each band, providing insight into the character of the bands.
+    ///
+    /// # Arguments
+    /// * `n_points` - Number of k-points along each path segment
+    /// * `n_rel_states` - Number of relative coordinate states to include
+    /// * `n_bands` - Number of bands to calculate
+    /// * `recalculate_bands` - Whether to force recalculation
+    /// * `select_parity` - Parity selection (0: both, 1: even, -1: odd)
+    ///
+    /// # Returns
+    /// * Tuple containing k-points, eigenvalues, and n-expectation values
     pub fn calculate_n_colored_band_structure(
         &self,
         n_points: usize,
@@ -303,7 +432,7 @@ impl Exciton2DGridSystem {
         recalculate_bands: bool,
         select_parity: i32,
     ) -> (Vec<Vec<f64>>, Vec<Array1<f64>>, Vec<Vec<f64>>) {
-        crate::visualization::calculate_n_colored_band_structure(
+        calculate_n_colored_band_structure(
             &self.full_ham,
             n_points,
             n_rel_states,
@@ -316,6 +445,21 @@ impl Exciton2DGridSystem {
         )
     }
 
+    /// Plots the band structure with n-expectation values as colors
+    ///
+    /// This method creates a high-quality plot of the exciton band structure with bands
+    /// colored according to their n-expectation values. This visualization helps identify
+    /// the character of each band and how it changes across the Brillouin zone.
+    ///
+    /// The plot shows the energy bands along the path Γ→X→M→Γ in the Brillouin zone,
+    /// with a color scale indicating the n-expectation value of each state.
+    ///
+    /// # Arguments
+    /// * `k_points` - k-points along the path
+    /// * `eigvals_list` - List of eigenvalues at each k-point
+    /// * `n_expectation_list` - List of n-expectation values at each k-point
+    /// * `n_bands` - Number of bands to plot
+    /// * `save_path` - Path to save the plot
     pub fn plot_n_colored_band_structure(
         &self,
         k_points: &Vec<Vec<f64>>,

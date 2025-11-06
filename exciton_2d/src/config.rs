@@ -1,7 +1,15 @@
-// src/config.rs
+//! Configuration module for the exciton 2D simulation
+//!
+//! This module provides the configuration structure and methods for setting up
+//! the simulation parameters.
+
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
+/// Configuration for the exciton 2D simulation
+///
+/// Contains all parameters needed to define the physical system and control
+/// the simulation behavior.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExcitonConfig {
     pub n_kappa: usize,
@@ -21,6 +29,9 @@ pub struct ExcitonConfig {
 }
 
 impl Default for ExcitonConfig {
+    /// Creates a default configuration with reasonable values
+    ///
+    /// These defaults can be overridden as needed for specific simulations.
     fn default() -> Self {
         Self {
             n_kappa: 31,
@@ -42,10 +53,15 @@ impl Default for ExcitonConfig {
 }
 
 impl ExcitonConfig {
+    /// Creates a new configuration with default values
+    ///
     pub fn new() -> Self {
         Self::default()
     }
 
+    /// Validates the configuration parameters
+    ///
+    /// Returns an error message if any parameter is invalid.
     pub fn validate(&self) -> Result<(), String> {
         if self.n_kappa < 1 {
             return Err("N_kappa must be a positive integer".to_string());

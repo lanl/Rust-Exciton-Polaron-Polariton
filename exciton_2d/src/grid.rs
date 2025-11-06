@@ -1,8 +1,25 @@
-// src/grid.rs
+//! Grid module for spatial discretization
+//!
+//! This module provides a 2D grid implementation for spatial calculations,
+//! with support for Cartesian and polar coordinates. The grid is centered at
+//! the origin and provides methods to access coordinates and derived quantities
+//! like radial distance and angle.
+//!
+//! The implementation is optimized for memory efficiency, with large grids
+//! processed in blocks to reduce peak memory usage.
+
 use log::info;
 use ndarray::{Array1, Array2};
 use std::sync::{Arc, RwLock};
 
+/// A 2D spatial grid with support for Cartesian and polar coordinates
+///
+/// This struct represents a 2D spatial grid centered at the origin. It provides
+/// methods to access the grid points in Cartesian coordinates (x, y) and derived
+/// quantities in polar coordinates (r, θ).
+///
+/// For memory efficiency, some arrays are computed on-demand for large grids,
+/// and the computation is done in blocks to reduce peak memory usage.
 #[derive(Clone)]
 pub struct Grid {
     pub grid_size: usize,
@@ -18,6 +35,12 @@ pub struct Grid {
 }
 
 impl Grid {
+    /// Creates a new grid with the specified size and dimensions
+    ///
+    /// # Arguments
+    /// * `grid_size` - Number of points in each dimension
+    /// * `box_size` - Physical size of the box in each dimension
+    /// * `verbose` - Whether to print information during grid setup
     pub fn new(grid_size: usize, box_size: f64, verbose: bool) -> Self {
         let mut grid = Self {
             grid_size,
@@ -36,6 +59,9 @@ impl Grid {
         grid
     }
     
+    /// Sets up the grid points and precomputes coordinate arrays
+    ///
+    /// For large grids, some arrays are computed on-demand to save memory.
     fn setup_grid(&mut self) {
         // Grid spacing already calculated in constructor
         
@@ -50,6 +76,7 @@ impl Grid {
         }
         
         // For very large grids, avoid creating the full meshgrid in memory
+        // Only precompute meshgrids for smaller grids to save memory
         if self.grid_size <= 128 {
             let mut x_grid = Array2::zeros((self.grid_size, self.grid_size));
             let mut y_grid = Array2::zeros((self.grid_size, self.grid_size));
@@ -87,6 +114,14 @@ impl Grid {
         }
     }
     
+    /// Gets the radial distance matrix (r = √(x² + y²))
+    ///
+    /// This method returns a 2D array containing the radial distance from the origin
+    /// to each point on the grid. For large grids, this is computed on-demand in blocks
+    /// to save memory.
+    ///
+    /// # Returns
+    /// A 2D array of radial distances
     pub fn get_r(&self) -> Array2<f64> {
         if let Some(r) = self.r.read().unwrap().as_ref() {
             return r.clone();
@@ -94,10 +129,10 @@ impl Grid {
         
         // Compute R on demand for large grids
         if self.verbose {
-            info!("Computing radial distance matrix...");
+            info!("Computing radial distance matrix in blocks to save memory...");
         }
         
-        // Compute in blocks to save memory
+        // Process in blocks to reduce peak memory usage
         let n = self.grid_size;
         let block_size = std::cmp::min(128, n);
         let mut r = Array2::zeros((n, n));
@@ -133,6 +168,14 @@ impl Grid {
         r
     }
     
+    /// Gets the angular coordinate matrix (θ = atan2(y, x))
+    ///
+    /// This method returns a 2D array containing the angular coordinate (polar angle)
+    /// of each point on the grid. For large grids, this is computed on-demand in blocks
+    /// to save memory.
+    ///
+    /// # Returns
+    /// A 2D array of angular coordinates in radians
     pub fn get_theta(&self) -> Array2<f64> {
         if let Some(theta) = self.theta.read().unwrap().as_ref() {
             return theta.clone();
@@ -152,6 +195,10 @@ impl Grid {
         }
         
         // Create Theta in blocks to save memory
+        if self.verbose {
+            info!("Computing angular coordinate matrix in blocks to save memory...");
+        }
+        
         let n = self.grid_size;
         let mut theta = Array2::zeros((n, n));
         let block_size = std::cmp::min(128, n);

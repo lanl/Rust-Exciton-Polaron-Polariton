@@ -66,7 +66,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     let qz = omega_0 / C;
     let n_fock = 2;      // Dimension of Fock space
 
-    let n_k_points = 240;  // Number of k-points along the path
+    let n_k_points = 1000;  // Number of k-points along the path
     let n_bands = 16;
 
     let q_values: Vec<Vector3D> = qx_values.iter().flat_map(|qx| {
@@ -235,13 +235,14 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
 fn run_dielectric_scan(e_config: ExcitonConfig) {
     // Check if we should calculate or just plot
     let calculate = true; // Set to false to skip calculation and just plot
+    let use_cached = false; // Set to true to use cached results if available
     // Parameters for diagonalization
     let n_rel = 9;      // Number of relative coordinate states
     let n_ex_eig = 16;  // Number of exciton eigenstates
     
     // Light-matter coupling parameters
     // let coupling_values = Array1::linspace(0.00, 0.05, 1); // Scan from weak to strong coupling
-    let total_coupling_values = Array1::from_vec(vec![0.0, 0.02, 0.04, 0.06, 0.08]); // Scan from weak to strong coupling
+    let total_coupling_values = Array1::from_vec(vec![0.0, 0.04, 0.06]); // Scan from weak to strong coupling
     let omega_0 = 0.2;    // Photon frequency
     let n_modes = 16;
     let coupling_values = total_coupling_values /( n_modes as f64);
@@ -257,16 +258,18 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
         })}).collect();
     
     // Define phonon parameters
-    let pn_coupling = 0.005;
+    let pn_coupling = 0.0005;
     let pn_omega = 0.0075; // 1500 cm^-1
     let pn_k = arr1(&[0.,0.05]); // 1 nm^1
     let pn_n_fock = 16;
 
     // Parameters for dielectric function calculation
-    let n_eig = 4096+128;  // Number of eigenstates to use
+    let n_eig = 2048+128;  // Number of eigenstates to use
     let omegas = Array1::linspace(0.1, 0.25, 10000);  // Frequency range
     let gamma = 1e-5;  // Broadening parameter
     let diag_method = sing_ex::DiagonalizationMethod::SLEPc;
+
+    let omega_range = Some((0.16,0.24));
 
     // Create directory for saving results
     let save_dir = "dielectric_scan";
@@ -277,17 +280,31 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
     if !calculate {
         // Just plot the existing data
         timed_println!("Plotting dielectric function from existing data...");
-        match plot_dielectric_function(save_dir, Some("dielectric_function_real.svg"), DielectricPlotType::Real, Some((0.15,0.23)), &coupling_values) {
+        
+        // Create reference parameters to match against
+        let ref_params = visualization::DielectricParams {
+            a0: e_config.a0,
+            v0: e_config.v0,
+            n_rel,
+            lm_coupling: 0.0, // This will be matched separately using coupling_values
+            n_modes: n_modes*n_modes,
+            pn_coupling,
+            pn_n_fock,
+            n_eig,
+            gamma,
+        };
+        
+        match plot_dielectric_function(save_dir, Some("dielectric_function_real.svg"), DielectricPlotType::Real, omega_range, &coupling_values, Some(&ref_params)) {
             Ok(_) => timed_println!("Successfully plotted real part of dielectric function"),
             Err(e) => timed_println!("Error plotting dielectric function: {}", e),
         }
         
-        match plot_dielectric_function(save_dir, Some("dielectric_function_imag.svg"), DielectricPlotType::Imaginary, Some((0.15,0.23)), &coupling_values) {
+        match plot_dielectric_function(save_dir, Some("dielectric_function_imag.svg"), DielectricPlotType::Imaginary, omega_range, &coupling_values, Some(&ref_params)) {
             Ok(_) => timed_println!("Successfully plotted imaginary part of dielectric function"),
             Err(e) => timed_println!("Error plotting dielectric function: {}", e),
         }
         
-        match plot_dielectric_function(save_dir, Some("dielectric_function_both.svg"), DielectricPlotType::Both, Some((0.15,0.23)), &coupling_values) {
+        match plot_dielectric_function(save_dir, Some("dielectric_function_both.svg"), DielectricPlotType::Both, omega_range, &coupling_values, Some(&ref_params)) {
             Ok(_) => timed_println!("Successfully plotted both parts of dielectric function"),
             Err(e) => timed_println!("Error plotting dielectric function: {}", e),
         }
@@ -313,25 +330,43 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
             e_config: e_config.clone(), n_rel, n_ex_eig, lm_coupling: coupling, omega_0, q_values: q_values.clone(),
             pn_coupling, pn_omega, pn_k: pn_k.clone(), pn_n_fock, n_k_points: 1, n_bands: 1
         };
-
-        // Generate polaron-polariton system
+        
+        // Generate the filename first to check if it exists
         let mut pp_wrapper = sing_ex::SingExWrapper::new(pp_config.clone());
         pp_wrapper.generate_pp();
         let pp = pp_wrapper.polaron_polariton.as_ref().unwrap();
-
-        // Calculate dielectric function
-        let (re_eps, im_eps) = sing_ex::get_dielectric_function(&pp_config, pp, n_eig, omegas.clone(), gamma, &diag_method);
-
-        // Save results to file
-        let filename = format!("{}/dielectric_coupling_{:.4}.dat", save_dir, coupling);
-        let mut file = std::fs::File::create(&filename).unwrap();
+        let filename = sing_ex::get_dielectric_function_filename(pp, &pp_config, save_dir, n_eig, gamma);
         
-        // Write header
-        writeln!(file, "# omega Re[eps] Im[eps]").unwrap();
+        // Check if file already exists and we want to use cached results
+        let (re_eps, im_eps) = if use_cached && std::path::Path::new(&filename).exists() {
+            timed_println!("Using cached dielectric function data from {}", filename);
+            let (omegas_loaded, re_eps_loaded, im_eps_loaded) = visualization::load_dielectric_data(std::path::Path::new(&filename)).unwrap();
+            
+            // Verify the loaded data has the expected length
+            if omegas_loaded.len() == omegas.len() {
+                (Array1::from_vec(re_eps_loaded), Array1::from_vec(im_eps_loaded))
+            } else {
+                timed_println!("Cached data has different length than requested, recalculating...");
+                let (re, im) = sing_ex::get_dielectric_function(&pp_config, pp, n_eig, omegas.clone(), gamma, &diag_method);
+                (re, im)
+            }
+        } else {
+            // Calculate dielectric function
+            sing_ex::get_dielectric_function(&pp_config, pp, n_eig, omegas.clone(), gamma, &diag_method)
+        };
         
-        // Write data
-        for i in 0..omegas.len() {
-            writeln!(file, "{:.6} {:.6} {:.6}", omegas[i], re_eps[i], im_eps[i]).unwrap();
+        // Save results to file if we calculated them
+        if !use_cached || !std::path::Path::new(&filename).exists() {
+            timed_println!("Saving dielectric function data to {}", filename);
+            let mut file = std::fs::File::create(&filename).unwrap();
+        
+            // Write header
+            writeln!(file, "# omega Re[eps] Im[eps]").unwrap();
+            
+            // Write data
+            for i in 0..omegas.len() {
+                writeln!(file, "{:.6} {:.6} {:.6}", omegas[i], re_eps[i], im_eps[i]).unwrap();
+            }
         }
 
         let end_time = Instant::now();
@@ -346,18 +381,44 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
     
     // Plot the results
     timed_println!("Plotting dielectric function...");
-    match plot_dielectric_function(save_dir, Some("dielectric_function_real.svg"), DielectricPlotType::Real, None, &coupling_values) {
-        Ok(_) => timed_println!("Successfully plotted real part of dielectric function"),
+    timed_println!("Coupling values to plot: {:?}", coupling_values);
+    
+    // Create more descriptive filenames
+    let real_filename = format!("dielectric_real_a0{}_V0{}_nrel{}_nmodes{}_pncoup{:.3}_npn{}.svg", 
+                              e_config.a0, e_config.v0, n_rel, n_modes, pn_coupling, pn_n_fock);
+    let imag_filename = format!("dielectric_imag_a0{}_V0{}_nrel{}_nmodes{}_pncoup{:.3}_npn{}.svg", 
+                              e_config.a0, e_config.v0, n_rel, n_modes, pn_coupling, pn_n_fock);
+    let both_filename = format!("dielectric_both_a0{}_V0{}_nrel{}_nmodes{}_pncoup{:.3}_npn{}.svg", 
+                              e_config.a0, e_config.v0, n_rel, n_modes, pn_coupling, pn_n_fock);
+    
+    // Make a copy of coupling_values to ensure we're using the exact same values
+    let plot_coupling_values = coupling_values.clone();
+    
+    // Create reference parameters to match against
+    let ref_params = visualization::DielectricParams {
+        a0: e_config.a0,
+        v0: e_config.v0,
+        n_rel,
+        lm_coupling: 0.0, // This will be matched separately using coupling_values
+        n_modes: n_modes*n_modes,
+        pn_coupling,
+        pn_n_fock,
+        n_eig,
+        gamma,
+    };
+    
+    match plot_dielectric_function(save_dir, Some(&real_filename), DielectricPlotType::Real, omega_range, &plot_coupling_values, Some(&ref_params)) {
+        Ok(_) => timed_println!("Successfully plotted real part of dielectric function to {}", real_filename),
         Err(e) => timed_println!("Error plotting dielectric function: {}", e),
     }
     
-    match plot_dielectric_function(save_dir, Some("dielectric_function_imag.svg"), DielectricPlotType::Imaginary, None, &coupling_values) {
-        Ok(_) => timed_println!("Successfully plotted imaginary part of dielectric function"),
+    match plot_dielectric_function(save_dir, Some(&imag_filename), DielectricPlotType::Imaginary, omega_range, &plot_coupling_values, Some(&ref_params)) {
+        Ok(_) => timed_println!("Successfully plotted imaginary part of dielectric function to {}", imag_filename),
         Err(e) => timed_println!("Error plotting dielectric function: {}", e),
     }
     
-    match plot_dielectric_function(save_dir, Some("dielectric_function_both.svg"), DielectricPlotType::Both, None, &coupling_values) {
-        Ok(_) => timed_println!("Successfully plotted both parts of dielectric function"),
+    match plot_dielectric_function(save_dir, Some(&both_filename), DielectricPlotType::Both, omega_range, &plot_coupling_values, Some(&ref_params)) {
+        Ok(_) => timed_println!("Successfully plotted both parts of dielectric function to {}", both_filename),
         Err(e) => timed_println!("Error plotting dielectric function: {}", e),
     }
 }
@@ -409,7 +470,7 @@ fn main() {
     // davidson::davidson_test();
 
     // Choose which function to run
-    let run_mode = "bandstructure"; // Options: "bandstructure", "dielectric_scan"
+    let run_mode = "dielectric_scan"; // Options: "bandstructure", "dielectric_scan"
 
     initialize().expect("Failed to initialize SLEPc");
     

@@ -4,6 +4,7 @@ set lmargin 10
 set rmargin 10
 set tmargin 3
 set bmargin 3
+set title 'Exciton-Polariton Band Structure (a₀=9.0, V₀=0.1, g=0.003)' font 'Arial,16'
 set xlabel 'Wave vector'
 set ylabel 'Energy (a.u.)'
 set xrange [0:1.1917853605931072]

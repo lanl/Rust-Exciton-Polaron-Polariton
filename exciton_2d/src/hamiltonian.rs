@@ -1,4 +1,8 @@
-// src/hamiltonian.rs
+//! Hamiltonian module for exciton energy calculations
+//!
+//! This module provides implementations of the relative coordinate and full
+//! Hamiltonians for exciton simulations.
+
 use crate::grid::Grid;
 use crate::matrix_elements::MatrixElementCalculator;
 
@@ -11,6 +15,11 @@ use std::path::Path;
 use std::time::Instant;
 use ordered_float::OrderedFloat;
 
+/// Hamiltonian for the relative coordinate motion of an exciton
+///
+/// This struct handles the electron-hole interaction in the relative coordinate frame.
+/// It provides methods for solving the eigenvalue problem of the relative coordinate
+/// Hamiltonian, which describes the internal motion of the electron-hole pair.
 #[derive(Clone)]
 pub struct RelativeHamiltonian {
     pub grid: Grid,
@@ -22,6 +31,15 @@ pub struct RelativeHamiltonian {
 }
 
 impl RelativeHamiltonian {
+    /// Creates a new relative coordinate Hamiltonian
+    ///
+    /// # Arguments
+    /// * `grid` - Spatial grid for discretization
+    /// * `mu` - Reduced mass of the electron-hole pair
+    /// * `save_dir` - Directory to save/load results
+    /// * `recalculate` - Whether to force recalculation
+    /// * `batch_size` - Batch size for memory-intensive operations
+    /// * `verbose` - Whether to print detailed information
     pub fn new(grid: Grid, mu: f64, save_dir: String, recalculate: bool, batch_size: usize, verbose: bool) -> Self {
         Self {
             grid,
@@ -33,6 +51,17 @@ impl RelativeHamiltonian {
         }
     }
     
+    /// Solves the relative coordinate Hamiltonian
+    ///
+    /// This method computes the eigenvalues and eigenvectors of the relative coordinate
+    /// Hamiltonian, either by loading from disk or calculating them directly using
+    /// analytical solutions for the 2D hydrogen atom.
+    ///
+    /// # Arguments
+    /// * `k_eigvals` - Number of eigenvalues to compute
+    ///
+    /// # Returns
+    /// * Tuple containing eigenvalues, eigenvectors, and parity values
     pub fn solve(&self, k_eigvals: usize) -> (Array1<f64>, Array2<f64>, Array1<i32>) {
         // Check if we've already solved this
         let rel_filename = format!(
@@ -74,6 +103,21 @@ impl RelativeHamiltonian {
         (eigvals, eigvecs, parities)
     }
     
+    /// Solves the 2D hydrogen atom analytically
+    ///
+    /// This method uses analytical solutions for the 2D hydrogen atom to generate
+    /// eigenstates on the numerical grid. It computes the eigenvalues, eigenvectors,
+    /// and parity values for the specified number of states.
+    ///
+    /// The 2D hydrogen atom has energy levels E_n = -mu/(2*(n+1/2)^2) where n is the
+    /// principal quantum number and mu is the reduced mass. The eigenfunctions are
+    /// expressed in terms of associated Laguerre polynomials and spherical harmonics.
+    ///
+    /// # Arguments
+    /// * `k_eigvals` - Number of eigenvalues to compute
+    ///
+    /// # Returns
+    /// * Tuple containing eigenvalues, eigenvectors, and parity values
     fn solve_analytical(&self, k_eigvals: usize) -> (Array1<f64>, Array2<f64>, Array1<i32>) {
         if self.verbose {info!("Using analytical solutions for the 2D hydrogen atom...")};
         
@@ -261,6 +305,15 @@ impl RelativeHamiltonian {
             (eigvals, eigvecs, parities)
         }
         
+    /// Evaluates the associated Laguerre polynomial L_n^(alpha)(x)
+    ///
+    /// # Arguments
+    /// * `n` - Degree of the polynomial
+    /// * `alpha` - Parameter of the associated Laguerre polynomial
+    /// * `x` - Evaluation point
+    ///
+    /// # Returns
+    /// * Value of the polynomial at x
     fn eval_laguerre(&self, n: i32, alpha: i32, x: f64) -> f64 {
         // Simple implementation of associated Laguerre polynomial
         // In a real implementation, we would use a more efficient algorithm
@@ -272,6 +325,13 @@ impl RelativeHamiltonian {
         result
     }
     
+    /// Computes the factorial of n
+    ///
+    /// # Arguments
+    /// * `n` - Non-negative integer
+    ///
+    /// # Returns
+    /// * n!
     fn factorial(&self, n: i32) -> u64 {
         if n <= 1 {
             return 1;
@@ -283,6 +343,14 @@ impl RelativeHamiltonian {
         result
     }
     
+    /// Computes the binomial coefficient (n choose k)
+    ///
+    /// # Arguments
+    /// * `n` - Upper parameter
+    /// * `k` - Lower parameter
+    ///
+    /// # Returns
+    /// * Binomial coefficient n choose k
     fn binomial(&self, n: i32, k: i32) -> u64 {
         if k < 0 || k > n {
             return 0;
@@ -302,6 +370,12 @@ impl RelativeHamiltonian {
     }
 }
 
+/// Full Hamiltonian for the exciton including center-of-mass motion
+///
+/// This struct combines the relative coordinate Hamiltonian with the center-of-mass
+/// kinetic energy and the periodic potential. It provides methods for constructing
+/// and diagonalizing the full Hamiltonian matrix, which describes both the internal
+/// motion of the electron-hole pair and its motion through the periodic potential.
 #[derive(Clone)]
 pub struct FullHamiltonian {
     pub rel_ham: RelativeHamiltonian,
@@ -315,6 +389,17 @@ pub struct FullHamiltonian {
 }
 
 impl FullHamiltonian {
+    /// Creates a new full Hamiltonian
+    ///
+    /// # Arguments
+    /// * `rel_ham` - Relative coordinate Hamiltonian
+    /// * `matrix_elem_calc` - Matrix element calculator
+    /// * `kappa_vectors` - Reciprocal lattice vectors
+    /// * `vector_sum_to_index` - Lookup table for vector sums
+    /// * `w_kappa` - Fourier coefficients of the potential
+    /// * `m` - Total mass of the electron-hole pair
+    /// * `k` - Wave vector
+    /// * `verbose` - Whether to print detailed information
     pub fn new(
         rel_ham: RelativeHamiltonian,
         matrix_elem_calc: MatrixElementCalculator,
@@ -337,6 +422,19 @@ impl FullHamiltonian {
         }
     }
     
+    /// Builds the Hamiltonian without center-of-mass kinetic energy
+    ///
+    /// This method constructs the Hamiltonian matrix that includes the relative coordinate
+    /// energy and the periodic potential, but not the center-of-mass kinetic energy.
+    /// It filters the relative coordinate states by parity and computes the matrix
+    /// elements of the periodic potential between these states.
+    ///
+    /// # Arguments
+    /// * `n_rel_states` - Number of relative coordinate states to include
+    /// * `parity` - Parity selection (1: even, -1: odd)
+    ///
+    /// # Returns
+    /// * Tuple containing the Hamiltonian matrix, relative eigenvalues, and relative eigenvectors
     pub fn build_hamiltonian_no_k(&self, n_rel_states: usize, parity: i32) -> (Array2<f64>, Array1<f64>, Array2<f64>) {
         // Solve for relative coordinate eigenstates
         let (rel_eigvals_np, rel_eigvecs_np, parities) = self.rel_ham.solve(n_rel_states);
@@ -470,6 +568,19 @@ impl FullHamiltonian {
         (h_full, rel_eigvals, rel_eigvecs)
     }
     
+    /// Builds the full Hamiltonian including center-of-mass kinetic energy
+    ///
+    /// This method constructs the complete Hamiltonian matrix that includes the relative
+    /// coordinate energy, the periodic potential, and the center-of-mass kinetic energy.
+    /// It adds the center-of-mass kinetic energy to the diagonal elements of the
+    /// Hamiltonian matrix built by `build_hamiltonian_no_k`.
+    ///
+    /// # Arguments
+    /// * `n_rel_states` - Number of relative coordinate states to include
+    /// * `parity` - Parity selection (1: even, -1: odd)
+    ///
+    /// # Returns
+    /// * Tuple containing the Hamiltonian matrix, relative eigenvalues, and relative eigenvectors
     pub fn build_full_hamiltonian(&self, n_rel_states: usize, parity: i32) -> (Array2<f64>, Array1<f64>, Array2<f64>) {
         // Build the Hamiltonian without center-of-mass kinetic energy
         let (mut h_full, rel_eigvals, rel_eigvecs) = self.build_hamiltonian_no_k(n_rel_states, parity);
@@ -498,6 +609,24 @@ impl FullHamiltonian {
         (h_full, rel_eigvals, rel_eigvecs)
     }
     
+    /// Diagonalizes the full Hamiltonian
+    ///
+    /// This method diagonalizes the full Hamiltonian matrix to find the eigenvalues
+    /// and eigenvectors of the exciton in the periodic potential. It can handle both
+    /// even and odd parity states separately or together.
+    ///
+    /// When `select_parity` is 0, it builds and diagonalizes separate Hamiltonians for
+    /// even and odd parity states, then combines and sorts the results. When `select_parity`
+    /// is 1 or -1, it builds and diagonalizes a single Hamiltonian for the specified parity.
+    ///
+    /// # Arguments
+    /// * `n_rel_states` - Number of relative coordinate states to include
+    /// * `k_eigvals` - Number of eigenvalues to compute
+    /// * `select_parity` - Parity selection (0: both, 1: even, -1: odd)
+    ///
+    /// # Returns
+    /// * Tuple containing eigenvalues, eigenvectors, relative eigenvalues,
+    ///   relative eigenvectors, and parity values
     pub fn diagonalize_full_hamiltonian(
         &self,
         n_rel_states: usize,
@@ -548,7 +677,6 @@ impl FullHamiltonian {
 
                 match h_full.eigh(ndarray_linalg::UPLO::Lower) {
                     Ok((eigvals, eigvecs)) => {
-
                         // Take only the first k_eigvals
                         let eigvals_p: Array1<f64> = eigvals.slice(ndarray::s![..k_eigvals]).to_owned();
                         
@@ -565,14 +693,19 @@ impl FullHamiltonian {
                         }
                     },
                     Err(e) => {
-                        println!("k = {:?}", self.k);
-
-                        println!("Full Ham shape = {:?}", h_full.shape());
-
-                        eprintln!("Eigenvalue computation failed: {:?}", e);
-
-
-                        // Handle the error or return early
+                        // Log detailed error information
+                        warn!("Eigenvalue computation failed for k = {:?}", self.k);
+                        warn!("Hamiltonian shape = {:?}", h_full.shape());
+                        warn!("Error details: {:?}", e);
+                        
+                        // Return empty results to avoid crashing
+                        eigvals_list.push(Array1::zeros(k_eigvals));
+                        eigvecs_list.push(Array2::zeros((h_full.nrows(), k_eigvals)));
+                        parities_list.push(Array1::from_elem(k_eigvals, parity_val));
+                        
+                        if self.verbose {
+                            warn!("Using zeros as placeholder for failed diagonalization");
+                        }
                     }
                 }
                 

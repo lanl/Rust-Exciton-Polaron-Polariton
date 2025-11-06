@@ -1,4 +1,9 @@
-// src/matrix_elements.rs
+//! Matrix element calculation module for exciton simulations
+//!
+//! This module provides functionality for calculating and caching matrix elements
+//! of the periodic potential between different eigenstates of the relative coordinate
+//! Hamiltonian. These matrix elements are essential for constructing the full Hamiltonian
+//! that includes both relative and center-of-mass motion.
 use crate::grid::Grid;
 use crate::utils::fast_matrix_element_calc;
 use log::{info, warn};
@@ -8,6 +13,12 @@ use std::sync::{Arc, RwLock};
 use std::collections::HashMap;
 use std::path::Path;
 
+/// Calculator for matrix elements of the periodic potential
+///
+/// This struct handles the calculation and caching of matrix elements between
+/// different eigenstates of the relative coordinate Hamiltonian. It uses
+/// precomputation and caching strategies to optimize performance for repeated
+/// calculations with the same parameters.
 #[derive(Clone)]
 pub struct MatrixElementCalculator {
     grid: Grid,
@@ -20,6 +31,15 @@ pub struct MatrixElementCalculator {
 }
 
 impl MatrixElementCalculator {
+    /// Creates a new matrix element calculator
+    ///
+    /// # Arguments
+    /// * `grid` - The spatial grid for discretization
+    /// * `save_dir` - Directory to save/load precomputed matrix elements
+    /// * `recalculate` - Whether to force recalculation of matrix elements
+    ///
+    /// # Returns
+    /// A new `MatrixElementCalculator` instance
     pub fn new(grid: Grid, save_dir: String, recalculate: bool) -> Self {
         Self {
             grid,
@@ -32,6 +52,14 @@ impl MatrixElementCalculator {
         }
     }
     
+    /// Precomputes terms needed for potential matrix element calculations
+    ///
+    /// This method precomputes and caches various terms that are frequently used
+    /// in matrix element calculations, such as coordinate grids and cosine terms
+    /// for each reciprocal lattice vector.
+    ///
+    /// # Arguments
+    /// * `w_kappa` - Map of reciprocal lattice vectors to potential coefficients
     pub fn precompute_potential_terms(&self, w_kappa: &HashMap<(OrderedFloat<f64>, OrderedFloat<f64>), f64>) {
         // Precompute x and y grid points for potential calculation
         let mut pre = self.precomputed.write().unwrap();
@@ -64,10 +92,29 @@ impl MatrixElementCalculator {
         drop(pre)
     }
     
+    /// Sets the cached eigenvectors for matrix element calculations
+    ///
+    /// This method stores the eigenvectors of the relative coordinate Hamiltonian
+    /// for use in matrix element calculations.
+    ///
+    /// # Arguments
+    /// * `eigvecs` - Eigenvectors of the relative coordinate Hamiltonian
     pub fn set_cached_eigvecs(&self, eigvecs: Array2<f64>) {
         *self.cached_eigvecs.write().unwrap() = Some(eigvecs);
     }
     
+    /// Calculates or retrieves a cached potential matrix element
+    ///
+    /// This method computes the matrix element of e^(i*kappa·r) between eigenstates i and j,
+    /// using cached values when available to avoid redundant calculations.
+    ///
+    /// # Arguments
+    /// * `kappa_pot` - Reciprocal lattice vector
+    /// * `i` - Index of the first eigenstate
+    /// * `j` - Index of the second eigenstate
+    ///
+    /// # Returns
+    /// The matrix element <i|e^(i*kappa·r)|j>
     pub fn cached_potential_matrix_element(&self, kappa_pot: (OrderedFloat<f64>, OrderedFloat<f64>), i: usize, j: usize) -> f64 {
         let cache_key = (i, j, kappa_pot);
         
@@ -132,6 +179,21 @@ impl MatrixElementCalculator {
     }
 
     // Add a new helper method to calculate the matrix element directly
+    /// Calculates a matrix element directly without caching
+    ///
+    /// This helper method computes the matrix element of e^(i*kappa·r) between
+    /// eigenstates i and j directly, without using the cache.
+    ///
+    /// # Arguments
+    /// * `kappa_pot` - Reciprocal lattice vector
+    /// * `i` - Index of the first eigenstate
+    /// * `j` - Index of the second eigenstate
+    /// * `eigvecs` - Eigenvectors of the relative coordinate Hamiltonian
+    /// * `x_grid` - Grid of x coordinates
+    /// * `y_grid` - Grid of y coordinates
+    ///
+    /// # Returns
+    /// The matrix element <i|e^(i*kappa·r)|j>
     fn calculate_matrix_element_directly(
         &self,
         kappa_pot: (OrderedFloat<f64>, OrderedFloat<f64>),
@@ -166,6 +228,19 @@ impl MatrixElementCalculator {
     }
 
     
+    /// Calculates a potential matrix element directly with provided eigenvectors
+    ///
+    /// This method computes the matrix element of e^(i*kappa·r) between eigenstates i and j
+    /// using the provided eigenvectors, rather than the cached ones.
+    ///
+    /// # Arguments
+    /// * `kappa_pot` - Reciprocal lattice vector as a slice
+    /// * `i` - Index of the first eigenstate
+    /// * `j` - Index of the second eigenstate
+    /// * `rel_eigvecs` - Eigenvectors of the relative coordinate Hamiltonian
+    ///
+    /// # Returns
+    /// The matrix element <i|e^(i*kappa·r)|j>
     pub fn get_potential_matrix_element_direct(&self, kappa_pot: &[f64], i: usize, j: usize, rel_eigvecs: &Array2<f64>) -> f64 {
         let kappa_pot_tuple = (OrderedFloat(kappa_pot[0]), OrderedFloat(kappa_pot[1]));
         let cache_key = (i, j, kappa_pot_tuple);
@@ -214,6 +289,18 @@ impl MatrixElementCalculator {
         matrix_element
     }
     
+    /// Calculates all required matrix elements for the full Hamiltonian
+    ///
+    /// This method computes all matrix elements needed for constructing the full Hamiltonian,
+    /// either by loading from disk or calculating them directly. Only non-zero matrix elements
+    /// are stored to save memory.
+    ///
+    /// # Arguments
+    /// * `w_kappa_tuples` - Map of reciprocal lattice vectors to potential coefficients
+    /// * `n_rel_states` - Number of relative coordinate states to include
+    ///
+    /// # Returns
+    /// A map from (i, j, kappa) to the corresponding matrix element <i|e^(i*kappa·r)|j>
     pub fn calculate_matrix_elements(&self, w_kappa_tuples: &HashMap<(OrderedFloat<f64>, OrderedFloat<f64>), f64>, n_rel_states: usize) -> HashMap<(usize, usize, (OrderedFloat<f64>, OrderedFloat<f64>)), f64> {
         // Check if precomputed matrix elements exist
         let matrix_elements_filename = format!(

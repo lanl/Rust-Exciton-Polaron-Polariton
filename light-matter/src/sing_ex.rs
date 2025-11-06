@@ -826,7 +826,31 @@ impl SingExWrapper {
 
 }
 
+/// Generates a filename for the dielectric function data
+pub fn get_dielectric_function_filename(
+    pp: &PolaronPolariton,
+    pp_config: &PPConfig,
+    save_dir: &str,
+    n_eig: usize,
+    gamma: f64
+) -> String {
+    format!(
+        "{}/dielectric_a0{}_V0{}_nrel{}_lmcoup{}_nmodes{}_pncoup{}_npn{}_neig{}_gamma{:.1e}.dat",
+        save_dir,
+        pp_config.e_config.a0,
+        pp_config.e_config.v0,
+        pp_config.n_rel,
+        pp_config.lm_coupling,
+        pp.pp_off_ham.photon.photon_modes.len(),
+        pp_config.pn_coupling,
+        pp_config.pn_n_fock,
+        n_eig,
+        gamma
+    )
+}
+
 pub fn get_dielectric_function(pp_config: &PPConfig, pp: &PolaronPolariton, n_eig: usize, omegas: Array1<f64>, gamma: f64, method: &DiagonalizationMethod) -> (Array1<f64>, Array1<f64>) {
+    timed_println!("Calculating dielectric function with {} eigenstates, gamma={:.1e}", n_eig, gamma);
 
     // Lag Coeffs for Relative coordinates
     let (lag_coeffs, states) = &pp.pp_off_ham.matrix_element_arrays.as_ref().unwrap().get_laguerre_coeffs(pp.exciton.n_rel);
@@ -1079,7 +1103,7 @@ pub fn diagonalize_pp_sing_ex(
     let n = pp.dimension();
 
 
-    let block_size = 32;
+    let block_size = 128;
     
     match method {
         DiagonalizationMethod::Arpack => {
