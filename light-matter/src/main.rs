@@ -54,9 +54,9 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     let parity = 0;      // Parity of states to consider
     
     // Light-matter coupling parameters
-    let total_coupling = 0.04;  // Coupling strength
+    let total_coupling = 0.0;  // Coupling strength
     let omega_0 = 0.2;    // Photon frequency
-    let n_modes = 16;
+    let n_modes = 8;
     let coupling = total_coupling / (n_modes as f64);
 
     // Define photon modes
@@ -66,7 +66,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     let qz = omega_0 / C;
     let n_fock = 2;      // Dimension of Fock space
 
-    let n_k_points = 1000;  // Number of k-points along the path
+    let n_k_points = 60;  // Number of k-points along the path
     let n_bands = 16;
 
     let q_values: Vec<Vector3D> = qx_values.iter().flat_map(|qx| {
@@ -76,10 +76,10 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     
 
     // Define phonon parameters
-    let pn_coupling = 0.00;
-    let pn_omega = 0.01;
-    let pn_k = arr1(&[0.,0.1]);
-    let pn_n_fock = 1;
+    let pn_coupling = 0.0015;
+    let pn_omega = 0.0075; // 1500 cm^-1
+    let pn_k = arr1(&[0.,0.05]); // 1 nm^1
+    let pn_n_fock = 4;
 
     let pp_config = PPConfig{
         e_config, n_rel, n_ex_eig, lm_coupling: coupling, omega_0, q_values,
@@ -165,7 +165,6 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
                 Some("disp_plot.png"), false, v0, coupling);
 
         },   
-
         Method::SingEx => {
             timed_println!("Using Mat-Vec methods for light-matter coupling in single photon limit.");
             let n_eig = 512;
@@ -216,7 +215,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
             timed_println!("Calculating color-coded band structure...");
             let (k_points_color, eigvals_list_color, photonic_character_list) = 
                 color_band_plot::calculate_color_band_structure(
-                    &mut pp, n_k_points, n_eig, &sym_points, &pp_config, diag_method, true); // Use cached data if available, sort bands for continuity
+                    &mut pp, n_k_points, n_eig, &sym_points, &pp_config, diag_method, false); // Use cached data if available, sort bands for continuity
 
             timed_println!("Calculated Band Structure in {:?}", Instant::now().duration_since(time1));
                 
@@ -235,7 +234,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
 fn run_dielectric_scan(e_config: ExcitonConfig) {
     // Check if we should calculate or just plot
     let calculate = true; // Set to false to skip calculation and just plot
-    let use_cached = false; // Set to true to use cached results if available
+    let use_cached = true; // Set to true to use cached results if available
     // Parameters for diagonalization
     let n_rel = 9;      // Number of relative coordinate states
     let n_ex_eig = 16;  // Number of exciton eigenstates
@@ -244,7 +243,7 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
     // let coupling_values = Array1::linspace(0.00, 0.05, 1); // Scan from weak to strong coupling
     let total_coupling_values = Array1::from_vec(vec![0.0, 0.04, 0.06]); // Scan from weak to strong coupling
     let omega_0 = 0.2;    // Photon frequency
-    let n_modes = 16;
+    let n_modes = 8;
     let coupling_values = total_coupling_values /( n_modes as f64);
     
     // Define photon modes
@@ -258,15 +257,15 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
         })}).collect();
     
     // Define phonon parameters
-    let pn_coupling = 0.0005;
+    let pn_coupling = 0.0025;
     let pn_omega = 0.0075; // 1500 cm^-1
     let pn_k = arr1(&[0.,0.05]); // 1 nm^1
     let pn_n_fock = 16;
 
     // Parameters for dielectric function calculation
-    let n_eig = 2048+128;  // Number of eigenstates to use
-    let omegas = Array1::linspace(0.1, 0.25, 10000);  // Frequency range
-    let gamma = 1e-5;  // Broadening parameter
+    let n_eig = 512+128;  // Number of eigenstates to use
+    let omegas = Array1::linspace(0.1, 0.25, 100000);  // Frequency range
+    let gamma = 1e-7;  // Broadening parameter
     let diag_method = sing_ex::DiagonalizationMethod::SLEPc;
 
     let omega_range = Some((0.16,0.24));
@@ -470,7 +469,7 @@ fn main() {
     // davidson::davidson_test();
 
     // Choose which function to run
-    let run_mode = "dielectric_scan"; // Options: "bandstructure", "dielectric_scan"
+    let run_mode = "bandstructure"; // Options: "bandstructure", "dielectric_scan"
 
     initialize().expect("Failed to initialize SLEPc");
     

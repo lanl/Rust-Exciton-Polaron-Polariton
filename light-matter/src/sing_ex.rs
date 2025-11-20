@@ -313,7 +313,7 @@ pub struct PPOffHamiltonian {
     pub lm_coupling: f64,
     pub pn_coupling: f64,
     pub matrix_element_arrays: Option<LMMatrixElementArray>,
-    pub p_cos: Option<Vec<Array2<f64>>>,
+    pub p_sin: Option<Vec<Array2<f64>>>,
     pub p_q: Option<Vec<Array2<f64>>>,
 }
 
@@ -333,7 +333,7 @@ impl PPOffHamiltonian {
             lm_coupling,
             pn_coupling,
             matrix_element_arrays,
-            p_cos: None,
+            p_sin: None,
             p_q: None,
         }
     }
@@ -349,25 +349,25 @@ impl PPOffHamiltonian {
 
     }
 
-    pub fn calc_p_cos_matrix(&mut self) {
+    pub fn calc_p_sin_matrix(&mut self) {
         
         let n_ph = self.photon.photon_modes.len() + 1; // +1 for ground state
 
-        let cos_mat = &self.matrix_element_arrays.as_ref().unwrap().cos_mat;
+        let sin_mat = &self.matrix_element_arrays.as_ref().unwrap().sin_mat;
 
         // let test = cos_mat.clone().into_keys().collect::<Vec<Vec<i32>>>();
         // timed_println!("{:?}",test);
         
-        let mut p_cos: Vec<Array2<f64>> = Vec::new();
+        let mut p_sin: Vec<Array2<f64>> = Vec::new();
         let mut p_q: Vec<Array2<f64>> = Vec::new();
         (0 .. n_ph-1).for_each(|i| {
             let eps = &self.photon.photon_modes[i].eps;
             let q = &self.photon.photon_modes[i].q;
             let q_ind_key = i as i32;
 
-            p_cos.push( 
+            p_sin.push( 
                     self.exciton.get_p_com(eps, false)// P·eps 
-                    .dot(cos_mat.get(&vec![q_ind_key]).unwrap()) // cos(qx/2) matrix element
+                    .dot(sin_mat.get(&vec![q_ind_key]).unwrap()) // cos(qx/2) matrix element
                 );
             
             p_q.push( 
@@ -376,7 +376,7 @@ impl PPOffHamiltonian {
 
         });
 
-        self.p_cos = Some(p_cos);
+        self.p_sin = Some(p_sin);
         self.p_q = Some(p_q);
     }
 
@@ -407,9 +407,9 @@ impl PPOffHamiltonian {
         all_q_ind
     }
 
-    pub fn calc_matrix_element_arrays(&mut self, taylor: bool) {
+    pub fn calc_matrix_element_arrays(&mut self) {
 
-        if taylor {
+        // if taylor {
             // Using Taylor expansion for small q with analytic integrals
             let all_q_ind = self.calc_all_q_ind();
 
@@ -429,19 +429,19 @@ impl PPOffHamiltonian {
             );
 
             self.matrix_element_arrays = Some(matrix_element_arrays);
-        }
-        else {
-            // Using grid wavefunctions and photon/phonon modes, compute all necessary matrix elements
-            let matrix_elements = &self.calculate_matrix_elements();
+        // }
+        // else {
+        //     // Using grid wavefunctions and photon/phonon modes, compute all necessary matrix elements
+        //     let matrix_elements = &self.calculate_matrix_elements();
 
-            let mut matrix_element_arrays = LMMatrixElementArray::new();
-            matrix_element_arrays = matrix_element_arrays.populate_mat_elements(matrix_elements, 
-                self.exciton.e_vecs.as_ref().unwrap(), 
-                self.exciton.parities.as_ref().unwrap(), 
-                self.exciton.exciton_ham.kappa_vectors.len());
+        //     let mut matrix_element_arrays = LMMatrixElementArray::new();
+        //     matrix_element_arrays = matrix_element_arrays.populate_mat_elements(matrix_elements, 
+        //         self.exciton.e_vecs.as_ref().unwrap(), 
+        //         self.exciton.parities.as_ref().unwrap(), 
+        //         self.exciton.exciton_ham.kappa_vectors.len());
 
-            self.matrix_element_arrays = Some(matrix_element_arrays);
-        }
+        //     self.matrix_element_arrays = Some(matrix_element_arrays);
+        // }
 
     }
 
@@ -451,10 +451,10 @@ impl Operator<f64> for PPOffHamiltonian {
     fn apply(&self, x: &[f64], y: &mut [f64]) {
         
         assert!(self.matrix_element_arrays.is_some(), "Matrix element arrays not computed. Call calc_matrix_element_arrays() first.");
-        assert!(self.p_cos.is_some(), "P cos(x) element arrays not computed. Call calc_p_cos_matrix() first.");
+        assert!(self.p_sin.is_some(), "P cos(x) element arrays not computed. Call calc_p_cos_matrix() first.");
         assert!(self.p_q.is_some(), "P q element arrays not computed. Call calc_p_cos_matrix() first.");
 
-        let p_cos_ref = self.p_cos.as_ref().unwrap();
+        let p_sin_ref = self.p_sin.as_ref().unwrap();
         let matrix_element_arrays_ref = self.matrix_element_arrays.as_ref().unwrap();
         let p_q_ref = self.p_q.as_ref().unwrap();
 
@@ -474,8 +474,8 @@ impl Operator<f64> for PPOffHamiltonian {
 
         // Implement all a and a† terms
         let y_ph_list: Vec<(usize, f64)> = self.photon.photon_modes.par_iter().enumerate().flat_map(|(mode_i, _)| {
-            let p_sin = matrix_element_arrays_ref.p_sin_mat.get(&vec![mode_i as i32]).unwrap();
-            let p_cos = &p_cos_ref[mode_i];
+            let p_sin = &p_sin_ref[mode_i];
+            let p_cos = matrix_element_arrays_ref.p_cos_mat.get(&vec![mode_i as i32]).unwrap();
             let p_q = &p_q_ref[mode_i];
 
             let mut a_term: Array1<f64>;
@@ -498,8 +498,9 @@ impl Operator<f64> for PPOffHamiltonian {
                     let x_ph_ground = x_vec.slice(s![ground_start..;stride]);
 
                     // Calculate terms using BLAS-powered dot products
-                    a_dag_term = &(&p_cos.dot(&x_ph_ground) * lm_coupling_2_over_m) + 
-                                 &(&p_sin.dot(&x_ph_ground) * lm_coupling_2_over_mu);
+                    // ( P sin(q•x/2) + i p cos(q•x/2) ) â† 
+                    a_dag_term = &(&p_sin.dot(&x_ph_ground) * lm_coupling_2_over_m) + 
+                                 &(&p_cos.dot(&x_ph_ground) * lm_coupling_2_over_mu);
                     aa_term = &p_q.dot(&x_ph_mode_i) * one_over_2m;
                     
 
@@ -511,8 +512,9 @@ impl Operator<f64> for PPOffHamiltonian {
                 // For a terms - Process mode_i to ground state transition
                 {                    
                     // Calculate a_term using BLAS-powered dot products
-                    a_term = &(&p_cos.dot(&x_ph_mode_i) * lm_coupling_2_over_m) - 
-                             &(&p_sin.dot(&x_ph_mode_i) * lm_coupling_2_over_mu);
+                    // ( P sin(q•x/2) - i p cos(q•x/2) ) â† 
+                    a_term = &(&p_sin.dot(&x_ph_mode_i) * lm_coupling_2_over_m) - 
+                             &(&p_cos.dot(&x_ph_mode_i) * lm_coupling_2_over_mu);
                     
                     // Add to y at photon ground state and phonon in pn_ind
                     let indices: Vec<usize> = (0..n_ex).map(|ex_ind| pn_ind + ex_ind * stride).collect();
@@ -527,6 +529,8 @@ impl Operator<f64> for PPOffHamiltonian {
                 let q_ind2 = (mode_i as i32).min(mode_j as i32);
                 let q_ind_key = vec![q_ind1, -q_ind2];
 
+                // Since we are in sing-ex for photons a^† a^† and a a terms are 0
+                // Only a^† a terms contribute for off-diagonal terms
                 if let Some(cos_matrix) = matrix_element_arrays_ref.cos_mat.get(&q_ind_key) {
                     let eps_i = &self.photon.photon_modes[mode_i].eps;
                     let eps_j = &self.photon.photon_modes[mode_j].eps;
@@ -637,21 +641,18 @@ impl PolaronPolariton {
         let mut pp_off_ham:PPOffHamiltonian;  
         let mut pp_diag_ham:PPDiagHamiltonian;  
 
-        // Calculate matrix elements using taylor expansion
-        let taylor = true;
-
         if let Some(pn) = phonon{
             pp_off_ham = PPOffHamiltonian::new(Arc::clone(&exciton), photon.clone(), Some(pn.clone()), lm_coupling, pn_coupling, None);
-            pp_off_ham.calc_matrix_element_arrays(taylor);
-            pp_off_ham.calc_p_cos_matrix();
+            pp_off_ham.calc_matrix_element_arrays();
+            pp_off_ham.calc_p_sin_matrix();
 
             pp_diag_ham = PPDiagHamiltonian::new(Arc::clone(&exciton), photon, Some(pn), k.clone(), lm_coupling);
             pp_diag_ham.calculate_interaction_array();
         }
         else {
             pp_off_ham = PPOffHamiltonian::new(Arc::clone(&exciton), photon.clone(), None, lm_coupling, pn_coupling, None);
-            pp_off_ham.calc_matrix_element_arrays(taylor);
-            pp_off_ham.calc_p_cos_matrix();
+            pp_off_ham.calc_matrix_element_arrays();
+            pp_off_ham.calc_p_sin_matrix();
 
             pp_diag_ham = PPDiagHamiltonian::new(Arc::clone(&exciton), photon, None, k.clone(), lm_coupling);
             pp_diag_ham.calculate_interaction_array();
@@ -690,7 +691,7 @@ impl PolaronPolariton {
 
 
         self.pp_off_ham.exciton = self.exciton.clone();
-        self.pp_off_ham.calc_p_cos_matrix();
+        self.pp_off_ham.calc_p_sin_matrix();
     }
 
 }

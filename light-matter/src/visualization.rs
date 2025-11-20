@@ -214,7 +214,7 @@ pub fn plot_dielectric_function(
         
         let sigma = ((mean2.0 - mean.0 * mean.0).sqrt(), (mean2.1 - mean.1* mean.1).sqrt());
 
-        let factor = 1.0;
+        let factor = 0.1;
         eps_min = (eps_min.0.min(mean.0-factor*sigma.0), eps_min.1.min(mean.1-factor*sigma.1));
         eps_max = (eps_max.0.max(mean.0+factor*sigma.0), eps_max.1.max(mean.1+factor*sigma.1));
         
@@ -299,14 +299,14 @@ pub fn plot_dielectric_function(
         
 
         
-        for (i, (key, coupling)) in couplings.iter().enumerate() {
+        for (i, (key, coupling)) in couplings.iter().enumerate().rev() {
             let (omegas, re_eps, _, params) = &all_data[key];
             
             // Create a color gradient from blue to red
             let color = RGBColor(
-                ((1.0 - i as f64 / couplings.len() as f64) * 255.0) as u8, // More red for higher coupling
+                ((1.0 - i as f64 / (couplings.len() - 1) as f64) * 255.0) as u8, // More red for higher coupling
                 0,
-                ((i as f64 / couplings.len() as f64) * 255.0) as u8  // More blue for lower coupling
+                ((i as f64 / (couplings.len() - 1) as f64) * 255.0) as u8  // More blue for lower coupling
             );
             
             // Filter data points within the omega range
@@ -346,6 +346,12 @@ pub fn plot_dielectric_function(
     
     // Plot the imaginary part
     if plot_type == DielectricPlotType::Imaginary || plot_type == DielectricPlotType::Both {
+
+        // Change to semilog plot
+        let e_min: f64 = (1.0_f64).abs().min((2.0*eps_min.1).abs());
+        let e_max: f64 = (1.0_f64).abs().max((2.0*eps_min.1).abs());
+        println!("max: {}, min: {}", e_max, e_min);
+
         let area_index = if plot_type == DielectricPlotType::Both { 1 } else { 0 };
         let mut chart = ChartBuilder::on(&areas[area_index])
             .caption(format!("{} - Imaginary Part", title), ("sans-serif", 30).into_font().color(&BLACK))
@@ -354,7 +360,8 @@ pub fn plot_dielectric_function(
             .margin_bottom(10)
             .x_label_area_size(40)
             .y_label_area_size(60)
-            .build_cartesian_2d(omega_min..omega_max, 2.0*eps_min.1..eps_max.0 * 0.05)?;
+            // .build_cartesian_2d(omega_min..omega_max, 2.0*eps_min.1..eps_max.0 * 0.05)?;
+            .build_cartesian_2d(omega_min..omega_max, (e_min..e_max).log_scale())?;
         
         chart.configure_mesh()
             .x_desc("Frequency (a.u.)")
@@ -365,21 +372,22 @@ pub fn plot_dielectric_function(
             .draw()?;
         
         // Draw each coupling strength with a different color
-        for (i, (key, coupling)) in couplings.iter().enumerate() {
+        for (i, (key, coupling)) in couplings.iter().enumerate().rev() {
             let (omegas, _, im_eps, params) = &all_data[key];
             
             // Create a color gradient from blue to red
             let color = RGBColor(
-                ((1.0 - i as f64 / couplings.len() as f64) * 255.0) as u8, // More red for higher coupling
+                ((1.0 - i as f64 / (couplings.len() - 1) as f64) * 255.0) as u8, // More red for higher coupling
                 0,
-                ((i as f64 / couplings.len() as f64) * 255.0) as u8  // More blue for lower coupling
+                ((i as f64 / (couplings.len() - 1) as f64) * 255.0) as u8  // More blue for lower coupling
             );
             
             // Filter data points within the omega range
             let points: Vec<(f64, f64)> = omegas.iter()
                 .zip(im_eps.iter())
                 .filter(|(omega, _)| omega >= &&omega_min && omega <= &&omega_max)
-                .map(|(&omega, &eps)| (omega, eps))
+                // .map(|(&omega, &eps)| (omega, eps))
+                .map(|(&omega, &eps)| (omega, eps.abs()))
                 .collect();
             
             // Create a more detailed label if we have the parameters
