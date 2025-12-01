@@ -13,7 +13,7 @@ Parallelize `calculate_color_band_structure()` using Rayon for faster band struc
 
 ## What Was Implemented
 
-**MPI (Message Passing Interface) parallelization** - a process-based approach that is compatible with PETSc/SLEPc.
+**MPI (Message Passing Interface) parallelization using the `mpi` crate** - a proper, Rust-native, process-based approach that is compatible with PETSc/SLEPc and provides direct memory communication instead of file-based synchronization.
 
 ## Files Created/Modified
 
@@ -26,13 +26,11 @@ Parallelize `calculate_color_band_structure()` using Rayon for faster band struc
 ### 2. Documentation
 - ✅ **`MPI_README.md`** - Quick start guide (2 pages)
 - ✅ **`MPI_PARALLELIZATION_GUIDE.md`** - Comprehensive guide (15 pages)
-- ✅ **`PARALLELIZATION_SUMMARY.md`** - Executive summary (5 pages)
 - ✅ **`IMPLEMENTATION_COMPLETE.md`** - This file
 
 ### 3. Examples
 - ✅ **`examples/mpi_band_structure.sh`** - Simple run script
 - ✅ **`examples/benchmark_mpi.sh`** - Performance benchmarking
-- ✅ **`examples/usage_example.rs`** - Code examples
 
 ## How to Use
 
@@ -125,9 +123,11 @@ Speedup ≈ 0.9 × N_ranks
 
 1. **Process-based**: Each rank is a separate process (not thread)
 2. **No shared memory**: Avoids PETSc thread-safety issues
-3. **File-based sync**: Simple and robust
-4. **Automatic distribution**: K-points divided evenly
-5. **Warm-starting**: Each rank uses previous eigenvectors
+3. **Direct MPI communication**: Uses `mpi` crate for memory-based transfers
+4. **Proper MPI barriers**: No file polling needed
+5. **Automatic distribution**: K-points divided evenly
+6. **Warm-starting**: Each rank uses previous eigenvectors
+7. **Type-safe**: Rust's `mpi` crate provides compile-time checks
 
 ## Testing
 

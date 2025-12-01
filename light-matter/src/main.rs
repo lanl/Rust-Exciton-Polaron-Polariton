@@ -214,16 +214,18 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
             // Calculate and plot color-coded band structure
             timed_println!("Calculating color-coded band structure...");
             let (k_points_color, eigvals_list_color, photonic_character_list) = 
-                color_band_plot::calculate_color_band_structure(
+                color_band_plot::calculate_color_band_structure_mpi_simple(
                     &mut pp, n_k_points, n_eig, &sym_points, &pp_config, diag_method, false); // Use cached data if available, sort bands for continuity
 
             timed_println!("Calculated Band Structure in {:?}", Instant::now().duration_since(time1));
                 
-            // Plot using gnuplot
-            if let Err(e) = color_band_plot::plot_color_band_structure(
-                &k_points_color, &sym_points, &sym_labels, &eigvals_list_color,
-                &photonic_character_list, n_eig, a0, "sing_ex_color_disp_plot.png", v0, coupling) {
-                timed_println!("Error plotting color-coded band structure: {}", e);
+            // Plot using gnuplot (only on rank 0 which has the data)
+            if !k_points_color.is_empty() {
+                if let Err(e) = color_band_plot::plot_color_band_structure(
+                    &k_points_color, &sym_points, &sym_labels, &eigvals_list_color,
+                    &photonic_character_list, n_eig, a0, "sing_ex_color_disp_plot.png", v0, coupling) {
+                    timed_println!("Error plotting color-coded band structure: {}", e);
+                }
             }
         } 
     }
