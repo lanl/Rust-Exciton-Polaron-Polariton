@@ -451,7 +451,7 @@ impl Operator<f64> for PPOffHamiltonian {
     fn apply(&self, x: &[f64], y: &mut [f64]) {
         
         assert!(self.matrix_element_arrays.is_some(), "Matrix element arrays not computed. Call calc_matrix_element_arrays() first.");
-        assert!(self.p_sin.is_some(), "P cos(x) element arrays not computed. Call calc_p_cos_matrix() first.");
+        assert!(self.p_sin.is_some(), "P sin(x) element arrays not computed. Call calc_p_cos_matrix() first.");
         assert!(self.p_q.is_some(), "P q element arrays not computed. Call calc_p_cos_matrix() first.");
 
         let p_sin_ref = self.p_sin.as_ref().unwrap();
@@ -469,7 +469,7 @@ impl Operator<f64> for PPOffHamiltonian {
         
         // Pre-compute some constants to avoid repeated calculations
         let lm_coupling_2_over_m = self.lm_coupling * 2.0 / self.exciton.exciton_ham.m;
-        let lm_coupling_2_over_mu = self.lm_coupling * 2.0 / self.exciton.exciton_ham.rel_ham.mu;
+        let lm_coupling_2_over_mu = self.lm_coupling / self.exciton.exciton_ham.rel_ham.mu;
         let one_over_2m = 1.0 / (2.0 * self.exciton.exciton_ham.m);
 
         // Implement all a and a† terms
@@ -563,50 +563,50 @@ impl Operator<f64> for PPOffHamiltonian {
         let y_pn_list: Vec<(usize, f64)>;
 
         if self.phonon.is_some() && self.pn_coupling.abs() > 1e-12 {
-        let phonon_mode_ind: i32 = self.photon.photon_modes.len() as i32;
-        let cos_mat_phonon = matrix_element_arrays_ref.cos_mat.get(&vec![phonon_mode_ind]).unwrap();
+            let phonon_mode_ind: i32 = self.photon.photon_modes.len() as i32;
+            let cos_mat_phonon = matrix_element_arrays_ref.cos_mat.get(&vec![phonon_mode_ind]).unwrap();
 
-        y_pn_list = (0..n_pn-1).into_par_iter().flat_map(|pn_ind| {
-            let sqrt_pn_plus_1 = ((pn_ind + 1) as f64).sqrt();
-            let pn_coupling_factor = self.pn_coupling * sqrt_pn_plus_1;
+            y_pn_list = (0..n_pn-1).into_par_iter().flat_map(|pn_ind| {
+                let sqrt_pn_plus_1 = ((pn_ind + 1) as f64).sqrt();
+                let pn_coupling_factor = self.pn_coupling * sqrt_pn_plus_1;
 
-            let mut local_y: Vec<(usize, f64)> = Vec::new();
+                let mut local_y: Vec<(usize, f64)> = Vec::new();
 
-            for ph_ind in 0..n_ph {
-                let pn_dex_start = ph_ind * n_pn + pn_ind;
-                let pn_exc_start = pn_dex_start + 1;
-                
-                // For b† term - Process pn_ind to pn_ind+1 transition
-                {
-                    // Get slice for phonon pn_ind at this photon level
-                    let x_ph_pn = x_vec.slice(s![pn_dex_start..;stride]);
+                for ph_ind in 0..n_ph {
+                    let pn_dex_start = ph_ind * n_pn + pn_ind;
+                    let pn_exc_start = pn_dex_start + 1;
                     
-                    // Calculate b_dag_term using BLAS-powered dot product
-                    let b_dag_term = &cos_mat_phonon.dot(&x_ph_pn) * pn_coupling_factor;
+                    // For b† term - Process pn_ind to pn_ind+1 transition
+                    {
+                        // Get slice for phonon pn_ind at this photon level
+                        let x_ph_pn = x_vec.slice(s![pn_dex_start..;stride]);
+                        
+                        // Calculate b_dag_term using BLAS-powered dot product
+                        let b_dag_term = &cos_mat_phonon.dot(&x_ph_pn) * pn_coupling_factor;
+                        
+                        // Add to y at phonon pn_ind+1 and photon in ph_ind
+                        let indices: Vec<usize> = (0..n_ex).map(|ex_ind| (pn_ind + 1) + ph_ind * n_pn + ex_ind * stride).collect();
+                        let values: Vec<f64> = (b_dag_term).to_vec();
+                        local_y.extend(indices.into_iter().zip(values.into_iter()));
+                    }
                     
-                    // Add to y at phonon pn_ind+1 and photon in ph_ind
-                    let indices: Vec<usize> = (0..n_ex).map(|ex_ind| (pn_ind + 1) + ph_ind * n_pn + ex_ind * stride).collect();
-                    let values: Vec<f64> = (b_dag_term).to_vec();
-                    local_y.extend(indices.into_iter().zip(values.into_iter()));
+                    // For b term - Process pn_ind+1 to pn_ind transition
+                    {
+                        // Get slice for phonon pn_ind+1 at this photon level
+                        let x_ph_pn_plus_1 = x_vec.slice(s![pn_exc_start..;stride]);
+                        
+                        // Calculate b_term using BLAS-powered dot product
+                        let b_term = &cos_mat_phonon.dot(&x_ph_pn_plus_1) * pn_coupling_factor;
+                        
+                        // Add to y at phonon pn_ind and photon in ph_ind
+                        let indices: Vec<usize> = (0..n_ex).map(|ex_ind| pn_ind + ph_ind * n_pn + ex_ind * stride).collect();
+                        let values: Vec<f64> = (b_term).to_vec();
+                        local_y.extend(indices.into_iter().zip(values.into_iter()));
+                    }
                 }
-                
-                // For b term - Process pn_ind+1 to pn_ind transition
-                {
-                    // Get slice for phonon pn_ind+1 at this photon level
-                    let x_ph_pn_plus_1 = x_vec.slice(s![pn_exc_start..;stride]);
-                    
-                    // Calculate b_term using BLAS-powered dot product
-                    let b_term = &cos_mat_phonon.dot(&x_ph_pn_plus_1) * pn_coupling_factor;
-                    
-                    // Add to y at phonon pn_ind and photon in ph_ind
-                    let indices: Vec<usize> = (0..n_ex).map(|ex_ind| pn_ind + ph_ind * n_pn + ex_ind * stride).collect();
-                    let values: Vec<f64> = (b_term).to_vec();
-                    local_y.extend(indices.into_iter().zip(values.into_iter()));
-                }
-            }
 
-            local_y
-        }).collect();
+                local_y
+            }).collect();
         }
         else {
             y_pn_list = vec![(0,0.0)]; // No phonon contributions

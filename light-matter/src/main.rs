@@ -54,9 +54,9 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     let parity = 0;      // Parity of states to consider
     
     // Light-matter coupling parameters
-    let total_coupling = 0.0;  // Coupling strength
-    let omega_0 = 0.2;    // Photon frequency
-    let n_modes = 8;
+    let total_coupling = 0.03;  // Coupling strength
+    let omega_0 = 0.15;    // Photon frequency
+    let n_modes = 16;
     let coupling = total_coupling / (n_modes as f64);
 
     // Define photon modes
@@ -79,7 +79,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     let pn_coupling = 0.0015;
     let pn_omega = 0.0075; // 1500 cm^-1
     let pn_k = arr1(&[0.,0.05]); // 1 nm^1
-    let pn_n_fock = 4;
+    let pn_n_fock = 0;
 
     let pp_config = PPConfig{
         e_config, n_rel, n_ex_eig, lm_coupling: coupling, omega_0, q_values,
@@ -257,7 +257,8 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
         })}).collect();
     
     // Define phonon parameters
-    let pn_coupling = 0.0025;
+    // let pn_coupling = 0.0025;
+    let pn_coupling = 0.0;
     let pn_omega = 0.0075; // 1500 cm^-1
     let pn_k = arr1(&[0.,0.05]); // 1 nm^1
     let pn_n_fock = 16;
