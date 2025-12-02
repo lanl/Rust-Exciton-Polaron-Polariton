@@ -34,3 +34,4 @@ num_cpus = "1.17.0"
 rust_slepc_bindings = {path = "../slepc_rust"}
 chrono = "0.4"
 mpi = "0.8"
+colored ="3.0.0"

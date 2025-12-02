@@ -8,6 +8,9 @@ use crate::utils::PPConfig;
 use bincode::{serialize, deserialize};
 use serde::{Serialize, Deserialize};
 use std::error::Error;
+use indicatif::{ProgressBar, ProgressStyle};
+use std::time::{Instant, Duration};
+use colored::Colorize;
 
 use crate::timed_println;
 
@@ -218,230 +221,6 @@ pub fn calculate_color_band_structure(
     (k_points, sorted_eigvals, sorted_photonic)
 }
 
-// /// Calculate band structure with MPI parallelization using the `mpi` crate
-// /// 
-// /// This version uses proper MPI bindings via the `mpi` crate. Each rank processes its
-// /// subset of k-points sequentially, then results are gathered on rank 0 using MPI collectives.
-// /// 
-// /// **Usage**: Run with mpirun/mpiexec:
-// /// ```bash
-// /// mpirun -np 4 ./your_program
-// /// ```
-// /// 
-// /// **Advantages over file-based approach**:
-// /// - Direct memory communication (faster)
-// /// - Proper MPI barriers (no file polling)
-// /// - Standard MPI operations
-// /// - Better error handling
-// /// - More robust and portable
-// pub fn calculate_color_band_structure_mpi(
-//     pp: &mut PolaronPolariton,
-//     n_k_points: usize,
-//     n_eig: usize,
-//     sym_points: &Vec<Vec<f64>>,
-//     pp_config: &PPConfig,
-//     method: DiagonalizationMethod,
-//     use_cached: bool,
-// ) -> (Vec<Vec<f64>>, Vec<Array1<f64>>, Vec<Vec<f64>>) {
-//     use mpi::traits::*;
-
-//     // Check if MPI is already initialized (e.g., by PETSc/SLEPc)
-//     let (world, rank, world_size) = if mpi::is_initialized() {
-//         // MPI already initialized, just get the world communicator
-//         let world = mpi::environment::world();
-//         let rank = world.rank() as usize;
-//         let world_size = world.size() as usize;
-//         (world, rank, world_size)
-//     } else {
-//         // Initialize MPI ourselves
-//         let universe = mpi::initialize().expect("Failed to initialize MPI");
-//         let world = universe.world();
-//         let rank = world.rank() as usize;
-//         let world_size = world.size() as usize;
-//         (world, rank, world_size)
-//     };
-
-//     if rank == 0 {
-//         timed_println!("Running with {} MPI ranks", world_size);
-//     }
-
-//     let save_dir = "pp_data".to_string();
-//     std::fs::create_dir_all(&save_dir).unwrap_or_else(|_| {});
-    
-//     // Generate filename for the color band structure data
-//     let filename = format!(
-//         "{}/color_band_a0{}_V0{}_nrel{}_nbands{}_npoints{}_phcoup{}_nmodes{}_pncoup{}_npn{}_neig{}.bin",
-//         save_dir,
-//         pp_config.e_config.a0,
-//         pp_config.e_config.v0,
-//         pp_config.n_rel,
-//         pp_config.n_bands,
-//         n_k_points,
-//         pp_config.lm_coupling,
-//         pp.pp_off_ham.photon.photon_modes.len(),
-//         pp_config.pn_coupling,
-//         pp_config.pn_n_fock,
-//         n_eig
-//     );
-    
-//     // Check if cached data exists and should be used (only rank 0)
-//     if rank == 0 && use_cached && Path::new(&filename).exists() {
-//         timed_println!("Loading cached color band structure data from {}", filename);
-//         match ColorBandData::load_from_file(&filename) {
-//             Ok(data) => return data.to_results(),
-//             Err(e) => timed_println!("Failed to load cached data: {}, recalculating...", e)
-//         }
-//     }
-
-//     // Calculate points per segment of the path
-//     let points_per_seg = n_k_points / sym_points.len();
-
-//     // Generate k-points along the path
-//     let k_points: Vec<Vec<f64>> = sym_points.iter().enumerate().flat_map(|(sym_ind, sym_point)| {
-//         let sym_ind2 = (sym_ind + 1) % sym_points.len();
-//         (0..points_per_seg).map(move |t| {
-//             // Interpolate between symmetry points
-//             let t_frac = t as f64 / (points_per_seg - 1) as f64;
-//             let x = sym_point[0] + t_frac * (sym_points[sym_ind2][0] - sym_point[0]);
-//             let y = sym_point[1] + t_frac * (sym_points[sym_ind2][1] - sym_point[1]);
-
-//             vec![x, y]
-//         })
-//     }).collect();
-
-//     // Distribute k-points across ranks
-//     let total_k_points = k_points.len();
-//     let k_per_rank = (total_k_points + world_size - 1) / world_size; // Ceiling division
-//     let start_idx = rank * k_per_rank;
-//     let end_idx = ((rank + 1) * k_per_rank).min(total_k_points);
-    
-//     let my_k_points: Vec<(usize, Vec<f64>)> = k_points[start_idx..end_idx]
-//         .iter()
-//         .enumerate()
-//         .map(|(local_idx, k)| (start_idx + local_idx, k.clone()))
-//         .collect();
-
-//     if rank == 0 {
-//         timed_println!("Processing {} k-points across {} ranks", total_k_points, world_size);
-//     }
-//     timed_println!("Rank {}: Processing k-points {} to {}", rank, start_idx, end_idx - 1);
-
-//     // Set up progress bar (only for rank 0)
-//     let pb = if rank == 0 {
-//         let pb = indicatif::ProgressBar::new(total_k_points as u64);
-//         pb.set_style(indicatif::ProgressStyle::default_bar()
-//             .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} k-points ({eta})")
-//             .unwrap()
-//             .progress_chars("#>-"));
-//         Some(pb)
-//     } else {
-//         None
-//     };
-    
-//     // Calculate eigenvalues and photonic character for this rank's k-points
-//     let mut local_results: Vec<(usize, Array1<f64>, Vec<f64>)> = Vec::with_capacity(my_k_points.len());
-//     let mut prev_eigvecs: Option<Array2<f64>> = None;
-    
-//     for (global_idx, k) in my_k_points.iter() {
-//         pp.update_k(k.clone());
-
-//         // Use previous eigenvectors as initial guess for better convergence
-//         let (eigvals, eigvecs) = diagonalize_pp_sing_ex(&pp, n_eig, &method, prev_eigvecs.as_ref());
-        
-//         // Calculate photonic character for each eigenstate
-//         let photonic_character: Vec<f64> = (0..n_eig)
-//             .map(|i| calculate_photonic_character(&pp, &eigvecs.column(i).to_owned()))
-//             .collect();
-        
-//         // Store eigenvectors for next iteration
-//         prev_eigvecs = Some(eigvecs);
-        
-//         local_results.push((*global_idx, eigvals, photonic_character));
-//     }
-    
-//     timed_println!("Rank {}: Completed {} k-points", rank, local_results.len());
-
-//     // Serialize local results for sending via MPI
-//     let local_data = ColorBandData::from_results(
-//         local_results.iter().map(|(idx, _, _)| k_points[*idx].clone()).collect(),
-//         local_results.iter().map(|(_, eigvals, _)| eigvals.clone()).collect(),
-//         local_results.iter().map(|(_, _, photonic)| photonic.clone()).collect(),
-//     );
-    
-//     let serialized_local = serialize(&local_data).expect("Failed to serialize local data");
-
-//     // MPI Barrier: Ensure all ranks have finished computation
-//     world.barrier();
-    
-//     // Gather results on rank 0
-//     if rank == 0 {
-//         timed_println!("Rank 0: Gathering results from all ranks...");
-        
-//         // Collect data from all ranks
-//         let mut all_results: Vec<(usize, Array1<f64>, Vec<f64>)> = Vec::with_capacity(total_k_points);
-        
-//         // Add rank 0's results first
-//         for (idx, eigvals, photonic) in local_results {
-//             all_results.push((idx, eigvals, photonic));
-//             if let Some(ref pb) = pb {
-//                 pb.inc(1);
-//             }
-//         }
-        
-//         // Receive from other ranks
-//         for source_rank in 1..world_size {
-//             // Receive serialized data as a Vec<u8>
-//             let (recv_buf, _status) = world.process_at_rank(source_rank as i32)
-//                 .receive_vec::<u8>();
-            
-//             // Deserialize
-//             if let Ok(rank_data) = deserialize::<ColorBandData>(&recv_buf) {
-//                 let (_, eigvals, photonic) = rank_data.to_results();
-//                 let start = source_rank * k_per_rank;
-                
-//                 for (local_idx, (eigval, phot)) in eigvals.iter().zip(photonic.iter()).enumerate() {
-//                     let global_idx = start + local_idx;
-//                     if global_idx < total_k_points {
-//                         all_results.push((global_idx, eigval.clone(), phot.clone()));
-//                         if let Some(ref pb) = pb {
-//                             pb.inc(1);
-//                         }
-//                     }
-//                 }
-//             }
-//         }
-        
-//         if let Some(ref pb) = pb {
-//             pb.finish_with_message("Bandstructure calculation complete");
-//         }
-
-//         // Sort results by index
-//         all_results.sort_by_key(|(idx, _, _)| *idx);
-        
-//         let mut sorted_eigvals = vec![Array1::<f64>::zeros(0); total_k_points];
-//         let mut sorted_photonic = vec![Vec::<f64>::new(); total_k_points];
-        
-//         for (idx, eigvals, photonic) in all_results {
-//             sorted_eigvals[idx] = eigvals;
-//             sorted_photonic[idx] = photonic;
-//         }
-        
-//         // Save the final results
-//         let band_data = ColorBandData::from_results(k_points.clone(), sorted_eigvals.clone(), sorted_photonic.clone());
-//         match band_data.save_to_file(&filename) {
-//             Ok(_) => timed_println!("Color band structure data saved to {}", filename),
-//             Err(e) => timed_println!("Failed to save color band structure data: {}", e)
-//         }
-        
-//         (k_points, sorted_eigvals, sorted_photonic)
-//     } else {
-//         // Non-root ranks send their data to rank 0
-//         world.process_at_rank(0).send(&serialized_local[..]);
-        
-//         // Return empty results for non-root ranks
-//         (vec![], vec![], vec![])
-//     }
-// }
 
 /// Calculate band structure with MPI parallelization (alternative implementation)
 /// 
@@ -460,25 +239,56 @@ pub fn calculate_color_band_structure_mpi_simple(
 ) -> (Vec<Vec<f64>>, Vec<Array1<f64>>, Vec<Vec<f64>>) {
     use std::env;
 
+    // Debug: Print all MPI-related environment variables
+    timed_println!("\n=== MPI Environment Variables ===");
+    let mpi_vars = vec![
+        "PMI_SIZE", "PMI_RANK", "PMIX_SIZE", "PMIX_RANK",
+        "I_MPI_SIZE", "I_MPI_RANK", "I_MPI_WORLD_SIZE", "I_MPI_WORLD_RANK",
+        "OMPI_COMM_WORLD_SIZE", "OMPI_COMM_WORLD_RANK",
+        "SLURM_NTASKS", "SLURM_PROCID", "SLURM_NPROCS",
+        "MPI_LOCALNRANKS", "MPI_LOCALRANKID"
+    ];
+    for var in &mpi_vars {
+        match env::var(var) {
+            Ok(val) => timed_println!("  {} = {}", var, val),
+            Err(_) => timed_println!("  {} = <not set>", var),
+        }
+    }
+    timed_println!("=================================\n");
+
     // Get MPI rank and size from environment variables
-    // This works even if MPI was initialized by another library
-    let world_size: usize = env::var("OMPI_COMM_WORLD_SIZE")
-        .or_else(|_| env::var("PMI_SIZE"))
-        .or_else(|_| env::var("MPI_LOCALNRANKS"))
-        .unwrap_or_else(|_| "1".to_string())
+    // Try multiple environment variable names for different MPI implementations
+    let world_size: usize = env::var("PMI_SIZE")
+        .or_else(|_| env::var("PMIX_SIZE"))
+        .or_else(|_| env::var("I_MPI_SIZE"))
+        .or_else(|_| env::var("OMPI_COMM_WORLD_SIZE"))
+        .or_else(|_| env::var("SLURM_NTASKS"))
+        .expect("Could not find MPI world size in environment variables. Tried: PMI_SIZE, PMIX_SIZE, I_MPI_SIZE, OMPI_COMM_WORLD_SIZE, SLURM_NTASKS")
         .parse()
-        .unwrap_or(1);
+        .expect("Failed to parse world size as integer");
     
-    let rank: usize = env::var("OMPI_COMM_WORLD_RANK")
-        .or_else(|_| env::var("PMI_RANK"))
-        .or_else(|_| env::var("MPI_LOCALRANKID"))
-        .unwrap_or_else(|_| "0".to_string())
+    let rank: usize = env::var("PMI_RANK")
+        .or_else(|_| env::var("PMIX_RANK"))
+        .or_else(|_| env::var("I_MPI_RANK"))
+        .or_else(|_| env::var("OMPI_COMM_WORLD_RANK"))
+        .or_else(|_| env::var("SLURM_PROCID"))
+        .expect("Could not find MPI rank in environment variables. Tried: PMI_RANK, PMIX_RANK, I_MPI_RANK, OMPI_COMM_WORLD_RANK, SLURM_PROCID")
         .parse()
-        .unwrap_or(0);
+        .expect("Failed to parse rank as integer");
 
     if rank == 0 {
         timed_println!("Running with {} MPI ranks (simple mode)", world_size);
     }
+
+    let save_dir = "pp_data".to_string();
+    std::fs::create_dir_all(&save_dir).unwrap_or_else(|_| {});
+
+    // Start timer on rank 0
+    let start_time = if rank == 0 {
+        Some(Instant::now())
+    } else {
+        None
+    };
 
     let save_dir = "pp_data".to_string();
     std::fs::create_dir_all(&save_dir).unwrap_or_else(|_| {});
@@ -541,22 +351,11 @@ pub fn calculate_color_band_structure_mpi_simple(
     }
     timed_println!("Rank {}: Processing k-points {} to {}", rank, start_idx, end_idx - 1);
 
-    // Set up progress bar (only for rank 0)
-    let pb = if rank == 0 {
-        let pb = indicatif::ProgressBar::new(total_k_points as u64);
-        pb.set_style(indicatif::ProgressStyle::default_bar()
-            .template("{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} k-points ({eta})")
-            .unwrap()
-            .progress_chars("#>-"));
-        Some(pb)
-    } else {
-        None
-    };
     
     // Calculate eigenvalues and photonic character for this rank's k-points
     let mut local_results: Vec<(usize, Array1<f64>, Vec<f64>)> = Vec::with_capacity(my_k_points.len());
     let mut prev_eigvecs: Option<Array2<f64>> = None;
-    
+
     for (global_idx, k) in my_k_points.iter() {
         pp.update_k(k.clone());
 
@@ -568,8 +367,34 @@ pub fn calculate_color_band_structure_mpi_simple(
         
         prev_eigvecs = Some(eigvecs);
         local_results.push((*global_idx, eigvals, photonic_character));
+
+        // Calculate ETA on rank 0
+        if let Some(start) = start_time {
+            let elapsed_secs = start.elapsed().as_secs_f64();
+            let completed_k_points = local_results.len();
+            if completed_k_points > 0 {
+                let avg_time_per_k_point = elapsed_secs / completed_k_points as f64;
+                let remaining_k_points_this_rank = my_k_points.len() - completed_k_points;
+                let eta = avg_time_per_k_point * remaining_k_points_this_rank as f64;
+
+                if rank == 0 {
+                    let eta_str = format_time(eta);
+                    let elapsed_str = format_time(elapsed_secs);
+
+                    timed_println!(
+                        "\n\n{}\n⏱️ ETA: {} | Rank: {} | K-point: {}/{} | Elapsed: {}\n\n",
+                        "ETA UPDATE".red(),
+                        eta_str.red(),
+                        rank,
+                        completed_k_points,
+                        my_k_points.len(),
+                        elapsed_str.red()
+                    );
+                }
+            }
+        }
     }
-    
+
     timed_println!("Rank {}: Completed {} k-points", rank, local_results.len());
 
     // Save local results to temporary files (file-based communication)
@@ -591,44 +416,47 @@ pub fn calculate_color_band_structure_mpi_simple(
     let barrier_file = format!("{}/barrier_{}.done", temp_dir, rank);
     std::fs::write(&barrier_file, "").unwrap();
     
-    // Rank 0 waits for all ranks to finish
+    // Simple barrier: wait for all ranks to create their barrier files
     if rank == 0 {
-        timed_println!("Rank 0: Waiting for all ranks to complete...");
-        loop {
-            let all_done = (0..world_size).all(|r| {
-                Path::new(&format!("{}/barrier_{}.done", temp_dir, r)).exists()
-            });
-            if all_done {
-                break;
+        timed_println!("Rank 0: Waiting for all ranks to finish...");
+        let mut all_done = false;
+        while !all_done {
+            all_done = true;
+            for r in 0..world_size {
+                let barrier_check = format!("{}/barrier_{}.done", temp_dir, r);
+                if !Path::new(&barrier_check).exists() {
+                    all_done = false;
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    break;
+                }
             }
-            std::thread::sleep(std::time::Duration::from_millis(100));
         }
-        
-        timed_println!("Rank 0: Gathering results from all ranks...");
-        
-        let mut all_results: Vec<(usize, Array1<f64>, Vec<f64>)> = Vec::with_capacity(total_k_points);
-        
+        timed_println!("Rank 0: All ranks finished, gathering results...");
+    }
+    
+    // Gather results on rank 0
+    if rank == 0 {
+        let mut all_results: Vec<(usize, Array1<f64>, Vec<f64>)> = Vec::with_capacity(n_k_points);
+
         for r in 0..world_size {
             let rank_file = format!("{}/rank_{}.bin", temp_dir, r);
             if let Ok(rank_data) = ColorBandData::load_from_file(&rank_file) {
                 let (_, eigvals, photonic) = rank_data.to_results();
                 let start = r * k_per_rank;
-                let end = ((r + 1) * k_per_rank).min(total_k_points);
-                
+                let end = ((r + 1) * k_per_rank).min(n_k_points);
+
                 for (local_idx, (eigval, phot)) in eigvals.iter().zip(photonic.iter()).enumerate() {
                     let global_idx = start + local_idx;
-                    if global_idx < total_k_points {
+                    if global_idx < n_k_points {
                         all_results.push((global_idx, eigval.clone(), phot.clone()));
-                        if let Some(ref pb) = pb {
-                            pb.inc(1);
-                        }
                     }
                 }
             }
-        }
-        
-        if let Some(ref pb) = pb {
-            pb.finish_with_message("Bandstructure calculation complete");
+
+            // Progress update (no ETA during gathering)
+            if r % 1 == 0 {
+                timed_println!("Rank 0: Gathered results from rank {}/{}", r + 1, world_size);
+            }
         }
 
         all_results.sort_by_key(|(idx, _, _)| *idx);
@@ -682,18 +510,25 @@ pub fn plot_color_band_structure(
     // Calculate positions of symmetry points on the x-axis
     let sym_positions: Vec<f64> = (0..sym_points.len()).map(|i| x[i * points_per_segment]).collect();
 
+    // Check if we have any data to plot
+    if eigvals_list.is_empty() || eigvals_list[0].is_empty() {
+        return Err("No eigenvalue data to plot".into());
+    }
+
     // Find min/max energy values
     let mut min_energy = f64::INFINITY;
     let mut max_energy = f64::NEG_INFINITY;
 
-    // Limit the number of bands to plot
+    // Limit the number of bands to plot based on available data
     let n_bands = n_bands.min(eigvals_list[0].len());
 
     // Find energy range
     for eigvals in eigvals_list {
-        let slice = eigvals.slice(s![0..n_bands]);
-        min_energy = min_energy.min(slice.fold(f64::INFINITY, |a, &b| a.min(b)));
-        max_energy = max_energy.max(slice.fold(f64::NEG_INFINITY, |a, &b| a.max(b)));
+        if eigvals.len() >= n_bands {
+            let slice = eigvals.slice(s![0..n_bands]);
+            min_energy = min_energy.min(slice.fold(f64::INFINITY, |a, &b| a.min(b)));
+            max_energy = max_energy.max(slice.fold(f64::NEG_INFINITY, |a, &b| a.max(b)));
+        }
     }
     
     // Set max energy to 0.3 or use calculated max
@@ -820,4 +655,12 @@ pub fn plot_color_band_structure(
     
     timed_println!("Band structure plot saved to {}", save_path);
     Ok(())
+}
+
+fn format_time(secs: f64) -> String {
+    let hours = (secs / 3600.0).floor() as u64;
+    let minutes = ((secs % 3600.0) / 60.0).floor() as u64;
+    let seconds = (secs % 60.0).round() as u64;
+
+    format!("{} hrs {} min {:.2} sec", hours, minutes, seconds)
 }

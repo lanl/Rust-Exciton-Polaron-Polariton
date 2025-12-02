@@ -15,5 +15,6 @@ ulimit -c 0  # Disable core dumps
 
 # Load Intel MKL
 module load intel-mkl
+module load intel-mpi
 
-cargo run --release
+mpirun -np 4 ../target/release/light-matter
