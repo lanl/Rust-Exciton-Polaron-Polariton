@@ -54,9 +54,9 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     let parity = 0;      // Parity of states to consider
     
     // Light-matter coupling parameters
-    let total_coupling = 0.03;  // Coupling strength
+    let total_coupling = 0.04;  // Coupling strength
     let omega_0 = 0.15;    // Photon frequency
-    let n_modes = 16;
+    let n_modes = 24;
     let coupling = total_coupling / (n_modes as f64);
 
     // Define photon modes
@@ -66,7 +66,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     let qz = omega_0 / C;
     let n_fock = 2;      // Dimension of Fock space
 
-    let n_k_points = 60;  // Number of k-points along the path
+    let n_k_points = 640;  // Number of k-points along the path
     let n_bands = 16;
 
     let q_values: Vec<Vector3D> = qx_values.iter().flat_map(|qx| {
@@ -167,7 +167,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
         },   
         Method::SingEx => {
             timed_println!("Using Mat-Vec methods for light-matter coupling in single photon limit.");
-            let n_eig = 512;
+            let n_eig = 512+256;
             timed_println!("Calculating {} eigenstates", n_eig);
             
             let start_time = Instant::now();

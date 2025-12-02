@@ -7,8 +7,8 @@
 #
 #SBATCH --time=2-00:00:00
 #SBATCH --nodes=1
-#SBATCH --ntasks=64
-#SBATCH --mem=800G
+#SBATCH --ntasks=192
+#SBATCH --mem=200G
 #SBATCH --qos=long
 
 ulimit -c 0  # Disable core dumps
@@ -17,4 +17,5 @@ ulimit -c 0  # Disable core dumps
 module load intel-mkl
 module load intel-mpi
 
-mpirun -np 4 ../target/release/light-matter
+cargo build --release
+mpirun -np 24 ../target/release/light-matter

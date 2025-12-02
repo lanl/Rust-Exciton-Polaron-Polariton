@@ -8,8 +8,7 @@ use crate::utils::PPConfig;
 use bincode::{serialize, deserialize};
 use serde::{Serialize, Deserialize};
 use std::error::Error;
-use indicatif::{ProgressBar, ProgressStyle};
-use std::time::{Instant, Duration};
+use std::time::Instant;
 use colored::Colorize;
 
 use crate::timed_println;
@@ -443,7 +442,7 @@ pub fn calculate_color_band_structure_mpi_simple(
             if let Ok(rank_data) = ColorBandData::load_from_file(&rank_file) {
                 let (_, eigvals, photonic) = rank_data.to_results();
                 let start = r * k_per_rank;
-                let end = ((r + 1) * k_per_rank).min(n_k_points);
+                let _end = ((r + 1) * k_per_rank).min(n_k_points);
 
                 for (local_idx, (eigval, phot)) in eigvals.iter().zip(photonic.iter()).enumerate() {
                     let global_idx = start + local_idx;
