@@ -239,7 +239,7 @@ impl PPDiagHamiltonian{
                 p_com[[ex_ind,0]] / 2.0 / self.exciton.exciton_ham.m // (a† a) = 1 for single photon states
 
                 // Diamagnetic A^2 term (diagonal terms only)
-                + self.lm_coupling * self.lm_coupling / 2.0 / self.exciton.exciton_ham.rel_ham.mu  // A^2 term scales with coupling squared
+                + 2.0 * self.lm_coupling * self.lm_coupling  // A^2 term scales with coupling squared
 
                 // q^2 (a† a)^2 term
                 + q.dot(q) / 2.0 / self.exciton.exciton_ham.m   // (a† a)^2 = 1 for single photon states
