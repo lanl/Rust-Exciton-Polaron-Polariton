@@ -45,7 +45,6 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     // Create the 2D exciton system
     let a0 = (&e_config).a0;
     let v0 = (&e_config).v0;
-    timed_println!("v0 = {}", v0);
     let exciton = Exciton2DGridSystem::from_config(e_config.clone());
     
     // Parameters for diagonalization
@@ -54,9 +53,10 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     let parity = 0;      // Parity of states to consider
     
     // Light-matter coupling parameters
-    let total_coupling = 0.04;  // Coupling strength
+    let total_coupling = 0.0375;  // Coupling strength
+    timed_println!("total_coupling = {}", total_coupling);
     let omega_0 = 0.15;    // Photon frequency
-    let n_modes = 24;
+    let n_modes = 23;
     let coupling = total_coupling / (n_modes as f64);
 
     // Define photon modes
@@ -66,7 +66,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     let qz = omega_0 / C;
     let n_fock = 2;      // Dimension of Fock space
 
-    let n_k_points = 640;  // Number of k-points along the path
+    let n_k_points = 512;  // Number of k-points along the path
     let n_bands = 16;
 
     let q_values: Vec<Vector3D> = qx_values.iter().flat_map(|qx| {
@@ -223,7 +223,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
             if !k_points_color.is_empty() {
                 if let Err(e) = color_band_plot::plot_color_band_structure(
                     &k_points_color, &sym_points, &sym_labels, &eigvals_list_color,
-                    &photonic_character_list, n_eig, a0, "sing_ex_color_disp_plot.png", v0, coupling) {
+                    &photonic_character_list, n_eig, a0, &format!("sing_ex_color_disp_plot_{}_n{}.png",total_coupling, n_modes), v0, coupling) {
                     timed_println!("Error plotting color-coded band structure: {}", e);
                 }
             }
@@ -430,21 +430,24 @@ fn main() {
     init_logging();
 
     // Get the number of available cores
-    let num_threads = num_cpus::get();
+    let num_threads = std::env::var("OMP_NUM_THREADS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1);
     // let num_threads = 16;
 
-    // Set OpenBLAS thread count
-    unsafe {
-        // Set OpenBLAS thread count
-        std::env::set_var("OPENBLAS_NUM_THREADS", num_threads.to_string());
-        std::env::set_var("OMP_NUM_THREADS", num_threads.to_string());
+    // // Set OpenBLAS thread count
+    // unsafe {
+    //     // Set OpenBLAS thread count
+    //     std::env::set_var("OPENBLAS_NUM_THREADS", num_threads.to_string());
+    //     std::env::set_var("OMP_NUM_THREADS", num_threads.to_string());
         
-        // Set MKL thread count (if using MKL)
-        std::env::set_var("MKL_NUM_THREADS", num_threads.to_string());
+    //     // Set MKL thread count (if using MKL)
+    //     std::env::set_var("MKL_NUM_THREADS", num_threads.to_string());
 
-        std::env::set_var("OMP_PROC_BIND", "spread");
-        std::env::set_var("OMP_PLACES", "cores");
-    }
+    //     std::env::set_var("OMP_PROC_BIND", "spread");
+    //     std::env::set_var("OMP_PLACES", "cores");
+    // }
     
     // Configure Rayon thread pool
     rayon::ThreadPoolBuilder::new()

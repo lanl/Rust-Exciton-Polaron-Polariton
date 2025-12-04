@@ -397,7 +397,11 @@ pub fn calculate_color_band_structure_mpi_simple(
     timed_println!("Rank {}: Completed {} k-points", rank, local_results.len());
 
     // Save local results to temporary files (file-based communication)
-    let temp_dir = format!("{}/mpi_temp", save_dir);
+    // Make temp_dir unique per job using SLURM_JOB_ID or process ID
+    let job_id = env::var("SLURM_JOB_ID")
+        .or_else(|_| env::var("SLURM_JOBID"))
+        .unwrap_or_else(|_| std::process::id().to_string());
+    let temp_dir = format!("{}/mpi_temp_{}", save_dir, job_id);
     std::fs::create_dir_all(&temp_dir).unwrap_or_else(|_| {});
     let temp_filename = format!("{}/rank_{}.bin", temp_dir, rank);
     
@@ -411,24 +415,33 @@ pub fn calculate_color_band_structure_mpi_simple(
         timed_println!("Rank {}: Failed to save temporary data: {}", rank, e);
     }
 
-    // Barrier: Wait for all ranks to finish
-    let barrier_file = format!("{}/barrier_{}.done", temp_dir, rank);
-    std::fs::write(&barrier_file, "").unwrap();
+    // Improved barrier synchronization with unique job-specific directory
+    let barrier_dir = format!("{}/barriers", temp_dir);
+    std::fs::create_dir_all(&barrier_dir).unwrap();
+    let barrier_file = format!("{}/rank_{}.done", barrier_dir, rank);
     
-    // Simple barrier: wait for all ranks to create their barrier files
+    // Write rank completion marker with timestamp to avoid stale files
+    std::fs::write(&barrier_file, format!("{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs())).unwrap();
+    
     if rank == 0 {
         timed_println!("Rank 0: Waiting for all ranks to finish...");
-        let mut all_done = false;
-        while !all_done {
-            all_done = true;
+        let mut last_count = 0;
+        loop {
+            let mut completed_count = 0;
             for r in 0..world_size {
-                let barrier_check = format!("{}/barrier_{}.done", temp_dir, r);
-                if !Path::new(&barrier_check).exists() {
-                    all_done = false;
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                    break;
+                let barrier_check = format!("{}/rank_{}.done", barrier_dir, r);
+                if Path::new(&barrier_check).exists() {
+                    completed_count += 1;
                 }
             }
+            if completed_count != last_count {
+                timed_println!("Rank 0: {} of {} ranks completed", completed_count, world_size);
+                last_count = completed_count;
+            }
+            if completed_count == world_size {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(500));
         }
         timed_println!("Rank 0: All ranks finished, gathering results...");
     }

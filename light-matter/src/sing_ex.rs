@@ -239,7 +239,7 @@ impl PPDiagHamiltonian{
                 p_com[[ex_ind,0]] / 2.0 / self.exciton.exciton_ham.m // (a† a) = 1 for single photon states
 
                 // Diamagnetic A^2 term (diagonal terms only)
-                + 2.0 * self.lm_coupling * self.lm_coupling  // A^2 term scales with coupling squared
+                + self.lm_coupling * self.lm_coupling / 2.0 / self.exciton.exciton_ham.rel_ham.mu  // A^2 term scales with coupling squared
 
                 // q^2 (a† a)^2 term
                 + q.dot(q) / 2.0 / self.exciton.exciton_ham.m   // (a† a)^2 = 1 for single photon states
@@ -473,7 +473,7 @@ impl Operator<f64> for PPOffHamiltonian {
         let one_over_2m = 1.0 / (2.0 * self.exciton.exciton_ham.m);
 
         // Implement all a and a† terms
-        let y_ph_list: Vec<(usize, f64)> = self.photon.photon_modes.par_iter().enumerate().flat_map(|(mode_i, _)| {
+        let y_ph_list: Vec<(usize, f64)> = self.photon.photon_modes.par_iter().enumerate().flat_map(|(mode_i, photon_mode_i)| {
             let p_sin = &p_sin_ref[mode_i];
             let p_cos = matrix_element_arrays_ref.p_cos_mat.get(&vec![mode_i as i32]).unwrap();
             let p_q = &p_q_ref[mode_i];
@@ -511,7 +511,6 @@ impl Operator<f64> for PPOffHamiltonian {
                     
                 // For a terms - Process mode_i to ground state transition
                 {                    
-                    // Calculate a_term using BLAS-powered dot products
                     // ( P sin(q•x/2) - i p cos(q•x/2) ) â† 
                     a_term = &(&p_sin.dot(&x_ph_mode_i) * lm_coupling_2_over_m) - 
                              &(&p_cos.dot(&x_ph_mode_i) * lm_coupling_2_over_mu);
@@ -524,14 +523,16 @@ impl Operator<f64> for PPOffHamiltonian {
             }
 
             // Diamagnetic A^2 terms
-            for (mode_j, _) in self.photon.photon_modes.iter().enumerate() {
+            for (mode_j, photon_mode_j) in self.photon.photon_modes.iter().enumerate() {
                 let q_ind1 = (mode_i as i32).max(mode_j as i32);
                 let q_ind2 = (mode_i as i32).min(mode_j as i32);
                 let q_ind_key = vec![q_ind1, -q_ind2];
 
                 // Since we are in sing-ex for photons a^† a^† and a a terms are 0
                 // Only a^† a terms contribute for off-diagonal terms
-                if let Some(cos_matrix) = matrix_element_arrays_ref.cos_mat.get(&q_ind_key) {
+                if let Some(cos_matrix) = matrix_element_arrays_ref.cos_mat.get(&q_ind_key) 
+                    && mode_i != mode_j 
+                    {
                     let eps_i = &self.photon.photon_modes[mode_i].eps;
                     let eps_j = &self.photon.photon_modes[mode_j].eps;
                     
@@ -553,6 +554,9 @@ impl Operator<f64> for PPOffHamiltonian {
                         let values: Vec<f64> = (aa_term).to_vec();
                         local_y.extend(indices.into_iter().zip(values.into_iter()));
                     }
+                }
+                else if let None = matrix_element_arrays_ref.cos_mat.get(&q_ind_key) && mode_i != mode_j  {
+                    panic!("No key found for q = {:?} and q' = {:?}", photon_mode_i.q, photon_mode_j.q);
                 }
             }
 
