@@ -239,7 +239,7 @@ impl PPDiagHamiltonian{
                 p_com[[ex_ind,0]] / 2.0 / self.exciton.exciton_ham.m // (a† a) = 1 for single photon states
 
                 // Diamagnetic A^2 term (diagonal terms only)
-                + 2.0 * self.lm_coupling * self.lm_coupling  // A^2 term scales with coupling squared
+                + self.lm_coupling * self.lm_coupling / 2.0 / self.exciton.exciton_ham.rel_ham.mu  // A^2 term scales with coupling squared
 
                 // q^2 (a† a)^2 term
                 + q.dot(q) / 2.0 / self.exciton.exciton_ham.m   // (a† a)^2 = 1 for single photon states
@@ -538,7 +538,7 @@ impl Operator<f64> for PPOffHamiltonian {
                     
                     // Calculate dot product directly
                     let eps_dot = eps_j[0] * eps_i[0] + eps_j[1] * eps_i[1];
-                    let coupling_factor: f64 = self.lm_coupling * self.lm_coupling * eps_dot;
+                    let coupling_factor: f64 = self.lm_coupling * self.lm_coupling * eps_dot / 2.0 / self.exciton.exciton_ham.rel_ham.mu;
 
                     for pn_ind in 0..n_pn {
                         let mode_j_start = (mode_j + 1) * n_pn + pn_ind;
