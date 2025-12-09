@@ -29,5 +29,20 @@ export OMP_PLACES=cores
 export I_MPI_PIN_DOMAIN=omp         # Pin to OMP domain
 export I_MPI_PIN=1
 
-cargo build --release
-mpirun -np 64 ../target/release/light-matter
+# Build with job-specific target directory to avoid bus errors from concurrent builds
+echo "Building binary for job ${SLURM_JOB_ID}..."
+cargo build --release --target-dir ./target_${SLURM_JOB_ID}
+
+# Run the job-specific binary
+echo "Running job ${SLURM_JOB_ID}..."
+echo "Number of MPI ranks: ${SLURM_NTASKS}"
+echo "Nodes: ${SLURM_JOB_NODELIST}"
+echo "CPUs per task: ${SLURM_CPUS_PER_TASK}"
+
+srun ./target_${SLURM_JOB_ID}/release/light-matter
+
+echo "Job ${SLURM_JOB_ID} completed."
+
+# Cleanup job-specific build directory
+echo "Cleaning up build directory for job ${SLURM_JOB_ID}..."
+rm -rf ./target_${SLURM_JOB_ID}

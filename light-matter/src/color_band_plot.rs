@@ -1,4 +1,5 @@
 use ndarray::{Array1, Array2, s};
+use std::f64::consts::PI;
 use std::fs::File;
 use std::io::{Write};
 use std::path::Path;
@@ -235,6 +236,7 @@ pub fn calculate_color_band_structure_mpi_simple(
     pp_config: &PPConfig,
     method: DiagonalizationMethod,
     use_cached: bool,
+    zoomed: bool
 ) -> (Vec<Vec<f64>>, Vec<Array1<f64>>, Vec<Vec<f64>>) {
     use std::env;
 
@@ -293,8 +295,8 @@ pub fn calculate_color_band_structure_mpi_simple(
     std::fs::create_dir_all(&save_dir).unwrap_or_else(|_| {});
     
     // Generate filename for the color band structure data
-    let filename = format!(
-        "{}/color_band_a0{}_V0{}_nrel{}_nbands{}_npoints{}_phcoup{}_nmodes{}_pncoup{}_npn{}_neig{}.bin",
+    let mut filename = format!(
+        "{}/color_band_a0{}_V0{}_nrel{}_nbands{}_npoints{}_phcoup{}_nmodes{}_pncoup{}_npn{}_neig{}",
         save_dir,
         pp_config.e_config.a0,
         pp_config.e_config.v0,
@@ -307,6 +309,8 @@ pub fn calculate_color_band_structure_mpi_simple(
         pp_config.pn_n_fock,
         n_eig
     );
+
+    filename += if zoomed { "_zoomed.bin" } else { ".bin" };
     
     // Check if cached data exists and should be used (only rank 0)
     if rank == 0 && use_cached && Path::new(&filename).exists() {
@@ -321,17 +325,29 @@ pub fn calculate_color_band_structure_mpi_simple(
     let points_per_seg = n_k_points / sym_points.len();
 
     // Generate k-points along the path
-    let k_points: Vec<Vec<f64>> = sym_points.iter().enumerate().flat_map(|(sym_ind, sym_point)| {
-        let sym_ind2 = (sym_ind + 1) % sym_points.len();
-        (0..points_per_seg).map(move |t| {
-            // Interpolate between symmetry points
-            let t_frac = t as f64 / (points_per_seg - 1) as f64;
-            let x = sym_point[0] + t_frac * (sym_points[sym_ind2][0] - sym_point[0]);
-            let y = sym_point[1] + t_frac * (sym_points[sym_ind2][1] - sym_point[1]);
+    let k_points: Vec<Vec<f64>>;
+    if zoomed {
+        let start = vec![0.,0.];
+        let end = vec![PI / pp_config.e_config.a0, 0.];
+        k_points = (0 .. n_k_points).map(|k_ind|{
+            let t_frac = k_ind as f64 / (n_k_points - 1) as f64;
 
-            vec![x, y]
-        })
-    }).collect();
+            vec![start[0] + t_frac * (end[0] - start[0]), start[1] + t_frac * (end[1] - start[1])]
+        }).collect()
+    }
+    else {
+        k_points = sym_points.iter().enumerate().flat_map(|(sym_ind, sym_point)| {
+            let sym_ind2 = (sym_ind + 1) % sym_points.len();
+            (0..points_per_seg).map(move |t| {
+                // Interpolate between symmetry points
+                let t_frac = t as f64 / (points_per_seg - 1) as f64;
+                let x = sym_point[0] + t_frac * (sym_points[sym_ind2][0] - sym_point[0]);
+                let y = sym_point[1] + t_frac * (sym_points[sym_ind2][1] - sym_point[1]);
+
+                vec![x, y]
+            })
+        }).collect();
+    }
 
     // Distribute k-points across ranks
     let total_k_points = k_points.len();
@@ -550,6 +566,12 @@ pub fn plot_color_band_structure(
     let energy_padding = (max_energy - min_energy) * 0.05;
     min_energy -= energy_padding;
     max_energy += energy_padding;
+
+    let zoomed = false;
+    if zoomed {
+        min_energy = -0.24;
+        max_energy = -0.11;
+    }
 
     // Create data files for gnuplot
     let data_dir = Path::new("gnuplot_data");

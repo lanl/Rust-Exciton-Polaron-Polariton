@@ -79,6 +79,9 @@ pub fn plot_dielectric_function(
     coupling_values: &Array1<f64>,
     reference_params: Option<&DielectricParams> // Optional reference parameters to match against
 ) -> Result<(), Box<dyn std::error::Error>> {
+
+    let verbose = false;
+
     timed_println!("Plotting dielectric function from directory: {}", dir_path);
     // Get all dielectric function files in the directory
     let dir = Path::new(dir_path);
@@ -107,7 +110,7 @@ pub fn plot_dielectric_function(
                         let all_match = a0_match && v0_match && n_rel_match && n_modes_match && 
                                        pn_coupling_match && pn_n_fock_match;
                         
-                        if !all_match {
+                        if !all_match && verbose{
                             timed_println!("Parameter mismatch for file with coupling {:.4}: {}", 
                                          params.lm_coupling, path.display());
                             if !a0_match { timed_println!("  a0: {} vs {}", params.a0, ref_params.a0); }
@@ -127,8 +130,7 @@ pub fn plot_dielectric_function(
                     if coupling_match && params_match {
                         timed_println!("Found matching file for coupling {:.4}: {}", params.lm_coupling, path.display());
                         return Some((path, params));
-                    } else {
-                        // Debug: print skipped files and their coupling values
+                    } else if verbose{
                         timed_println!("Skipping file with coupling {:.4} (not in requested list): {}", 
                                      params.lm_coupling, path.display());
                     }
@@ -150,11 +152,11 @@ pub fn plot_dielectric_function(
                         };
                         timed_println!("Found matching file (old format) for coupling {:.4}: {}", coupling, path.display());
                         return Some((path, default_params));
-                    } else {
+                    } else if verbose {
                         timed_println!("Skipping file with coupling {:.4} (old format, not in requested list): {}", 
                                      coupling, path.display());
                     }
-                } else {
+                } else if verbose {
                     timed_println!("Skipping file (couldn't extract coupling): {}", path.display());
                 }
             }

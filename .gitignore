@@ -5,7 +5,7 @@
 *.npz
 *.pkl
 *.pyc
-**/target
+**/target*
 **/pp_data
 **/build
 **/*.egg*
