@@ -4,7 +4,7 @@ use std::fs::File;
 use std::io::{Write};
 use std::path::Path;
 use std::process::Command;
-use crate::sing_ex::{PolaronPolariton, DiagonalizationMethod, diagonalize_pp_sing_ex};
+use crate::sing_ex::{PolaronPolariton, diagonalize_pp_sing_ex};
 use crate::utils::PPConfig;
 use bincode::{serialize, deserialize};
 use serde::{Serialize, Deserialize};
@@ -117,7 +117,6 @@ pub fn calculate_color_band_structure(
     n_eig: usize,
     sym_points: &Vec<Vec<f64>>,
     pp_config: &PPConfig,
-    method: DiagonalizationMethod,
     use_cached: bool,  // Flag to determine whether to load existing data
 ) -> (Vec<Vec<f64>>, Vec<Array1<f64>>, Vec<Vec<f64>>) {
 
@@ -183,7 +182,7 @@ pub fn calculate_color_band_structure(
         pp.update_k(k.clone());
 
         // Diagonalize with initial guess from previous k-point if available
-        let (eigvals, eigvecs) = diagonalize_pp_sing_ex(&pp, n_eig, &method, prev_eigvecs.as_ref());
+        let (eigvals, eigvecs) = diagonalize_pp_sing_ex(&pp, n_eig, prev_eigvecs.as_ref());
         
         // Calculate photonic character for each eigenstate
         let photonic_character: Vec<f64> = (0..n_eig)
@@ -234,7 +233,6 @@ pub fn calculate_color_band_structure_mpi_simple(
     n_eig: usize,
     sym_points: &Vec<Vec<f64>>,
     pp_config: &PPConfig,
-    method: DiagonalizationMethod,
     use_cached: bool,
     zoomed: bool
 ) -> (Vec<Vec<f64>>, Vec<Array1<f64>>, Vec<Vec<f64>>) {
@@ -327,8 +325,10 @@ pub fn calculate_color_band_structure_mpi_simple(
     // Generate k-points along the path
     let k_points: Vec<Vec<f64>>;
     if zoomed {
-        let start = vec![0.,0.];
-        let end = vec![PI / pp_config.e_config.a0, 0.];
+        let start = vec![3. / 4. * PI / pp_config.e_config.a0, 0.];
+        let end =   vec![PI / pp_config.e_config.a0, 0.];
+
+        timed_println!("Performing zoomed in band structure from k = {:?} to {:?}", start, end);
         k_points = (0 .. n_k_points).map(|k_ind|{
             let t_frac = k_ind as f64 / (n_k_points - 1) as f64;
 
@@ -374,7 +374,7 @@ pub fn calculate_color_band_structure_mpi_simple(
     for (global_idx, k) in my_k_points.iter() {
         pp.update_k(k.clone());
 
-        let (eigvals, eigvecs) = diagonalize_pp_sing_ex(&pp, n_eig, &method, prev_eigvecs.as_ref());
+        let (eigvals, eigvecs) = diagonalize_pp_sing_ex(&pp, n_eig, prev_eigvecs.as_ref());
         
         let photonic_character: Vec<f64> = (0..n_eig)
             .map(|i| calculate_photonic_character(&pp, &eigvecs.column(i).to_owned()))
@@ -522,7 +522,8 @@ pub fn plot_color_band_structure(
     a0: f64,
     save_path: &str,
     v0: f64,
-    coupling: f64
+    coupling: f64,
+    zoomed: bool
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Create x-axis for the plot (path length)
     let mut x = vec![0.0; k_points.len()];
@@ -567,10 +568,9 @@ pub fn plot_color_band_structure(
     min_energy -= energy_padding;
     max_energy += energy_padding;
 
-    let zoomed = false;
     if zoomed {
-        min_energy = -0.24;
-        max_energy = -0.11;
+        min_energy = -0.195;
+        max_energy = -0.16;
     }
 
     // Create data files for gnuplot
@@ -656,10 +656,12 @@ pub fn plot_color_band_structure(
     }
     writeln!(script, ")")?;
     
-    // Draw vertical lines at symmetry points
-    for &pos in &sym_positions {
-        writeln!(script, "set arrow from {},{} to {},{} nohead lc rgb '#888888' lw 6", 
-                 pos, min_energy, pos, max_energy)?;
+    if !zoomed {
+        // Draw vertical lines at symmetry points
+        for &pos in &sym_positions {
+            writeln!(script, "set arrow from {},{} to {},{} nohead lc rgb '#888888' lw 6", 
+                    pos, min_energy, pos, max_energy)?;
+        }
     }
     
     // Plot all bands with color mapping and transparency
@@ -670,11 +672,12 @@ pub fn plot_color_band_structure(
            colorbar_file.display())?;
     
     // Then add all the bands
+    let lw = if !zoomed {8} else {16};
     for band_idx in 0..n_bands {
         write!(script, ", ")?;
         // Use the myColor function that handles both color and transparency
-        write!(script, "'{}' using 1:2:(myColor($3)) with lines lw 8 lc rgb var notitle", 
-               data_dir.join(format!("band_{}.dat", band_idx)).display())?;
+        write!(script, "'{}' using 1:2:(myColor($3)) with lines lw {} lc rgb var notitle", 
+               data_dir.join(format!("band_{}.dat", band_idx)).display(), lw)?;
     }
     writeln!(script)?;
     

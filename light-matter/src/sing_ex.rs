@@ -1,18 +1,10 @@
 use exciton_2d::{Exciton2DGridSystem, FullHamiltonian};
-use ndarray::{arr1, Array1, Array2, s, ArrayView2,ArrayViewMut2};
-use arpack::{Config, Operator};
-use ndarray_linalg::Norm;
-use rand::Rng;
+use ndarray::{arr1, Array1, Array2, s};
 use std::f64::consts::PI;
 use std::sync::Arc;
 use ndarray_linalg::c64;
 use rayon::{prelude::*};
 use indicatif::{ProgressBar, ProgressStyle};
-use ndarray_linalg::lobpcg::*;
-use ndarray_linalg::QR;
-
-use crate::davidson::{DavidsonOperator, DavidsonConfig, DavidsonWhich, davidson};
-
 use crate::timed_println;
 
 use crate::utils::{LMMatrixElement, LMMatrixElementArray, PPConfig, PhotonMode, Polarization, save_band_data};
@@ -27,6 +19,23 @@ pub trait ArrayOperator<T> {
 
 pub trait DiagOperator<T> {
     fn form_diagonal(&self) -> Array1<T>;
+}
+
+pub trait Operator<T> {
+    /// Apply the operator to a vector
+    fn apply(&self, x: &[T], y: &mut [T]);
+}
+
+/// Trait for operators that can be used with solvers
+pub trait SolverOperator<T: Clone> {
+    /// Apply the operator to a vector
+    fn apply(&self, x: &[T], y: &mut [T]);
+    
+    /// Get the diagonal of the operator (used for preconditioning)
+    fn get_diagonal(&self) -> Vec<T>;
+    
+    /// Get the dimension of the operator
+    fn dimension(&self) -> usize;
 }
 
 /// Represents the photonic part of the Hamiltonian
@@ -719,7 +728,7 @@ impl Operator<f64> for PolaronPolariton {
     }
 }
 
-impl DavidsonOperator<f64> for PolaronPolariton {
+impl SolverOperator<f64> for PolaronPolariton {
     fn apply(&self, x: &[f64], y: &mut [f64]) {
         // Reuse your existing implementation
         Operator::apply(self, x, y);
@@ -831,6 +840,27 @@ impl SingExWrapper {
 
 }
 
+/// Generates a filename for the cached diagonalization data (pp_vals and x_pp)
+pub fn get_dielectric_cache_filename(
+    pp: &PolaronPolariton,
+    pp_config: &PPConfig,
+    save_dir: &str,
+    n_eig: usize
+) -> String {
+    format!(
+        "{}/dielectric_cache_a0{}_V0{}_nrel{}_lmcoup{}_nmodes{}_pncoup{}_npn{}_neig{}.bin",
+        save_dir,
+        pp_config.e_config.a0,
+        pp_config.e_config.v0,
+        pp_config.n_rel,
+        pp_config.lm_coupling,
+        pp.pp_off_ham.photon.photon_modes.len(),
+        pp_config.pn_coupling,
+        pp_config.pn_n_fock,
+        n_eig
+    )
+}
+
 /// Generates a filename for the dielectric function data
 pub fn get_dielectric_function_filename(
     pp: &PolaronPolariton,
@@ -854,9 +884,130 @@ pub fn get_dielectric_function_filename(
     )
 }
 
-pub fn get_dielectric_function(pp_config: &PPConfig, pp: &PolaronPolariton, n_eig: usize, omegas: Array1<f64>, gamma: f64, method: &DiagonalizationMethod) -> (Array1<f64>, Array1<f64>) {
+/// Save the cached diagonalization data (pp_vals and x_pp)
+pub fn save_dielectric_cache(
+    filename: &str,
+    pp_vals: &Array1<f64>,
+    x_pp: &Array1<f64>
+) -> std::io::Result<()> {
+    use std::fs::File;
+    use std::io::Write;
+    
+    let mut file = File::create(filename)?;
+    
+    // Write dimensions
+    let n_eig = pp_vals.len();
+    file.write_all(&(n_eig as u64).to_le_bytes())?;
+    
+    // Write pp_vals
+    for &val in pp_vals.iter() {
+        file.write_all(&val.to_le_bytes())?;
+    }
+    
+    // Write x_pp
+    for &val in x_pp.iter() {
+        file.write_all(&val.to_le_bytes())?;
+    }
+    
+    Ok(())
+}
+
+/// Load the cached diagonalization data (pp_vals and x_pp)
+pub fn load_dielectric_cache(
+    filename: &str
+) -> std::io::Result<(Array1<f64>, Array1<f64>)> {
+    use std::fs::File;
+    use std::io::Read;
+    
+    let mut file = File::open(filename)?;
+    
+    // Read dimensions
+    let mut buf = [0u8; 8];
+    file.read_exact(&mut buf)?;
+    let n_eig = u64::from_le_bytes(buf) as usize;
+    
+    // Read pp_vals
+    let mut pp_vals = Array1::<f64>::zeros(n_eig);
+    for i in 0..n_eig {
+        file.read_exact(&mut buf)?;
+        pp_vals[i] = f64::from_le_bytes(buf);
+    }
+    
+    // Read x_pp
+    let mut x_pp = Array1::<f64>::zeros(n_eig);
+    for i in 0..n_eig {
+        file.read_exact(&mut buf)?;
+        x_pp[i] = f64::from_le_bytes(buf);
+    }
+    
+    Ok((pp_vals, x_pp))
+}
+
+/// Calculate the dielectric function from cached or newly computed pp_vals and x_pp
+pub fn get_dielectric_function(
+    pp_config: &PPConfig, 
+    pp: &PolaronPolariton, 
+    n_eig: usize, 
+    omegas: Array1<f64>, 
+    gamma: f64, 
+    save_dir: &str,
+    use_cached: bool
+) -> (Array1<f64>, Array1<f64>) {
     timed_println!("Calculating dielectric function with {} eigenstates, gamma={:.1e}", n_eig, gamma);
 
+    let cache_filename = get_dielectric_cache_filename(pp, pp_config, save_dir, n_eig);
+    
+    // Try to load cached data if requested
+    let (pp_vals, x_pp) = if use_cached && std::path::Path::new(&cache_filename).exists() {
+        timed_println!("Loading cached diagonalization data from {}", cache_filename);
+        match load_dielectric_cache(&cache_filename) {
+            Ok((vals, x)) => {
+                timed_println!("Successfully loaded cached data");
+                (vals, x)
+            },
+            Err(e) => {
+                timed_println!("Failed to load cache ({}), recalculating...", e);
+                let (vals, x) = compute_dielectric_cache(pp_config, pp, n_eig);
+                // Save the newly computed cache
+                if let Err(e) = save_dielectric_cache(&cache_filename, &vals, &x) {
+                    timed_println!("Warning: Failed to save cache: {}", e);
+                }
+                (vals, x)
+            }
+        }
+    } else {
+        timed_println!("Computing diagonalization data...");
+        let (vals, x) = compute_dielectric_cache(pp_config, pp, n_eig);
+        // Save the cache
+        timed_println!("Saving diagonalization cache to {}", cache_filename);
+        if let Err(e) = save_dielectric_cache(&cache_filename, &vals, &x) {
+            timed_println!("Warning: Failed to save cache: {}", e);
+        }
+        (vals, x)
+    };
+
+    timed_println!("Relative energies = {:?}", pp_vals.slice(s![0..50.min(pp_vals.len())]).to_owned() - pp_vals[0]);
+
+    // Compute dielectric function from cached data
+    let dielectric_function: Array1<c64> = Array1::from_shape_fn(omegas.len(), |idx| {
+        let omega = omegas[idx];
+
+        let result: c64 = x_pp.iter().enumerate().map(|(pp_ind, x_pp_val)| {
+            x_pp_val * x_pp_val / (omega - (pp_vals[pp_ind] - pp_vals[0]) + c64::i() * gamma)
+        }).sum();
+
+        1.0 + 4.0 * PI * result
+    });
+
+    (dielectric_function.map(|&x| x.re), dielectric_function.map(|&x| x.im))
+}
+
+/// Helper function to compute the expensive diagonalization and matrix elements
+fn compute_dielectric_cache(
+    pp_config: &PPConfig,
+    pp: &PolaronPolariton,
+    n_eig: usize,
+) -> (Array1<f64>, Array1<f64>) {
     // Lag Coeffs for Relative coordinates
     let (lag_coeffs, states) = &pp.pp_off_ham.matrix_element_arrays.as_ref().unwrap().get_laguerre_coeffs(pp.exciton.n_rel);
     let mu = pp.exciton.exciton_ham.rel_ham.mu;
@@ -889,12 +1040,9 @@ pub fn get_dielectric_function(pp_config: &PPConfig, pp: &PolaronPolariton, n_ei
     // Pre-calculate parity indices for all eigenvectors
     let parity_indices: Vec<usize> = parities.iter().map(|&p| (p == -1) as usize).collect();
 
-
     let x_rel = &Array2::from_shape_fn((n_rel,n_rel), |(r_ind1, r_ind2)| {
         pp.pp_off_ham.matrix_element_arrays.as_ref().unwrap().get_x(&states[r_ind1], &states[r_ind2], mu, &lag_coeffs)
     });
-
-    // timed_println!("x_rel = {}", PrettyArray2(&x_rel,2));
 
     // Get <x> in the Exciton basis
     let x_exc = &Array2::from_shape_fn((n_ex_eig,n_ex_eig) , |(idx1, idx2)| {
@@ -903,10 +1051,6 @@ pub fn get_dielectric_function(pp_config: &PPConfig, pp: &PolaronPolariton, n_ei
 
             let idx1_par = parity_indices[idx1];
             let idx2_par = parity_indices[idx2];
-
-            // if idx1 == idx2 && idx1 == 1 {
-            //     print!("vec1 = {:?}", vec1)
-            // }
 
             // Calculate the matrix elements using iterators
             (0..n_rel_par[idx1_par])
@@ -929,11 +1073,8 @@ pub fn get_dielectric_function(pp_config: &PPConfig, pp: &PolaronPolariton, n_ei
                 .fold(0.0, |acc, val| acc + val)
     });
 
-    // timed_println!("x_exc = {}", PrettyArray2(&x_exc,2));
-
     // Diagonalize at the Gamma point
-    // timed_println!("Diagonalizing at the Gamma Point");
-    let (pp_vals, pp_vecs) = diagonalize_pp_sing_ex(pp, n_eig, method, None);
+    let (pp_vals, pp_vecs) = diagonalize_pp_sing_ex(pp, n_eig, None);
 
     // get <x> in the PP basis
     let n_ph = pp_config.q_values.len() + 1;
@@ -941,31 +1082,7 @@ pub fn get_dielectric_function(pp_config: &PPConfig, pp: &PolaronPolariton, n_ei
 
     let vec0 = pp_vecs.column(0);
 
-    timed_println!("Relative energies = {:?}", pp_vals.slice(s![0..50]).to_owned() - pp_vals[0]);
-
-    // timed_println!("pp_vecs shape = {:?}", pp_vecs.shape());
-    // timed_println!("vec 0 = {:?}", vec0);
-    // timed_println!("E 0 = {:?}", pp_vals[0]);
-    // timed_println!("vec 1 = {:?}", pp_vecs.column(1));
-    // timed_println!("E 1 = {:?}", pp_vals[1]);
-
-    // // Find <0|x|0> as a test
-
-    // let test = (0.. n_ex_eig).flat_map(|ex_ind1| {
-    //         (0 .. n_ex_eig).flat_map(move |ex_ind2|{
-    //             let x_element = x_exc[[ex_ind1,ex_ind2]];
-    //             (0 .. n_ph*n_pn).map(move | bos_ind | {
-    //                 let pp_ind1 = ex_ind1 * n_ph*n_pn + bos_ind;
-    //                 let pp_ind2 = ex_ind2 * n_ph*n_pn + bos_ind;
-
-    //                 vec0[pp_ind1] * vec0[pp_ind2] * x_element
-    //             })
-    //         })
-    //     }).fold(0.0, |acc, val| acc + val);
-
-    // timed_println!("test = {:?}", test);
-
-    let x_pp = &Array1::from_shape_fn(n_eig, |idx| {
+    let x_pp = Array1::from_shape_fn(n_eig, |idx| {
         let vec1 = pp_vecs.column(idx);
 
         (0.. n_ex_eig).flat_map(|ex_ind1| {
@@ -981,21 +1098,7 @@ pub fn get_dielectric_function(pp_config: &PPConfig, pp: &PolaronPolariton, n_ei
         }).fold(0.0, |acc, val| acc + val)
     });
 
-    // timed_println!("x_pp = {:?}", x_pp);
-
-
-    // Compute dielectric function
-    let dielectric_function: Array1<c64> = Array1::from_shape_fn(omegas.len(), |idx| {
-        let omega = omegas[idx];
-
-        let result: c64 = x_pp.iter().enumerate().map(|(pp_ind, x_pp_val)| {
-            x_pp_val * x_pp_val / (omega - (pp_vals[pp_ind] - pp_vals[0]) + c64::i() * gamma)
-        }).sum();
-
-        1.0 + 4.0 * PI * result
-    });
-
-    (dielectric_function.map(|&x| x.re), dielectric_function.map(|&x| x.im))
+    (pp_vals, x_pp)
 }
 
 /// Generates a filename for the band structure data
@@ -1022,596 +1125,19 @@ pub fn get_lm_band_structure_filename(
     )
 }
 
-// In sing_ex.rs, add this enum to select the diagonalization method
-#[derive(Debug)]
-pub enum DiagonalizationMethod {
-    Arpack,
-    Davidson,
-    LobpcgNDArray,
-    LobpcgCustom,
-    SLEPc,
-}
-
-/// A deflated operator that projects out already computed eigenvectors
-/// This is used for block-based eigenvalue computation with Arpack
-struct DeflatedOperator<'a, T: Operator<f64>> {
-    base_operator: &'a T,
-    eigenvectors: Array2<f64>,
-    eigenvalues: Array1<f64>,
-}
-
-impl<'a, T: Operator<f64>> Operator<f64> for DeflatedOperator<'a, T> {
-    fn apply(&self, x: &[f64], y: &mut [f64]) {
-        // Apply base operator
-        self.base_operator.apply(x, y);
-        
-        // Project out already computed eigenvectors
-        let x_vec = Array1::from_vec(x.to_vec());
-        
-        // Calculate projections for each eigenvector
-        for i in 0..self.eigenvectors.ncols() {
-            let eigvec = self.eigenvectors.column(i);
-            let overlap = eigvec.dot(&x_vec);
-            
-            // Subtract projection with large shift to push eigenvalues up
-            for j in 0..y.len() {
-                y[j] -= overlap * eigvec[j] * (self.eigenvalues[i] + 1000.0);
-            }
-        }
-    }
-}
-
-/// A deflated operator that projects out already computed eigenvectors
-/// This is used for block-based eigenvalue computation with Davidson
-struct DeflatedDavidsonOperator<'a, T: DavidsonOperator<f64>> {
-    base_operator: &'a T,
-    eigenvectors: Array2<f64>,
-    eigenvalues: Array1<f64>,
-}
-
-impl<'a, T: DavidsonOperator<f64>> DavidsonOperator<f64> for DeflatedDavidsonOperator<'a, T> {
-    fn apply(&self, x: &[f64], y: &mut [f64]) {
-        // Apply base operator
-        self.base_operator.apply(x, y);
-        
-        // Project out already computed eigenvectors
-        let x_vec = Array1::from_vec(x.to_vec());
-        
-        // Calculate projections for each eigenvector
-        for i in 0..self.eigenvectors.ncols() {
-            let eigvec = self.eigenvectors.column(i);
-            let overlap = eigvec.dot(&x_vec);
-            
-            // Subtract projection with large shift to push eigenvalues up
-            for j in 0..y.len() {
-                y[j] -= overlap * eigvec[j] * (self.eigenvalues[i] + 1000.0);
-            }
-        }
-    }
-    
-    fn get_diagonal(&self) -> Vec<f64> {
-        self.base_operator.get_diagonal()
-    }
-    
-    fn dimension(&self) -> usize {
-        self.base_operator.dimension()
-    }
-}
-
 // Then replace all diagonalization functions with a single unified function
 pub fn diagonalize_pp_sing_ex(
     pp: &PolaronPolariton, 
     n_eig: usize,
-    method: &DiagonalizationMethod,
     initial_vec: Option<&Array2<f64>>
 ) -> (Array1<f64>, Array2<f64>) {
-    let n = pp.dimension();
-
-
+    
     let block_size = 128;
     
-    match method {
-        DiagonalizationMethod::Arpack => {
-            // Use block approach for large eigenvalue counts
-            if n_eig > block_size {
-                timed_println!("Using block Arpack approach with block size {}", block_size);
-                                
-                // Determine how many blocks we need
-                let n_blocks = (n_eig + block_size - 1) / block_size;
-                
-                // Initialize result arrays
-                let mut all_eigenvalues = Vec::with_capacity(n_eig);
-                let mut all_eigenvectors = Array2::<f64>::zeros((n, 0));
-                
-                // Process each block
-                for block in 0..n_blocks {
-                    let start_idx = block * block_size;
-                    let end_idx = std::cmp::min((block + 1) * block_size, n_eig);
-                    let current_block_size = end_idx - start_idx;
-                    
-                    timed_println!("Computing eigenvalues {}-{} of {}", start_idx + 1, end_idx, n_eig);
-                    
-                    // Configure ARPACK for this block with improved convergence settings
-                    let config = Config::new()
-                        .which(arpack::Which::SA)  // Smallest algebraic eigenvalues
-                        .tol(1e-10)               // Tighter tolerance for better convergence
-                        .max_iter(2000)           // More iterations allowed
-                        .ncv(std::cmp::min(n, 2*current_block_size + 50)); // Larger subspace dimension
-                    
-                    // Create a deflated operator if we have previous eigenvectors
-                    let result = if all_eigenvectors.ncols() > 0 {
-                        // Create a deflated operator that projects out already computed eigenvectors
-                        let deflated_op = DeflatedOperator {
-                            base_operator: pp,
-                            eigenvectors: all_eigenvectors.clone(),
-                            eigenvalues: Array1::from_vec(all_eigenvalues.clone()),
-                        };
-                        
-                        // Solve eigenvalue problem using ARPACK with deflated operator
-                        arpack::eigs(&deflated_op, n, current_block_size, config).unwrap()
-                    } else {
-                        // Solve eigenvalue problem using ARPACK with original operator
-                        arpack::eigs(pp, n, current_block_size, config).unwrap()
-                    };
-                    
-                    // Convert to ndarray format
-                    let block_eigenvalues = result.values;
-                    
-                    // Convert eigenvectors to ndarray format
-                    let mut block_eigenvectors = Array2::zeros((n, current_block_size));
-                    
-                    for i in 0..current_block_size {
-                        for j in 0..n {
-                            block_eigenvectors[[j, i]] = result.vectors[i * n + j];
-                        }
-                    }
-                    
-                    // Append eigenvalues
-                    all_eigenvalues.extend(block_eigenvalues);
-                    
-                    // Concatenate eigenvectors
-                    let mut new_eigenvectors = Array2::<f64>::zeros((n, all_eigenvectors.ncols() + block_eigenvectors.ncols()));
-                    if all_eigenvectors.ncols() > 0 {
-                        new_eigenvectors.slice_mut(s![.., ..all_eigenvectors.ncols()]).assign(&all_eigenvectors);
-                    }
-                    new_eigenvectors.slice_mut(s![.., all_eigenvectors.ncols()..]).assign(&block_eigenvectors);
-                    all_eigenvectors = new_eigenvectors;
-                }
-                
-                (Array1::from_vec(all_eigenvalues), all_eigenvectors)
-            } else {
-                // Standard approach for smaller eigenvalue counts
-                // Configure ARPACK with improved convergence settings
-                let config = Config::new()
-                    .which(arpack::Which::SA)  // Smallest algebraic eigenvalues
-                    .tol(1e-10)               // Tighter tolerance for better convergence
-                    .max_iter(2000)           // More iterations allowed
-                    .ncv(std::cmp::min(n, 2*n_eig + 50)); // Larger subspace dimension
-                
-                // Solve eigenvalue problem using ARPACK
-                let result = arpack::eigs(pp, n, n_eig, config).unwrap();
-                    
-                // Convert to ndarray format
-                let eigenvalues = Array1::from_vec(result.values);
-                
-                // Convert eigenvectors to ndarray format
-                let mut eigenvectors = Array2::zeros((n, n_eig));
-                
-                for i in 0..n_eig {
-                    for j in 0..n {
-                        eigenvectors[[j, i]] = result.vectors[i * n + j];
-                    }
-                }
-                
-                (eigenvalues, eigenvectors)
-            }
-        },
-        DiagonalizationMethod::Davidson => {
-            // Use block approach for large eigenvalue counts
-            if n_eig > block_size {
-                timed_println!("Using block Davidson approach with block size {}", block_size);
-                
-                // Determine how many blocks we need
-                let n_blocks = (n_eig + block_size - 1) / block_size;
-                
-                // Initialize result arrays
-                let mut all_eigenvalues = Vec::with_capacity(n_eig);
-                let mut all_eigenvectors = Array2::<f64>::zeros((n, 0));
-                
-                // Process each block
-                for block in 0..n_blocks {
-                    let start_idx = block * block_size;
-                    let end_idx = std::cmp::min((block + 1) * block_size, n_eig);
-                    let current_block_size = end_idx - start_idx;
-                    
-                    timed_println!("Computing eigenvalues {}-{} of {}", start_idx + 1, end_idx, n_eig);
-                    
-                    // Configure Davidson solver for this block
-                    let config = DavidsonConfig {
-                        max_iter: 1000,
-                        max_subspace_size: current_block_size * 4,  // Adjust based on problem size
-                        min_subspace_size: current_block_size * 2,
-                        tolerance: 1e-6,
-                        num_eigenvalues: current_block_size,
-                        which: DavidsonWhich::Smallest,
-                    };
-                    
-                    // Create a deflated operator if we have previous eigenvectors
-                    let result = if all_eigenvectors.ncols() > 0 {
-                        // Create a deflated operator that projects out already computed eigenvectors
-                        let deflated_op = DeflatedDavidsonOperator {
-                            base_operator: pp,
-                            eigenvectors: all_eigenvectors.clone(),
-                            eigenvalues: Array1::from_vec(all_eigenvalues.clone()),
-                        };
-                        
-                        // Solve eigenvalue problem using Davidson with deflated operator
-                        davidson(&deflated_op, &config).unwrap()
-                    } else {
-                        // Solve eigenvalue problem using Davidson with original operator
-                        davidson(pp, &config).unwrap()
-                    };
-                    
-                    if !result.converged {
-                        timed_println!("Warning: Davidson algorithm did not converge after {} iterations for block {}", 
-                                 result.iterations, block);
-                        timed_println!("Final residuals: {:?}", result.residuals);
-                    }
-                    
-                    // Convert to ndarray format
-                    let block_eigenvalues = result.values;
-                    
-                    // Convert eigenvectors to ndarray format
-                    let mut block_eigenvectors = Array2::zeros((n, current_block_size));
-                    
-                    for i in 0..current_block_size {
-                        for j in 0..n {
-                            block_eigenvectors[[j, i]] = result.vectors[i * n + j];
-                        }
-                    }
-                    
-                    // Append eigenvalues
-                    all_eigenvalues.extend(block_eigenvalues);
-                    
-                    // Concatenate eigenvectors
-                    let mut new_eigenvectors = Array2::<f64>::zeros((n, all_eigenvectors.ncols() + block_eigenvectors.ncols()));
-                    if all_eigenvectors.ncols() > 0 {
-                        new_eigenvectors.slice_mut(s![.., ..all_eigenvectors.ncols()]).assign(&all_eigenvectors);
-                    }
-                    new_eigenvectors.slice_mut(s![.., all_eigenvectors.ncols()..]).assign(&block_eigenvectors);
-                    all_eigenvectors = new_eigenvectors;
-                }
-                
-                (Array1::from_vec(all_eigenvalues), all_eigenvectors)
-            } else {
-                // Standard approach for smaller eigenvalue counts
-                // Configure Davidson solver
-                let config = DavidsonConfig {
-                    max_iter: 1000,
-                    max_subspace_size: n_eig * 4,  // Adjust based on problem size
-                    min_subspace_size: n_eig * 2,
-                    tolerance: 1e-6,
-                    num_eigenvalues: n_eig,
-                    which: DavidsonWhich::Smallest,
-                };
-                
-                // Solve eigenvalue problem using Davidson algorithm
-                let result = davidson(pp, &config).unwrap();
-                
-                if !result.converged {
-                    timed_println!("Warning: Davidson algorithm did not converge after {} iterations", result.iterations);
-                    timed_println!("Final residuals: {:?}", result.residuals);
-                }
-                
-                // Convert to ndarray format
-                let eigenvalues = Array1::from_vec(result.values);
-                
-                let mut eigenvectors = Array2::zeros((n, n_eig));
-                
-                for i in 0..n_eig {
-                    for j in 0..n {
-                        eigenvectors[[j, i]] = result.vectors[i * n + j];
-                    }
-                }
-                
-                (eigenvalues, eigenvectors)
-            }
-        },
-        DiagonalizationMethod::LobpcgNDArray => {
-            // Block size for LOBPCG
-            let block_size = 128; // Adjust based on your problem
-            
-            // If n_eig is small, use the standard approach
-            if n_eig <= block_size {
-                let mut x = Array2::zeros((n, n_eig));
+    use crate::slepc::diagonalize_slepc;
+    use rust_slepc_bindings::{EPSType};
 
-                if initial_vec.is_some() {
-                    initial_vec.unwrap().to_owned().move_into(&mut x);
-                } 
-                else {
-                    // Create initial guess vectors
-                    let mut rng = rand::rng();
-                    
-                    // Fill with random values
-                    for i in 0..n_eig {
-                        for j in 0..n {
-                            x[[j, i]] = rng.random_range(-1.0..1.0);
-                        }
-                    }
-                }
-
-            use ndarray::Axis;
-
-                // Orthonormalize the initial guess
-                let (x, _) = x.qr().unwrap();
-
-                // Define energy shift to turn positive definite:
-                // Set shift to 10x the ground state energy
-                let shift = (pp.exciton.e_vals.as_ref().unwrap()[0].abs()) * 10.0;
-                                
-                // Define the operator function
-                let a = |x_view: ArrayView2<f64>| -> Array2<f64> {
-                    let mut result = Array2::<f64>::zeros((n, x_view.ncols()));
-                    
-                    result.axis_iter_mut(Axis(1))
-                        .into_par_iter()
-                        .zip(x_view.axis_iter(Axis(1)).into_par_iter())
-                        .for_each(|(mut r_column, x_column)| {
-                            let mut y_col = vec![0.0; n];
-                            Operator::apply(pp, x_column.as_slice().unwrap(), &mut y_col);
-                            r_column.assign(&(Array1::from_vec(y_col) + (&x_column * shift)));
-                        });
-                        
-                    result
-                };
-
-                // Define the preconditioner function
-                let m = |mut r: ArrayViewMut2<f64>| {
-                    let diag = Array1::from_vec(pp.get_diagonal()) + shift;
-                    
-                    // Create safe diagonal values once (outside the loop)
-                    let safe_diag = diag.mapv(|x| x.abs().max(1e-10));
-                    
-                    r.axis_iter_mut(Axis(1)).into_par_iter().for_each(|mut r_column|{
-                        r_column.assign(&(&r_column / &safe_diag));
-                    });
-                };
-                
-                // Run LOBPCG
-                let result = lobpcg(
-                    a,
-                    x,
-                    m,
-                    None,  // No constraints
-                    1e-6,  // Tolerance
-                    1000,  // Max iterations
-                    TruncatedOrder::Smallest  // Find smallest eigenvalues
-                );
-                
-                // Process the result
-                match result {
-                    LobpcgResult::Ok(values, vectors, _) => {
-                        (values - shift, vectors)
-                    },
-                    LobpcgResult::Err(values, vectors, _, err) => {
-                        timed_println!("Warning: LOBPCG did not fully converge: {:?}", err);
-                        (values - shift, vectors)
-                    },
-                    LobpcgResult::NoResult(err) => {
-                        panic!("LOBPCG failed: {:?}", err);
-                    }
-                }
-            } else {
-                // Use block approach for large eigenvalue counts
-                timed_println!("Using block LOBPCG approach with block size {}", block_size);
-                
-                // Determine how many blocks we need
-                let n_blocks = (n_eig + block_size - 1) / block_size;
-                
-                // Initialize result arrays
-                let mut all_eigenvalues = Vec::with_capacity(n_eig);
-                let mut all_eigenvectors = Array2::<f64>::zeros((n, 0));
-                
-                // Define energy shift to turn positive definite
-                let shift = pp.exciton.exciton_ham.rel_ham.mu * 4.0;
-                
-                use ndarray::Axis;
-                
-                // Process each block
-                for block in 0..n_blocks {
-                    let start_idx = block * block_size;
-                    let end_idx = std::cmp::min((block + 1) * block_size, n_eig);
-                    let current_block_size = end_idx - start_idx;
-                    
-                    timed_println!("Computing eigenvalues {}-{} of {}", start_idx + 1, end_idx, n_eig);
-                    
-                    // Create initial guess for this block
-                    let mut x = if block == 0 && initial_vec.is_some() {
-                        // Use provided initial guess for first block if available
-                        let initial = initial_vec.unwrap();
-                        
-                        // Create vectors in parallel and collect them
-                        let columns: Vec<_> = (0..current_block_size).into_par_iter().map(|i| {
-                            let mut column = Array1::zeros(n);
-                            for j in 0..n {
-                                column[j] = initial[[j, i]];
-                            }
-                            column
-                        }).collect();
-                        
-                        // Assemble the matrix from columns
-                        let mut x_block = Array2::<f64>::zeros((n, current_block_size));
-                        for (i, column) in columns.iter().enumerate() {
-                            x_block.column_mut(i).assign(column);
-                        }
-                        x_block
-                    } else {
-                        // Generate random initial guess in parallel
-                        let columns: Vec<_> = (0..current_block_size).into_par_iter().map(|_| {
-                            let mut local_rng = rand::rng(); // Thread-local RNG
-                            let mut column = Array1::zeros(n);
-                            for j in 0..n {
-                                column[j] = local_rng.random_range(-1.0..1.0);
-                            }
-                            column
-                        }).collect();
-                        
-                        // Assemble the matrix from columns
-                        let mut x_block = Array2::<f64>::zeros((n, current_block_size));
-                        for (i, column) in columns.iter().enumerate() {
-                            x_block.column_mut(i).assign(column);
-                        }
-                        x_block
-                    };
-                    
-                    // Orthogonalize against previously computed eigenvectors
-                    if all_eigenvectors.ncols() > 0 {
-                        // Create a thread-safe copy of x for parallel processing
-                        let x_copy = x.clone();
-                        
-                        // Process each column in parallel
-                        let orthogonalized: Vec<_> = (0..current_block_size).into_par_iter().map(|i| {
-                            let mut col = x_copy.column(i).to_owned();
-                            
-                            // Orthogonalize against all previous eigenvectors
-                            for j in 0..all_eigenvectors.ncols() {
-                                let prev_vec = all_eigenvectors.column(j);
-                                let dot = col.dot(&prev_vec);
-                                col -= &(&prev_vec * dot);
-                            }
-                            
-                            // Normalize
-                            let norm = col.norm_l2();
-                            if norm > 1e-10 {
-                                col /= norm;
-                            }
-                            
-                            (i, col)
-                        }).collect();
-                        
-                        // Copy results back to x
-                        for (i, col) in orthogonalized {
-                            for j in 0..n {
-                                x[[j, i]] = col[j];
-                            }
-                        }
-                    }
-                    
-                    // Orthonormalize the initial guess
-                    let (x, _) = x.qr().unwrap();
-                    
-                    // Define a modified operator that projects out already computed eigenvectors
-                    let a = |x_view: ArrayView2<f64>| -> Array2<f64> {
-                        let mut result = Array2::<f64>::zeros((n, x_view.ncols()));
-                        
-                        // Apply the operator
-                        result.axis_iter_mut(Axis(1))
-                            .into_par_iter()
-                            .zip(x_view.axis_iter(Axis(1)).into_par_iter())
-                            .for_each(|(mut r_column, x_column)| {
-                                let mut y_col = vec![0.0; n];
-                                Operator::apply(pp, x_column.as_slice().unwrap(), &mut y_col);
-                                r_column.assign(&Array1::from_vec(y_col));
-                            });
-                        
-                        // Project out already computed eigenvectors
-                        if all_eigenvectors.ncols() > 0 {
-                            // Pre-compute projections for each column in parallel
-                            let projections: Vec<_> = (0..x_view.ncols()).into_par_iter().map(|i| {
-                                let x_col = x_view.column(i);
-                                let mut projection = Array1::<f64>::zeros(n);
-                                
-                                // Calculate the projection for this column
-                                for j in 0..all_eigenvectors.ncols() {
-                                    let eigvec = all_eigenvectors.column(j);
-                                    let overlap = eigvec.dot(&x_col);
-                                    projection += &(&eigvec * overlap * (all_eigenvalues[j] + shift));
-                                }
-                                
-                                (i, projection)
-                            }).collect();
-                            
-                            // Apply projections
-                            for (i, projection) in projections {
-                                let mut r_col = result.column_mut(i);
-                                r_col -= &projection;
-                            }
-                        }
-                        
-                        result
-                    };
-                    
-                    // Define the preconditioner function
-                    let m = |mut r: ArrayViewMut2<f64>| {
-                        let diag = Array1::from_vec(pp.get_diagonal()) + shift;
-                        
-                        // Create safe diagonal values once (outside the loop)
-                        let safe_diag = diag.mapv(|x| x.abs().max(1e-10));
-                        
-                        r.axis_iter_mut(Axis(1)).into_par_iter().for_each(|mut r_column|{
-                            r_column.assign(&(&r_column / &safe_diag));
-                        });
-                    };
-                    
-                    // Run LOBPCG for this block
-                    let result = lobpcg(
-                        a,
-                        x,
-                        m,
-                        None,  // No constraints
-                        1e-6,  // Tolerance
-                        1000,  // Max iterations
-                        TruncatedOrder::Smallest  // Find smallest eigenvalues
-                    );
-                    
-                    // Process the result
-                    match result {
-                        LobpcgResult::Ok(block_eigenvalues, block_eigenvectors, _) | 
-                        LobpcgResult::Err(block_eigenvalues, block_eigenvectors, _, _) => {
-                            // Append eigenvalues
-                            all_eigenvalues.extend((block_eigenvalues - shift).iter());
-                            
-                            // Concatenate eigenvectors
-                            let mut new_eigenvectors = Array2::<f64>::zeros((n, all_eigenvectors.ncols() + block_eigenvectors.ncols()));
-                            if all_eigenvectors.ncols() > 0 {
-                                new_eigenvectors.slice_mut(s![.., ..all_eigenvectors.ncols()]).assign(&all_eigenvectors);
-                            }
-                            new_eigenvectors.slice_mut(s![.., all_eigenvectors.ncols()..]).assign(&block_eigenvectors);
-                            all_eigenvectors = new_eigenvectors;
-                        },
-                        LobpcgResult::NoResult(err) => {
-                            panic!("LOBPCG failed for block {}: {:?}", block, err);
-                        }
-                    }
-                }
-                
-                (Array1::from_vec(all_eigenvalues), all_eigenvectors)
-            }
-        },
-        DiagonalizationMethod::LobpcgCustom => {
-            // Use the custom LOBPCG implementation from our lobpcg module
-            if let Some(initial_vec) = initial_vec {
-                crate::lobpcg::diagonalize_lobpcg(pp, n_eig, Some(initial_vec.to_owned()))
-            } else {
-                crate::lobpcg::diagonalize_lobpcg_simple(pp, n_eig)
-            }
-        },
-        
-        DiagonalizationMethod::SLEPc => {
-            use crate::slepc::diagonalize_slepc;
-            use rust_slepc_bindings::{EPSType};
-
-            // if initial_vec.is_none() {
-            //     let (_, e_vecs) = diagonalize_slepc(&pp, n_eig, block_size, Some(EPSType::KrylovSchur), initial_vec);
-            //     diagonalize_slepc(&pp, n_eig, block_size, Some(EPSType::JacobiDavidson), Some(&e_vecs))
-            // }
-            // else {
-            //     timed_println!("Initial Vector shape: {:?}", initial_vec.unwrap().shape());
-            //     diagonalize_slepc(&pp, n_eig, block_size, Some(EPSType::JacobiDavidson), initial_vec)
-            // }
-            diagonalize_slepc(&pp, n_eig, block_size, Some(EPSType::KrylovSchur), initial_vec)           
-        }
-    }
+    diagonalize_slepc(&pp, n_eig, block_size, Some(EPSType::KrylovSchur), initial_vec)           
 }
 
 // Replace the specific band structure calculation functions with a unified one
@@ -1620,8 +1146,7 @@ pub fn calculate_band_structure_sing_ex(
     n_k_points: usize, 
     n_eig: usize, 
     sym_points: &Vec<Vec<f64>>,
-    pp_config: &PPConfig,
-    method: DiagonalizationMethod
+    pp_config: &PPConfig
 ) -> (Vec<Vec<f64>>, Vec<Array1<f64>>) {   
     let save_dir = "pp_data".to_string();
     let filename = get_lm_band_structure_filename(&pp, &pp_config, save_dir, n_k_points, n_eig);
@@ -1664,7 +1189,7 @@ pub fn calculate_band_structure_sing_ex(
         local_pp.update_k(k.clone());
         
         // Diagonalize without initial guess in parallel mode
-        let (eigvals, eig_vec) = diagonalize_pp_sing_ex(&local_pp, n_eig, &method, None);
+        let (eigvals, eig_vec) = diagonalize_pp_sing_ex(&local_pp, n_eig, None);
         
         // Update progress bar
         pb.inc(1);

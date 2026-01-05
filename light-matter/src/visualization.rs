@@ -77,7 +77,8 @@ pub fn plot_dielectric_function(
     plot_type: DielectricPlotType, // Which part of the dielectric function to plot
     omega_range: Option<(f64, f64)>, // Optional frequency range to plot
     coupling_values: &Array1<f64>,
-    reference_params: Option<&DielectricParams> // Optional reference parameters to match against
+    reference_params: Option<&DielectricParams>, // Optional reference parameters to match against
+    zoomed: bool
 ) -> Result<(), Box<dyn std::error::Error>> {
 
     let verbose = false;
@@ -98,17 +99,17 @@ pub fn plot_dielectric_function(
                     // Check if other parameters match the reference parameters (if provided)
                     let params_match = if let Some(ref_params) = reference_params {
                         // Allow small tolerance for floating point comparisons
-                        let a0_match = (params.a0 - ref_params.a0).abs() < 1e-6;
-                        let v0_match = (params.v0 - ref_params.v0).abs() < 1e-6;
+                        let a0_match = (params.a0 - ref_params.a0).abs() < 1e-10;
+                        let v0_match = (params.v0 - ref_params.v0).abs() < 1e-10;
                         let n_rel_match = params.n_rel == ref_params.n_rel;
                         let n_modes_match = params.n_modes == ref_params.n_modes;
-                        let pn_coupling_match = (params.pn_coupling - ref_params.pn_coupling).abs() < 1e-6;
+                        let pn_coupling_match = (params.pn_coupling - ref_params.pn_coupling).abs() < 1e-10;
                         let pn_n_fock_match = params.pn_n_fock == ref_params.pn_n_fock;
-                        
-                        // We don't check n_eig and gamma as they might vary between calculations
-                        
+                        let n_eig_match = params.n_eig == ref_params.n_eig;
+                        let gamma_match = params.gamma == ref_params.gamma;
+                                                
                         let all_match = a0_match && v0_match && n_rel_match && n_modes_match && 
-                                       pn_coupling_match && pn_n_fock_match;
+                                       pn_coupling_match && pn_n_fock_match && n_eig_match && gamma_match;
                         
                         if !all_match && verbose{
                             timed_println!("Parameter mismatch for file with coupling {:.4}: {}", 
@@ -119,6 +120,8 @@ pub fn plot_dielectric_function(
                             if !n_modes_match { timed_println!("  n_modes: {} vs {}", params.n_modes, ref_params.n_modes); }
                             if !pn_coupling_match { timed_println!("  pn_coupling: {} vs {}", params.pn_coupling, ref_params.pn_coupling); }
                             if !pn_n_fock_match { timed_println!("  pn_n_fock: {} vs {}", params.pn_n_fock, ref_params.pn_n_fock); }
+                            if !n_eig_match { timed_println!("  n_eig: {} vs {}", params.n_eig, ref_params.n_eig); }
+                            if !gamma_match { timed_println!("  gamma: {} vs {}", params.gamma, ref_params.gamma); }
                         }
                         
                         all_match
@@ -216,9 +219,9 @@ pub fn plot_dielectric_function(
         
         let sigma = ((mean2.0 - mean.0 * mean.0).sqrt(), (mean2.1 - mean.1* mean.1).sqrt());
 
-        let factor = 0.1;
-        eps_min = (eps_min.0.min(mean.0-factor*sigma.0), eps_min.1.min(mean.1-factor*sigma.1));
-        eps_max = (eps_max.0.max(mean.0+factor*sigma.0), eps_max.1.max(mean.1+factor*sigma.1));
+        let factor = 0.5;
+        eps_min = (eps_min.0.min(mean.0-factor*sigma.0), eps_min.1.min(mean.1-3.*factor*sigma.1));
+        eps_max = (eps_max.0.max(mean.0+factor*sigma.0), eps_max.1.max(mean.1+3.*factor*sigma.1));
         
         all_data.insert(file_path.clone(), (omegas, re_eps, im_eps, params.clone()));
     }
@@ -229,14 +232,10 @@ pub fn plot_dielectric_function(
         omega_max = max;
     }
     
-    // // Add padding to the eps range (5%)
-    // let eps_padding = (eps_max - eps_min) * 0.05;
-    // eps_min -= eps_padding;
-    // eps_max += eps_padding;
-    
     // Create the plot
+    let resolution = if zoomed {(1600, 1000)} else {(1600*2, 1000*2)};
     let save_path = save_path.unwrap_or("dielectric_function.svg");
-    let root = SVGBackend::new(save_path, (1600, 1000)).into_drawing_area(); // Increased plot size
+    let root = SVGBackend::new(save_path, resolution).into_drawing_area(); // Increased plot size
     root.fill(&WHITE)?;
     
     // Split the drawing area for multiple plots if needed
@@ -281,25 +280,76 @@ pub fn plot_dielectric_function(
     
     // Plot the real part
     if plot_type == DielectricPlotType::Real || plot_type == DielectricPlotType::Both {
+        // Symlog transformation with threshold
+        let threshold = 1000.0;
+        let symlog = |x: f64| -> f64 {
+            if x.abs() < threshold {
+                x
+            } else if x > 0.0 {
+                threshold * (x / threshold).ln() + threshold
+            } else {
+                -threshold * ((-x) / threshold).ln() - threshold
+            }
+        };
+        
+        // Inverse symlog for axis labels
+        let inv_symlog = |y: f64| -> f64 {
+            if y.abs() < threshold {
+                y
+            } else if y > 0.0 {
+                threshold * ((y - threshold) / threshold).exp()
+            } else {
+                -threshold * (((-y) - threshold) / threshold).exp()
+            }
+        };
+        
+        // Compute symlog-transformed range for all data
+        let mut transformed_min = f64::INFINITY;
+        let mut transformed_max = f64::NEG_INFINITY;
+        
+        for (_, (_, re_eps, _, _)) in all_data.iter() {
+            for &eps in re_eps.iter() {
+                let transformed = symlog(eps);
+                transformed_min = transformed_min.min(transformed);
+                transformed_max = transformed_max.max(transformed);
+            }
+        }
+        
+        // Add some padding to the transformed range
+        let padding = (transformed_max - transformed_min) * 0.05;
+        transformed_min -= padding;
+        transformed_max += padding;
+        
         let area_index = if plot_type == DielectricPlotType::Both { 0 } else { 0 };
         let mut chart = ChartBuilder::on(&areas[area_index])
-            .caption(format!("{} - Real Part", title), ("sans-serif", 30).into_font().color(&BLACK))
+            .caption(format!("{} - Real Part (symlog scale, threshold={})", title, threshold), ("sans-serif", 30).into_font().color(&BLACK))
             .margin(10)
             .margin_top(20)
             .margin_bottom(10)
             .x_label_area_size(40)
-            .y_label_area_size(60)
-            .build_cartesian_2d(omega_min..omega_max, eps_min.0..eps_max.0)?;
+            .y_label_area_size(70)
+            .build_cartesian_2d(omega_min..omega_max, transformed_min..transformed_max)?;
         
         chart.configure_mesh()
             .x_desc("Frequency (a.u.)")
             .y_desc("Re[ε(ω)]")
             .axis_desc_style(("sans-serif", 20))
             .label_style(("sans-serif", 18))
+            .y_label_formatter(&|y| {
+                // Inverse symlog to show original values on axis
+                let original = inv_symlog(*y);
+                if original.abs() < 0.01 {
+                    format!("{:.3}", original)
+                } else if original.abs() < 1.0 {
+                    format!("{:.2}", original)
+                } else if original.abs() < 10.0 {
+                    format!("{:.1}", original)
+                } else {
+                    format!("{:.0}", original)
+                }
+            })
             .disable_mesh() // Remove fine grid lines
             .draw()?;
-        
-
         
         for (i, (key, coupling)) in couplings.iter().enumerate().rev() {
             let (omegas, re_eps, _, params) = &all_data[key];
@@ -311,11 +361,11 @@ pub fn plot_dielectric_function(
                 ((i as f64 / (couplings.len() - 1) as f64) * 255.0) as u8  // More blue for lower coupling
             );
             
-            // Filter data points within the omega range
+            // Filter data points within the omega range and apply symlog transformation
             let points: Vec<(f64, f64)> = omegas.iter()
                 .zip(re_eps.iter())
                 .filter(|(omega, _)| omega >= &&omega_min && omega <= &&omega_max)
-                .map(|(&omega, &eps)| (omega, eps))
+                .map(|(&omega, &eps)| (omega, symlog(eps)))
                 .collect();
             
             // Create a more detailed label if we have the parameters
@@ -336,22 +386,30 @@ pub fn plot_dielectric_function(
               .legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], color));
         }
          
-        // Add legend
-        chart.configure_series_labels()
-            .background_style(&WHITE.mix(0.9)) // More opaque background
-            .border_style(&BLACK)
-            .label_font(("sans-serif", 16)) // Slightly larger font
-            .position(SeriesLabelPosition::UpperRight)
-            .margin(15) // Add some margin around the legend text
-            .draw()?;
+        // // Add legend
+        // chart.configure_series_labels()
+        //     .background_style(&WHITE.mix(0.9)) // More opaque background
+        //     .border_style(&BLACK)
+        //     .label_font(("sans-serif", 16)) // Slightly larger font
+        //     .position(SeriesLabelPosition::UpperRight)
+        //     .margin(15) // Add some margin around the legend text
+        //     .draw()?;
     }
     
     // Plot the imaginary part
     if plot_type == DielectricPlotType::Imaginary || plot_type == DielectricPlotType::Both {
 
         // Change to semilog plot
-        let e_min: f64 = (1.0_f64).abs().min((2.0*eps_min.1).abs());
-        let e_max: f64 = (1.0_f64).abs().max((2.0*eps_min.1).abs());
+        let mut e_min: f64 = f64::INFINITY;
+        let mut e_max = f64::NEG_INFINITY;
+
+        for (_, (omegas, _, im_eps, _)) in all_data.iter() {
+            for (&eps, _) in im_eps.iter().zip(omegas.iter()).filter(|(_,omega)| *omega > &omega_min && *omega < &omega_max ) {
+                e_max = e_max.max(eps.abs());
+                e_min = e_min.min(eps.abs());
+            }
+        }
+
         println!("max: {}, min: {}", e_max, e_min);
 
         let area_index = if plot_type == DielectricPlotType::Both { 1 } else { 0 };
@@ -404,22 +462,22 @@ pub fn plot_dielectric_function(
                 ShapeStyle {
                     color: color.into(),
                     filled: true,
-                    stroke_width: 6, // Increased line thickness
+                    stroke_width: 8, // Increased line thickness
                 }
             ))?.label(label)
               .legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], color));
         }
         
-        if plot_type == DielectricPlotType::Imaginary {
-            // Add legend
-            chart.configure_series_labels()
-                .background_style(&WHITE.mix(0.9)) // More opaque background
-                .border_style(&BLACK)
-                .label_font(("sans-serif", 16)) // Slightly larger font
-                .position(SeriesLabelPosition::LowerRight)
-                .margin(15) // Add some margin around the legend text
-                .draw()?;
-        }
+        // if plot_type == DielectricPlotType::Imaginary {
+        //     // Add legend
+        //     chart.configure_series_labels()
+        //         .background_style(&WHITE.mix(0.9)) // More opaque background
+        //         .border_style(&BLACK)
+        //         .label_font(("sans-serif", 16)) // Slightly larger font
+        //         .position(SeriesLabelPosition::LowerRight)
+        //         .margin(15) // Add some margin around the legend text
+        //         .draw()?;
+        // }
     }
     
     // Present the final plot

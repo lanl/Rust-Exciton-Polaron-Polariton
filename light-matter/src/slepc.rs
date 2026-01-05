@@ -1,5 +1,4 @@
-use crate::sing_ex::PolaronPolariton;
-use crate::davidson::{DavidsonOperator};
+use crate::sing_ex::{PolaronPolariton, SolverOperator};
 use ndarray::{Array1, Array2};
 use std::ffi::{c_int, c_double, c_void};
 use rust_slepc_bindings::{
