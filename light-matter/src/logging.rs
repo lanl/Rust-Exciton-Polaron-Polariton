@@ -33,7 +33,7 @@ macro_rules! timed_println {
     }};
 }
 
-pub fn init_logging() {
-    // Any initialization code can go here
-    timed_println!("Logging initialized");
-}
+// pub fn init_logging() {
+//     // Any initialization code can go here
+//     timed_println!("Logging initialized");
+// }

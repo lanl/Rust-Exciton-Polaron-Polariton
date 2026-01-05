@@ -34,3 +34,7 @@ num_cpus = "1.17.0"
 rust_slepc_bindings = {path = "../slepc_rust"}
 chrono = "0.4"
 colored ="3.0.0"
+
+[[test]]
+name = "slepc_overhead_test"
+path = "tests/slepc_overhead_test.rs"

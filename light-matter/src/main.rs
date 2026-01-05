@@ -31,9 +31,9 @@ pub mod dense_methods;
 
 pub mod slepc;
 
-mod logging;
+pub mod slepc_instrumented;
 
-use crate::logging::init_logging;
+mod logging;
 
 // Speed of light in atomic units
 const C: f64 = 137.036;
@@ -60,7 +60,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     let total_coupling = 0.015 ;  // Coupling strength
     timed_println!("total_coupling = {}", total_coupling);
     let omega_0 = 0.15;    // Photon frequency
-    let n_modes = 23;
+    let n_modes = 5;
     let coupling = total_coupling / (n_modes as f64);
 
     // Define photon modes
@@ -135,6 +135,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
                 Some("disp_plot.png"), false, v0, coupling);
 
         },
+
         Method::Dense => {
             
             timed_println!("Using dense methods for light-matter coupling.");
@@ -171,7 +172,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
         },   
         Method::SingEx => {
             timed_println!("Using Mat-Vec methods for light-matter coupling in single photon limit.");
-            let n_eig = 256;
+            let n_eig = 16;
             timed_println!("Calculating {} eigenstates", n_eig);
             
             let zoomed = true;
@@ -476,9 +477,6 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
 }
 
 fn main() {
-    // Initialize logging
-    init_logging();
-
     // Get the number of available cores
     let num_threads = std::env::var("OMP_NUM_THREADS")
         .ok()

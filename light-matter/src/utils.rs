@@ -66,15 +66,15 @@ pub struct Vector3D {
 }
 
 impl Vector3D {
-    fn new(x: f64, y: f64, z: f64) -> Self {
+    pub fn new(x: f64, y: f64, z: f64) -> Self {
         Vector3D { x, y, z }
     }
 
-    fn magnitude(&self) -> f64 {
+    pub fn magnitude(&self) -> f64 {
         f64::sqrt(self.x * self.x + self.y * self.y + self.z * self.z)
     }
 
-    fn normalize(&self) -> Self {
+    pub fn normalize(&self) -> Self {
         let mag = self.magnitude();
         if mag < 1e-10 {
             return *self;
@@ -86,7 +86,7 @@ impl Vector3D {
         }
     }
 
-    fn cross(&self, other: &Vector3D) -> Self {
+    pub fn cross(&self, other: &Vector3D) -> Self {
         Vector3D {
             x: self.y * other.z - self.z * other.y,
             y: self.z * other.x - self.x * other.z,
@@ -94,7 +94,7 @@ impl Vector3D {
         }
     }
 
-    fn _dot(&self, other: &Vector3D) -> f64 {
+    pub fn _dot(&self, other: &Vector3D) -> f64 {
         self.x * other.x + self.y * other.y + self.z * other.z
     }
 }
@@ -1540,8 +1540,12 @@ impl LMMatrixElementArray {
         while states.len() < n_rel {
             for m in -n..=n {
                 if n >= m.abs() {
-                    // Valid state condition
-                    states.push((n, m));
+                    // Valid state condition - also check Laguerre order
+                    if (n - m.abs()) as usize <= 7 {
+                        states.push((n, m));
+                    } else {
+                        warn!("Skipping state (n={},m={}) because Laguerre polynomials of order >7 are not implemented", n, m);
+                    }
                 }
             }
             n += 1;
@@ -1552,9 +1556,16 @@ impl LMMatrixElementArray {
 
         let mut lag_coeffs: HashMap<(i32, i32), Vec<(i32, f64)>> = HashMap::new();
 
-        states.iter().for_each(|&(n, m)| {
+        for &(n, m) in &states {
             lag_coeffs.insert((n, m), self.laguerre((n - m.abs()) as usize, 2. * m.abs() as f64));
-        });
+        }
+
+            // Ensure all necessary keys are present
+        for &(n1, m1) in &states {
+            if !lag_coeffs.contains_key(&(n1, m1.abs())) {
+                panic!("Missing key ({},{})", n1, m1.abs());
+            }
+        }
 
         (lag_coeffs, states)
     }

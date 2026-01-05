@@ -709,7 +709,8 @@ impl PolaronPolariton {
 
 }
 
-impl Operator<f64> for PolaronPolariton {
+
+impl SolverOperator<f64> for PolaronPolariton {
     fn apply(&self, x: &[f64], y: &mut [f64]) {
         // Avoid unnecessary allocation and copying
         let x_arr = Array1::from_shape_fn(x.len(), |i| x[i]);
@@ -725,13 +726,6 @@ impl Operator<f64> for PolaronPolariton {
         // timed_println!("Applying Off-Diag");
         // Apply off-diagonal part and add to y
         self.pp_off_ham.apply(x, y);
-    }
-}
-
-impl SolverOperator<f64> for PolaronPolariton {
-    fn apply(&self, x: &[f64], y: &mut [f64]) {
-        // Reuse your existing implementation
-        Operator::apply(self, x, y);
     }
     
     fn get_diagonal(&self) -> Vec<f64> {
