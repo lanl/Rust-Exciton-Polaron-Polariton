@@ -3,7 +3,7 @@
 use exciton_2d::{Exciton2DGridSystem, ExcitonConfig};
 use light_matter::Vector3D;
 use light_matter::sing_ex::{PolaronPolariton, ExcitonicHamiltonian, PhotonicHamiltonian, PhononHamiltonian, SolverOperator};
-use light_matter::utils::{PhotonMode, Polarization};
+use light_matter::utils::{BosonMode, Polarization};
 use light_matter::slepc_instrumented::{diagonalize_slepc_instrumented, get_instrumentation_data};
 use ndarray::{Array1, arr1};
 use std::sync::Arc;
@@ -79,14 +79,14 @@ fn create_test_system(config: &OverheadTestConfig) -> PolaronPolariton {
         })}).collect();
 
     // Create photon modes
-    let photon_modes: Vec<PhotonMode> = q_values.iter().map( |q| {
-                PhotonMode::new(q.clone(), Polarization::TE, n_fock).clone()
+    let photon_modes: Vec<BosonMode> = q_values.iter().map( |q| {
+                BosonMode::new(q.clone(), Polarization::TE, n_fock).clone()
         }).collect();
     let photon = PhotonicHamiltonian::new(photon_modes);
     
     // Create phonon mode if needed
     let phonon = if config.n_phonon_fock > 1 {
-        let phonon_mode = PhotonMode {
+        let phonon_mode = BosonMode {
             eps: arr1(&[0.0, 0.0]),
             q: arr1(&[0.,0.05]),
             omega: 0.0075,

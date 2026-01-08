@@ -7,16 +7,17 @@ use indicatif::{ProgressBar, ProgressStyle};
 use sprs::{kronecker_product as kron, smmp::mul_csr_csr, CsMat, TriMat};
 use arpack::{Config, Operator}; 
 
-use crate::utils::{PhotonMode, LMMatrixElement};//, save_band_data};
+use crate::utils::{BosonMode};//, save_band_data};
+use crate::matrix_elements::LMMatrixElementArray;
 
 
 /// Represents the photonic part of the Hamiltonian
 pub struct PhotonicHamiltonian {
-    pub photon_modes: Vec<PhotonMode>,
+    pub photon_modes: Vec<BosonMode>,
 }
 
 impl PhotonicHamiltonian {
-    pub fn new(photon_modes: Vec<PhotonMode>) -> Self {
+    pub fn new(photon_modes: Vec<BosonMode>) -> Self {
         Self { photon_modes: photon_modes }
     }
 
@@ -74,7 +75,7 @@ impl PhotonicHamiltonian {
 #[derive(Clone)]
 pub struct LMIntHamiltonian {
     pub exciton: FullHamiltonian,        // Exciton Hamiltonian
-    pub photon_modes: Vec<PhotonMode>,    // Photon modes
+    pub photon_modes: Vec<BosonMode>,    // Photon modes
     pub coupling: f64,                    // Light-matter coupling strength
     pub exciton_vecs: Vec<Array1<f64>>,   // Exciton eigenvectors
     pub rel_vecs: Array2<f64>             // Relative coordinate eigenvectors
@@ -82,7 +83,7 @@ pub struct LMIntHamiltonian {
 
 impl LMIntHamiltonian {
     pub fn new (exciton: FullHamiltonian, 
-                modes:  Vec<PhotonMode>, 
+                modes:  Vec<BosonMode>, 
                 coupling: f64, 
                 e_vecs: Vec<Array1<f64>>,
                 r_vecs: Array2<f64>) -> Self {
@@ -275,35 +276,6 @@ impl LMIntHamiltonian {
         }
         
         mat.to_csr()
-
-        // CsMatBase::csr_from_dense(Array2::from_shape_fn((n_eig, n_eig), |(idx1, idx2)| {
-        //     // For each pair of eigenvectors
-        //     let vec1 = &e_vecs[idx1];
-        //     let vec2 = &e_vecs[idx2];
-
-        //     // Calculate matrix element in the full basis
-        //     let mat_ij: f64 = (0..n_rel).flat_map(|rel_ind1| {
-        //             (0 .. n_rel).flat_map(move |rel_ind2| {
-        //                 // Get the matrix element for these relative states
-        //                 let mat_element = mat_hash.get(&(rel_ind1,rel_ind2,q_inds.clone()))
-        //                             .unwrap_or_else(|| panic!("Matrix element missing for i1 = {}, 
-        //                             i2 = {}, q_ind = {:?}",rel_ind1,rel_ind2, q_inds));
-                        
-        //                 // Sum over center-of-mass states (diagonal in CoM)
-        //                 (0..n_com).map(move |com_ind| {
-        //                     let i1 = n_com * rel_ind1 + com_ind;
-        //                     let i2 = n_com * rel_ind2 + com_ind;
-
-        //                     let a1 = vec1[i1];
-        //                     let a2 = vec2[i2];
-
-        //                     a1 * a2 * mat_element
-        //                 })
-        //             })
-        //         }).sum();
-
-        //     mat_ij
-        // }).view(), 1e-10)
     }
 
     /// Calculates the sparse center-of-mass momentum matrix element P·field_vec
@@ -370,7 +342,7 @@ pub struct LightMatter {
 impl LightMatter {
     /// Creates a new light-matter coupled system
     pub fn new( exciton_ham: FullHamiltonian, 
-                photon_modes: Vec<PhotonMode>, 
+                photon_modes: Vec<BosonMode>, 
                 coupling: f64,
                 n_rel:usize, 
                 n_ex_eig:usize, 
@@ -588,7 +560,7 @@ impl BandStructureCalculatorLM {
 
 /// Represents a polaron-polariton system (exciton-polariton coupled to phonons)
 pub struct PolaronPolariton {
-    pub phonon_modes: Vec<PhotonMode>,    // Phonon modes (using PhotonMode structure)
+    pub phonon_modes: Vec<BosonMode>,    // Phonon modes (using PhotonMode structure)
     pub polariton: LightMatter,           // Exciton-polariton system
     pub coupling: Vec<f64>,               // Coupling strengths to phonon modes
     pub pp_int: PPIntHamiltonian,         // Polaron-polariton interaction Hamiltonian
@@ -596,7 +568,7 @@ pub struct PolaronPolariton {
 
 impl PolaronPolariton {
     /// Creates a new polaron-polariton system
-    pub fn new(phonon_modes: Vec<PhotonMode>, polariton: LightMatter, coupling: Vec<f64>) -> Self{
+    pub fn new(phonon_modes: Vec<BosonMode>, polariton: LightMatter, coupling: Vec<f64>) -> Self{
         // Create the interaction Hamiltonian
         let pp_int = PPIntHamiltonian::new(polariton.interaction.clone(), 
                                            polariton.photon.photon_modes.clone(), 
@@ -699,14 +671,14 @@ impl PolaronPolariton {
 /// Represents the polaron-polariton interaction Hamiltonian
 pub struct PPIntHamiltonian {
     pub polariton_int: LMIntHamiltonian,  // Light-matter interaction Hamiltonian
-    pub phonon_modes: Vec<PhotonMode>,    // Phonon modes
+    pub phonon_modes: Vec<BosonMode>,    // Phonon modes
     pub coupling: Vec<f64>,               // Coupling strengths
 }
 
 impl PPIntHamiltonian {
     /// Creates a new polaron-polariton interaction Hamiltonian
     pub fn new (polariton_int: LMIntHamiltonian,
-                phonon_modes: Vec<PhotonMode>,
+                phonon_modes: Vec<BosonMode>,
                 coupling: Vec<f64>, ) -> Self {
         Self {  polariton_int: polariton_int,
                 phonon_modes: phonon_modes,

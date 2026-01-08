@@ -12,28 +12,31 @@ use std::time::SystemTime;
 pub mod sparse_methods;
 
 pub mod utils;
-pub use utils::{Vector3D, PhotonMode, Polarization};
+pub use utils::{Vector3D, BosonMode, Polarization};
+
+pub mod matrix_elements;
+pub use matrix_elements::LMMatrixElementArray;
 
 pub mod visualization;
 pub use visualization::{plot_band_structure, plot_dielectric_function, DielectricPlotType};
 
 pub mod color_band_plot;
 
+use crate::sing_ex::ExcitonicHamiltonian;
 use crate::utils::PPConfig;
 
 pub mod sing_ex;
 
 pub mod dense_methods;
-
-// pub mod davidson;
-
-// pub mod lobpcg;
+use crate::dense_methods::BosonicHamiltonian;
 
 pub mod slepc;
 
 pub mod slepc_instrumented;
 
-mod logging;
+pub mod logging;
+
+pub mod hamiltonians;
 
 // Speed of light in atomic units
 const C: f64 = 137.036;
@@ -91,9 +94,9 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     };
 
     // Create photon modes
-    let photon_modes: Vec<PhotonMode> = qx_values.iter().flat_map(|qx| {
+    let photon_modes: Vec<BosonMode> = qx_values.iter().flat_map(|qx| {
             qy_values.iter().map( |qy| {
-                PhotonMode::new(Vector3D { x: *qx, y: *qy, z: qz }, Polarization::TE, n_fock).clone()
+                BosonMode::new(Vector3D { x: *qx, y: *qy, z: qz }, Polarization::TE, n_fock).clone()
             })
         }).collect();
 
@@ -141,8 +144,9 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
             timed_println!("Using dense methods for light-matter coupling.");
 
             // Create light-matter system
-            let light_matter = dense_methods::LightMatter::new(exciton.full_ham, photon_modes, coupling,
-                                            n_rel, n_ex_eig, parity);
+            let photon = BosonicHamiltonian{bosonic_modes: photon_modes};
+            let exciton = ExcitonicHamiltonian::new(exciton.full_ham, n_ex_eig, n_rel, parity);
+            let light_matter = dense_methods::LightMatter::new(exciton, photon, coupling);
 
             // Define high-symmetry points in k-space for band structure calculation
             // Here we use Γ to X path (center to edge of Brillouin zone)
@@ -153,7 +157,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
             let start_time = Instant::now();
             
             // Create band structure calculator
-            let band_structure = dense_methods::BandStructureCalculatorLM::new(
+            let mut band_structure = dense_methods::BandStructureCalculatorLM::new(
                 light_matter, a0, v0, "lm_data".to_string(), sym_points.clone());
             
             // Using sparse matrices and ARPACK to calculate 40 lowest eigenvalues
@@ -168,8 +172,8 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
             plot_band_structure(
                 &k_points, sym_points, sym_labels, &eigvals_list, n_bands, a0, 
                 Some("disp_plot.png"), false, v0, coupling);
+        },
 
-        },   
         Method::SingEx => {
             timed_println!("Using Mat-Vec methods for light-matter coupling in single photon limit.");
             let n_eig = 16;

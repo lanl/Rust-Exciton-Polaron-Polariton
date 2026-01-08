@@ -32,8 +32,3 @@ macro_rules! timed_println {
         println!("[{}]{}{}", now.format("%Y-%m-%d %H:%M:%S%.3f"), mpi_message, format!($($arg)*));
     }};
 }
-
-// pub fn init_logging() {
-//     // Any initialization code can go here
-//     timed_println!("Logging initialized");
-// }
