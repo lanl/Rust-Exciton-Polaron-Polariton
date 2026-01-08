@@ -1,7 +1,8 @@
 use exciton_2d::{Exciton2DGridSystem, ExcitonConfig};
+use sprs::CsMat;
 use std::{f64::consts::PI, io::Write};
 use std::time::Instant;
-use ndarray::{arr1, Array1, s};
+use ndarray::{arr1, Array1, Array2, s};
 use rust_slepc_bindings::{initialize, finalize};
 use std::env;
 use std::fs::File;
@@ -22,13 +23,11 @@ pub use visualization::{plot_band_structure, plot_dielectric_function, Dielectri
 
 pub mod color_band_plot;
 
-use crate::sing_ex::ExcitonicHamiltonian;
 use crate::utils::PPConfig;
 
 pub mod sing_ex;
 
 pub mod dense_methods;
-use crate::dense_methods::BosonicHamiltonian;
 
 pub mod slepc;
 
@@ -37,6 +36,7 @@ pub mod slepc_instrumented;
 pub mod logging;
 
 pub mod hamiltonians;
+use crate::hamiltonians::{BosonicHamiltonian, ExcitonicHamiltonian, LMHamiltonian};
 
 // Speed of light in atomic units
 const C: f64 = 137.036;
@@ -112,14 +112,15 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
             timed_println!("Using sparse methods for light-matter coupling.");
 
             // Create light-matter system
-            let light_matter = sparse_methods::LightMatter::new(exciton.full_ham, photon_modes, coupling,
-                                            n_rel, n_ex_eig, parity);
+            let photon = BosonicHamiltonian::<CsMat<f64>>::new(photon_modes);
+            let exciton = ExcitonicHamiltonian::new(exciton.full_ham, n_ex_eig, n_rel, parity);
+            let light_matter = LMHamiltonian::new(exciton, photon, coupling);
 
             // Start timing the band structure calculation
             let start_time = Instant::now();
             
             // Create band structure calculator
-            let band_structure = sparse_methods::BandStructureCalculatorLM::new(
+            let mut band_structure = sparse_methods::BandStructureCalculatorLM::new(
                 light_matter, a0, v0, "lm_data".to_string(), sym_points.clone());
             
             let n_bands_calc = (n_bands as f64 * 1.1).ceil() as usize; // Calculate a few extra bands to ensure accuracy
@@ -144,14 +145,9 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
             timed_println!("Using dense methods for light-matter coupling.");
 
             // Create light-matter system
-            let photon = BosonicHamiltonian{bosonic_modes: photon_modes};
+            let photon = BosonicHamiltonian::<Array2<f64>>::new(photon_modes);
             let exciton = ExcitonicHamiltonian::new(exciton.full_ham, n_ex_eig, n_rel, parity);
-            let light_matter = dense_methods::LightMatter::new(exciton, photon, coupling);
-
-            // Define high-symmetry points in k-space for band structure calculation
-            // Here we use Γ to X path (center to edge of Brillouin zone)
-            let sym_points = vec![ vec![0.0,0.0], vec![PI / a0, 0.0], vec![PI / a0, PI / a0]];
-            let sym_labels = vec!["Γ".to_string(), "X".to_string(), "M".to_string()];
+            let light_matter = LMHamiltonian::new(exciton, photon, coupling);
 
             // Start timing the band structure calculation
             let start_time = Instant::now();
