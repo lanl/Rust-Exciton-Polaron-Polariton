@@ -41,35 +41,15 @@ impl LMMatrixElementArray {
         n_com: usize,
         mu: f64,
     ) -> Self {
-        // Find the number of even and odd parity states more efficiently
-        let mut n_rel_even = 0;
-        let mut n_rel_odd = 0;
-
-        // timed_println!("All q_ind = {:?}", all_q_ind);
-
-        for (idx, &parity) in parities.iter().enumerate() {
-            if parity == 1 && n_rel_even == 0 {
-                n_rel_even = e_vecs[idx].len() / n_com;
-            } else if parity == -1 && n_rel_odd == 0 {
-                n_rel_odd = e_vecs[idx].len() / n_com;
-            }
-
-            // Break early if we've found both
-            if n_rel_even > 0 && n_rel_odd > 0 {
-                break;
-            }
-        }
-
-        let n_rel_par = [n_rel_even, n_rel_odd];
-        let n_eigs = e_vecs.len();
+        
+        // Sort parities
+        let (n_rel_par, n_eigs, parity_indices) = self.sort_parities(e_vecs, parities, n_com);
+        let [n_rel_even, n_rel_odd] = n_rel_par;
 
         // Use capacity hints for HashMaps
         let mut cos_mat = HashMap::with_capacity(all_q_ind.len() - modes.len());
         let mut sin_mat = HashMap::with_capacity(modes.len());
         let mut p_cos_mat = HashMap::with_capacity(modes.len());
-
-        // Pre-calculate parity indices for all eigenvectors
-        let parity_indices: Vec<usize> = parities.iter().map(|&p| (p == -1) as usize).collect();
 
         // Get Laguerre coefficients for radial integrals
         let (lag_coeffs, states) = &self.get_laguerre_coeffs(n_rel_even + n_rel_odd);
@@ -160,6 +140,101 @@ impl LMMatrixElementArray {
         });
 
         Self { cos_mat, sin_mat, p_cos_mat }
+    }
+
+    fn sort_parities(
+        &self,
+        e_vecs: &Vec<Array1<f64>>,
+        parities: &Array1<i32>,
+        n_com: usize,
+    ) -> ([usize; 2], usize, Vec<usize>) {
+        // Find the number of even and odd parity states more efficiently
+        let mut n_rel_even = 0;
+        let mut n_rel_odd = 0;
+
+        for (idx, &parity) in parities.iter().enumerate() {
+            if parity == 1 && n_rel_even == 0 {
+                n_rel_even = e_vecs[idx].len() / n_com;
+            } else if parity == -1 && n_rel_odd == 0 {
+                n_rel_odd = e_vecs[idx].len() / n_com;
+            }
+
+            // Break early if we've found both
+            if n_rel_even > 0 && n_rel_odd > 0 {
+                break;
+            }
+        }
+
+        let n_rel_par = [n_rel_even, n_rel_odd];
+        let n_eigs = e_vecs.len();
+
+        // Pre-calculate parity indices for all eigenvectors
+        let parity_indices: Vec<usize> = parities.iter().map(|&p| (p == -1) as usize).collect();
+
+        (n_rel_par, n_eigs, parity_indices)
+    }
+
+    // Only returns the cosine term for phonon modes
+    pub fn phonon_mat_elements(
+        &self,
+        e_vecs: &Vec<Array1<f64>>,
+        parities: &Array1<i32>,
+        modes: &Vec<BosonMode>,
+        mu: f64,
+        n_com: usize,
+    ) -> Vec<Array2<f64>>{
+
+        // Sort parities
+        let (n_rel_par, n_eigs, parity_indices) = self.sort_parities(e_vecs, parities, n_com);
+        let [n_rel_even, n_rel_odd] = n_rel_par;
+
+        // Get Laguerre coefficients for radial integrals
+        let (lag_coeffs, states) = &self.get_laguerre_coeffs(n_rel_even + n_rel_odd);
+
+        // Use parallel map to compute matrices for each q_inds value
+        modes.par_iter().map(|mode| {
+            let mut matrix = Array2::zeros((n_eigs, n_eigs));
+
+            // Keep using iterators for the main computation
+            for idx1 in 0..n_eigs {
+                for idx2 in 0..n_eigs {
+                    let vec1 = &e_vecs[idx1];
+                    let vec2 = &e_vecs[idx2];
+
+                    let idx1_par = parity_indices[idx1];
+                    let idx2_par = parity_indices[idx2];
+
+                    // Calculate the matrix elements using iterators
+                    let element = (0..n_rel_par[idx1_par])
+                        .flat_map(|rel_ind1| {
+                            let r_ind1 = rel_ind1 + idx1_par * n_rel_even;
+                            
+                            (0..n_rel_par[idx2_par]).flat_map(move |rel_ind2| {
+                                let r_ind2 = rel_ind2 + idx2_par * n_rel_even;
+
+                                let q = &mode.q;
+                                let mat_element = self.get_cos_tayl(&states[r_ind1], &states[r_ind2], q,  mu, &lag_coeffs);
+
+                                (0..n_com).map(move |com_ind| {
+                                    let i1 = n_com * rel_ind1 + com_ind;
+                                    let i2 = n_com * rel_ind2 + com_ind;
+                                    let a1 = vec1[i1];
+                                    let a2 = vec2[i2];
+
+                                    a1 * a2 * mat_element
+                                })
+                            })
+                        })
+                        .sum();
+
+                    matrix[[idx1, idx2]] = element;
+                }
+            }
+            
+            // Return tuple of q_inds and computed matrices
+            matrix
+        }).collect()
+
     }
 
     /// Evaluates overlap integral of radial wavefunctions for two states (n1,m1) and (n2,m2)

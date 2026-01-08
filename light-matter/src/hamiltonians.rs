@@ -3,7 +3,7 @@ use std::iter::Sum;
 use crate::{utils::{BosonMode, MatrixOps, Sqrt}};
 use num_traits::NumCast;
 use exciton_2d::FullHamiltonian;
-use ndarray::{arr1, Array1, Array2, s};
+use ndarray::{Array1, Array2, arr1, s};
 use sprs::TriMat;
 use crate::matrix_elements::LMMatrixElementArray;
 
@@ -89,6 +89,10 @@ impl<M: MatrixOps> BosonicHamiltonian<M> {
             })
             .reduce(|acc, h_ph_sing| acc.add(&h_ph_sing))
             .unwrap()
+    }
+
+    pub fn dimension (&self) -> usize {
+        self.bosonic_modes.iter().map(|mode| mode.n_fock).product()
     }
 }
 
@@ -205,7 +209,7 @@ impl<M: MatrixOps> ExcitonicHamiltonian<M> {
         }
     }
 
-    fn get_h(&mut self) -> M  
+    pub fn get_h(&mut self) -> M  
     where 
         M::Scalar: NumCast,
     {
@@ -216,7 +220,11 @@ impl<M: MatrixOps> ExcitonicHamiltonian<M> {
             <M::Scalar as NumCast>::from(*val).unwrap()
         }).collect();
 
-        M::from_diag(diag)
+        M::from_diag(&diag)
+    }
+
+    pub fn dimension(&self) -> usize {
+        self.e_vals.as_ref().map_or(0, |vals| vals.len())
     }
 }
 
@@ -224,13 +232,13 @@ pub struct LMHamiltonian <M: MatrixOps> {
     pub exciton: ExcitonicHamiltonian<M>,
     pub photon: BosonicHamiltonian<M>,
     matrix_elements: LMMatrixElementArray,
-    coupling: f64,
+    pub coupling: f64,
     p_c_sin: Option<Vec<M>>,
     p_q: Option<Vec<M>>,
 }
 
 impl<M: MatrixOps>  LMHamiltonian<M> {
-        pub fn new( 
+    pub fn new( 
             exciton: ExcitonicHamiltonian<M>, 
             photon: BosonicHamiltonian<M>, 
             coupling: f64) -> Self {
@@ -240,9 +248,28 @@ impl<M: MatrixOps>  LMHamiltonian<M> {
         Self { exciton, photon, matrix_elements, coupling, p_c_sin: None, p_q: None }
     }
 
+    fn initialize(&mut self)  
+    where 
+        M::Scalar: NumCast + Sqrt + Sum, 
+    {
+        self.exciton.compute_eigenstates();
+
+        let all_q_ind = self.photon.get_all_q_ind();
+        self.matrix_elements = self.matrix_elements.populate_tay_mat_elements(
+            &all_q_ind, 
+            self.exciton.e_vecs.as_ref().unwrap(), 
+            self.exciton.parities.as_ref().unwrap(),
+            &self.photon.bosonic_modes, 
+            self.exciton.exciton_ham.kappa_vectors.len(),
+            self.exciton.exciton_ham.rel_ham.mu
+        );
+
+        self.calc_p_c_sin_matrix();
+    }
+
     fn calc_p_c_sin_matrix(&mut self) 
     where 
-        M: MatrixOps<Scalar = f64>,
+        M::Scalar: NumCast + Sqrt + Sum, 
     {
         
         let n_ph = self.photon.bosonic_modes.len() + 1; // +1 for ground state
@@ -328,5 +355,116 @@ impl<M: MatrixOps>  LMHamiltonian<M> {
                 *ham = ham.add(&M::kron(&ex_eye, &(a_i.transpose().dot(a_i).dot(&a_j.transpose()).dot(a_j)) ).scale(q_q));
             });
         });
+    }
+
+    pub fn build_lm_hamiltonian(&mut self) -> M 
+    where 
+        M::Scalar: NumCast + Sqrt + Sum,  
+    {
+        // Initialize
+        self.initialize();
+        
+        // Get matrix dimensions
+        let n_ex = self.exciton.e_vals.as_ref().unwrap().len();
+        let n_ph: usize = self.photon.bosonic_modes
+            .iter().map(|mode| mode.n_fock).product();
+        let mut ham: M = M::zeros((n_ex*n_ph, n_ex*n_ph));
+        let ex_eye: M = M::eye(n_ex);
+        let ph_eye: M = M::eye(n_ph);
+
+        // Exciton Hamiltonian
+        ham = ham.add(&M::kron(&self.exciton.get_h(), &ph_eye));
+
+        // Photonic Hamiltonian
+        ham = ham.add(&M::kron(&ex_eye, &self.photon.get_h()));
+
+        // Interaction Hamiltonian
+        self.get_interaction_hamiltonian(&mut ham);
+
+        ham
+    }
+
+    pub fn update_k(&mut self, k: Vec<f64>) {
+        self.exciton.exciton_ham.k = k;
+    }
+}
+
+pub struct PPHamiltonian <M: MatrixOps> {
+    pub polariton: LMHamiltonian<M>,
+    pub phonon: BosonicHamiltonian<M>,
+    pub pn_coupling: f64,
+    cos_pn: Option<Vec<M>>
+}
+
+impl<M: MatrixOps>  PPHamiltonian<M> {
+
+    pub fn new(polariton: LMHamiltonian<M>, phonon: BosonicHamiltonian<M>, pn_coupling: f64) -> Self {
+        Self { polariton, phonon, pn_coupling, cos_pn: None}
+    }
+
+    pub fn update_k(&mut self, k: Vec<f64>) {
+        self.polariton.exciton.exciton_ham.k = k;
+    } 
+
+    fn initialize(&mut self)  
+    where 
+        M::Scalar: NumCast + Sqrt + Sum, 
+    {
+        let pn_mat_calc = LMMatrixElementArray::new();
+        let cos_pn = pn_mat_calc.phonon_mat_elements(  
+            self.polariton.exciton.e_vecs.as_ref().unwrap(), 
+            self.polariton.exciton.parities.as_ref().unwrap(), 
+            &self.phonon.bosonic_modes, 
+            self.polariton.exciton.exciton_ham.rel_ham.mu,
+            self.polariton.exciton.exciton_ham.kappa_vectors.len());
+
+        self.cos_pn = Some(cos_pn.iter().map(|mat| M::from_dense(mat)).collect::<Vec<M>>());
+    }
+
+    fn get_interaction_hamiltonian(&self, ham: &mut M, ph_dim: usize) 
+    where 
+        M::Scalar: NumCast + Sqrt + Sum, 
+    {
+        let cos_pn = self.cos_pn.as_ref().unwrap();
+
+        let ph_eye = M::eye(ph_dim);
+
+        self.phonon.bosonic_modes.iter().enumerate().for_each(|(idx, _)|{
+            let b = self.phonon.get_a(idx);
+            let b_dag = b.transpose();
+
+            // 2 gamma cos() (b† + b)
+            let lm_op = cos_pn[idx].kron(&ph_eye);
+            let pn_op = (b.add(&b_dag)).scale(2.0 * self.pn_coupling);
+
+            *ham = ham.add(&lm_op.kron(&pn_op));
+        });
+    }
+
+    pub fn build_pp_hamiltonian(&mut self) -> M
+    where 
+        M::Scalar: NumCast + Sqrt + Sum, 
+    {
+        self.initialize();
+
+        let lm_ham = self.polariton.build_lm_hamiltonian();
+        let pn_ham = self.phonon.get_h();
+
+        let ph_dim = self.polariton.photon.dimension();
+        let pn_dim = self.phonon.dimension();
+        let ex_dim = self.polariton.exciton.dimension();
+
+        let lm_eye = M::eye(ph_dim * ex_dim);
+        let pn_eye = M::eye(pn_dim);
+
+        let mut ham = M::zeros((ph_dim * ex_dim * pn_dim, ph_dim * ex_dim * pn_dim));
+
+        ham = ham.add(&lm_ham.kron(&pn_eye));
+
+        ham = ham.add(&lm_eye.kron(&pn_ham));
+
+        self.get_interaction_hamiltonian(&mut ham, ph_dim);
+
+        ham
     }
 }

@@ -330,7 +330,10 @@ pub trait MatrixOps: Clone {
     fn shape(&self) -> (usize, usize);
 
     /// Get from diagonal values
-    fn from_diag(diags: Vec<Self::Scalar>) -> Self;
+    fn from_diag<T>(diags: &Vec<T>) -> Self 
+        where
+            T: Clone + NumCast + Zero + Copy,
+            Self::Scalar: NumCast + Zero ;
 
     /// Matrix Multiplication
     fn dot(&self, other:&Self) -> Self;
@@ -381,8 +384,14 @@ macro_rules! impl_matrix_ops_dense {
                 self.dot(other)
             }
 
-            fn from_diag(diags: Vec<Self::Scalar>) -> Self {
-                Array2::from_diag(&Array1::from_vec(diags))
+            fn from_diag<T>(diags: &Vec<T>) -> Self 
+            where
+                T: Clone + NumCast + Zero + Copy,
+                Self::Scalar: NumCast + Zero 
+            {
+                Array2::from_diag(
+                   &diags.into_iter().map(|val| <Self::Scalar as NumCast>::from(*val).unwrap()).collect::<Array1<Self::Scalar>>()
+                )
             }
 
             fn add_trimat(&mut self, trimat: &TriMat<Self::Scalar>) {
@@ -455,13 +464,17 @@ macro_rules! impl_matrix_ops_sparse {
                 mul_csr_csr(self.view(), other.view())
             }
 
-            fn from_diag(diags: Vec<Self::Scalar>) -> Self {
+            fn from_diag<T>(diags: &Vec<T>) -> Self 
+            where
+                T: Clone + NumCast + Zero + Copy,
+                Self::Scalar: NumCast + Zero 
+            {
                 let n = diags.len();
                 let mut tri_mat = TriMat::new((n, n));
                 for i in 0..n {
                     let val = diags[i];
-                    if val.abs() > 1e-10 {
-                        tri_mat.add_triplet(i, i, val);
+                    if !val.is_zero() {
+                        tri_mat.add_triplet(i, i, <Self::Scalar as NumCast>::from(val).unwrap());
                     }
                 }
                 tri_mat.to_csr()
