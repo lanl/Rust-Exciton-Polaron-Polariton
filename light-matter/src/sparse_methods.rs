@@ -4,7 +4,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 
 use sprs::CsMat;
 
-use crate::{hamiltonians::{LMHamiltonian, PPHamiltonian}, utils::SolverOperator};
+use crate::{hamiltonians::{LMHamiltonian, PPHamiltonian}, utils::{CsMatOperator}};
 
 use rust_slepc_bindings::EPSType;
 
@@ -42,33 +42,6 @@ pub fn diagonalize_pp_ham_sparse(
     let h_pp = polaron_polariton.build_pp_hamiltonian();
     
     diagonalize_sparse(h_pp, n_eigenvalues, 128, None, initial_guess) 
-}
-
-struct CsMatOperator {
-    matrix: CsMat<f64>,
-}
-
-impl SolverOperator<f64> for CsMatOperator {
-    fn apply(&self, x: &[f64], y: &mut [f64]) {
-        // Apply matrix-vector product
-        let mut result = vec![0.0; y.len()];
-        sprs::prod::mul_acc_mat_vec_csr(self.matrix.view(), x, &mut result);
-        y.copy_from_slice(&result);
-    }
-
-    fn get_diagonal(&self) -> Vec<f64> {
-        let mut diags = vec![0.0; self.matrix.shape().0];
-
-        self.matrix.diag().iter().for_each(|(i, val)| {
-            diags[i] = *val;
-        });
-
-        diags
-    }
-
-    fn dimension(&self) -> usize {
-        self.matrix.shape().0
-    }
 }
 
 /// Calculator for band structure of light-matter coupled systems

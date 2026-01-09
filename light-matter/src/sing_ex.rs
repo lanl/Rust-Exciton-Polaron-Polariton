@@ -10,10 +10,6 @@ use crate::timed_println;
 use crate::utils::{PPConfig, BosonMode, Polarization, save_band_data, ArrayOperator, DiagOperator, Operator, SolverOperator};
 use crate::matrix_elements::LMMatrixElementArray;
 
-pub fn kron_1d(a: &Array1<f64>, b: &Array1<f64>) -> Array1<f64> {
-    a.iter().flat_map(|&x| b.iter().map(move |&y| x * y)).collect::<Array1<f64>>()
-}
-
 /// Represents the photonic part of the Hamiltonian
 pub struct PhotonicHamiltonian {
     pub photon_modes: Vec<BosonMode>,
@@ -681,6 +677,11 @@ impl SolverOperator<f64> for PolaronPolariton {
         // timed_println!("Applying Off-Diag");
         // Apply off-diagonal part and add to y
         self.pp_off_ham.apply(x, y);
+    }
+
+    fn apply_transpose(&self, x: &[f64], y: &mut [f64]) {
+        // Since Hamiltonians are hermitian
+        self.apply(x, y)
     }
     
     fn get_diagonal(&self) -> Vec<f64> {

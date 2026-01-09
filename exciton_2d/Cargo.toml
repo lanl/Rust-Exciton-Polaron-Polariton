@@ -30,10 +30,6 @@ serde_json = "1.0"
 ordered-float = "5.0.0"
 bincode = "1.3"
 
-[patch.crates-io]
-# arpack-ng-sys = { version = "0.2.1", features = ["system"] }
-
-
 [[bin]]
 name = "exciton_2d"
 path = "src/bin/main.rs"
