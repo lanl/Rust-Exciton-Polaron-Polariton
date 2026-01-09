@@ -1,4 +1,5 @@
-use crate::sing_ex::{PolaronPolariton, SolverOperator};
+use crate::sing_ex::{PolaronPolariton};
+use crate::utils::{SolverOperator};
 use ndarray::{Array1, Array2};
 use std::ffi::{c_int, c_double, c_void};
 use std::sync::atomic::{AtomicUsize, AtomicU64, Ordering};

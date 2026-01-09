@@ -5,16 +5,34 @@ use indicatif::{ProgressBar, ProgressStyle};
 use sprs::CsMat;
 use arpack::{Config, Operator}; 
 
-use crate::hamiltonians::{LMHamiltonian, PPHamiltonian};
+use crate::{hamiltonians::{LMHamiltonian, PPHamiltonian}, utils::SolverOperator};
 
-pub fn diagonalize_lm_ham_sparse(light_matter: &mut LMHamiltonian<CsMat<f64>>, n_eigenvalues: usize) 
+use rust_slepc_bindings::EPSType;
+
+pub fn diagonalize_sparse(
+    matrix: CsMat<f64>, 
+    n_eig: usize,
+    block_size: usize, 
+    solve_type: Option<EPSType>,
+    initial_guess: Option<&Array2<f64>>) 
     -> (Array1<f64> , Array2<f64>){
-    let h_lm = light_matter.build_lm_hamiltonian();
 
-    let (n, _) = h_lm.shape();
+    use crate::slepc::diagonalize_slepc;
+
+    let op = CsMatOperator{matrix: matrix};
     
-    // Create ARPACK operator
-    let op = ArpackOperator::new(h_lm);
+    diagonalize_slepc(&op, n_eig, block_size, solve_type, initial_guess)
+}
+
+fn _diagonalize_sparse_arpack(
+    matrix: CsMat<f64>,
+    n_eig: usize,) 
+    -> (Array1<f64> , Array2<f64>){
+
+    let n = matrix.shape().0;
+
+    // Create SolverOperator
+    let op = ArpackOperator::new(matrix);
     
     // Configure ARPACK
     let config = Config::new()
@@ -23,16 +41,16 @@ pub fn diagonalize_lm_ham_sparse(light_matter: &mut LMHamiltonian<CsMat<f64>>, n
         .max_iter(1000);          // Maximum iterations
     
     // Solve eigenvalue problem
-    let result = arpack::eigs(&op, n,n_eigenvalues, config).unwrap();
+    let result = arpack::eigs(&op, n,n_eig, config).unwrap();
     
     // Convert to ndarray format
     let eigenvalues = Array1::from_vec(result.values);
     
     // Convert eigenvectors to ndarray format
-    let n = result.vectors.len() / n_eigenvalues;
-    let mut eigenvectors = Array2::zeros((n, n_eigenvalues));
+    let n = result.vectors.len() / n_eig;
+    let mut eigenvectors = Array2::zeros((n, n_eig));
     
-    for i in 0..n_eigenvalues {
+    for i in 0..n_eig {
         for j in 0..n {
             eigenvectors[[j, i]] = result.vectors[i * n + j];
         }
@@ -41,38 +59,25 @@ pub fn diagonalize_lm_ham_sparse(light_matter: &mut LMHamiltonian<CsMat<f64>>, n
     (eigenvalues, eigenvectors)
 }
 
-pub fn diagonalize_pp_ham_sparse(polaron_polariton: &mut PPHamiltonian<CsMat<f64>>, n_eigenvalues: usize)
+pub fn diagonalize_lm_ham_sparse(
+    light_matter: &mut LMHamiltonian<CsMat<f64>>, 
+    n_eigenvalues: usize,
+    initial_guess: Option<&Array2<f64>>) 
+    -> (Array1<f64> , Array2<f64>){
+
+    let h_lm = light_matter.build_lm_hamiltonian();
+
+    diagonalize_sparse(h_lm, n_eigenvalues, 128, None, initial_guess) 
+}
+
+pub fn diagonalize_pp_ham_sparse(
+    polaron_polariton: &mut PPHamiltonian<CsMat<f64>>, 
+    n_eigenvalues: usize,
+    initial_guess: Option<&Array2<f64>>) 
     -> (Array1<f64> , Array2<f64>){
     let h_pp = polaron_polariton.build_pp_hamiltonian();
     
-    let (n, _) = h_pp.shape();
-    
-    // Create ARPACK operator
-    let op = ArpackOperator::new(h_pp);
-    
-    // Configure ARPACK
-    let config = Config::new()
-        .which(arpack::Which::SA)  // Smallest algebraic eigenvalues
-        .tol(1e-10)                // Tolerance
-        .max_iter(1000);          // Maximum iterations
-    
-    // Solve eigenvalue problem
-    let result = arpack::eigs(&op, n,n_eigenvalues, config).unwrap();
-    
-    // Convert to ndarray format
-    let eigenvalues = Array1::from_vec(result.values);
-    
-    // Convert eigenvectors to ndarray format
-    let n = result.vectors.len() / n_eigenvalues;
-    let mut eigenvectors = Array2::zeros((n, n_eigenvalues));
-    
-    for i in 0..n_eigenvalues {
-        for j in 0..n {
-            eigenvectors[[j, i]] = result.vectors[i * n + j];
-        }
-    }
-    
-    (eigenvalues, eigenvectors)
+    diagonalize_sparse(h_pp, n_eigenvalues, 128, None, initial_guess) 
 }
 
 
@@ -98,6 +103,33 @@ impl Operator<f64> for ArpackOperator {
     
 }
 
+struct CsMatOperator {
+    matrix: CsMat<f64>,
+}
+
+impl SolverOperator<f64> for CsMatOperator {
+    fn apply(&self, x: &[f64], y: &mut [f64]) {
+        // Apply matrix-vector product
+        let mut result = vec![0.0; y.len()];
+        sprs::prod::mul_acc_mat_vec_csr(self.matrix.view(), x, &mut result);
+        y.copy_from_slice(&result);
+    }
+
+    fn get_diagonal(&self) -> Vec<f64> {
+        let mut diags = vec![0.0; self.matrix.shape().0];
+
+        self.matrix.diag().iter().for_each(|(i, val)| {
+            diags[i] = *val;
+        });
+
+        diags
+    }
+
+    fn dimension(&self) -> usize {
+        self.matrix.shape().0
+    }
+}
+
 /// Calculator for band structure of light-matter coupled systems
 pub struct BandStructureCalculatorLM {
     pub light_matter: LMHamiltonian<CsMat<f64>>,      // Light-matter system
@@ -119,7 +151,7 @@ impl BandStructureCalculatorLM {
         self.light_matter.update_k(k);
 
         // Diagonalize the Hamiltonian at this k-point using ARPACK
-        diagonalize_lm_ham_sparse(&mut self.light_matter, n_eigenvalues)
+        diagonalize_lm_ham_sparse(&mut self.light_matter, n_eigenvalues, None)
     }
 
     /// Generates a filename for the band structure data

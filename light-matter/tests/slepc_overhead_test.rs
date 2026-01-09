@@ -2,8 +2,8 @@
 
 use exciton_2d::{Exciton2DGridSystem, ExcitonConfig};
 use light_matter::Vector3D;
-use light_matter::sing_ex::{PolaronPolariton, ExcitonicHamiltonian, PhotonicHamiltonian, PhononHamiltonian, SolverOperator};
-use light_matter::utils::{BosonMode, Polarization};
+use light_matter::sing_ex::{PolaronPolariton, ExcitonicHamiltonian, PhotonicHamiltonian, PhononHamiltonian};
+use light_matter::utils::{BosonMode, Polarization, SolverOperator};
 use light_matter::slepc_instrumented::{diagonalize_slepc_instrumented, get_instrumentation_data};
 use ndarray::{Array1, arr1};
 use std::sync::Arc;

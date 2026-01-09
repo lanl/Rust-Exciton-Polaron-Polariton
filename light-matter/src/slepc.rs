@@ -1,4 +1,4 @@
-use crate::sing_ex::{PolaronPolariton, SolverOperator};
+use crate::utils::{SolverOperator};
 use ndarray::{Array1, Array2};
 use std::ffi::{c_int, c_double, c_void};
 use rust_slepc_bindings::{
@@ -26,12 +26,16 @@ unsafe extern "C" {
 const MATOP_MULT: c_int = 3; // Matrix-vector product operation
 
 // Callback function for matrix-vector product
-extern "C" fn mv_product(mat: Mat, x: rust_slepc_bindings::Vec, y: rust_slepc_bindings::Vec) -> c_int {
+extern "C" fn mv_product<T: SolverOperator<f64>>(
+    mat: Mat, 
+    x: rust_slepc_bindings::Vec, 
+    y: rust_slepc_bindings::Vec
+) -> c_int {
     unsafe {
         // Extract the operator from the context
         let mut ctx_ptr: *mut c_void = std::ptr::null_mut();
         MatShellGetContext(mat, &mut ctx_ptr);
-        let op = &*(ctx_ptr as *const PolaronPolariton);
+        let op = &*(ctx_ptr as *const T);
         
         // Get arrays from vectors
         let mut x_array: *mut c_double = std::ptr::null_mut();
@@ -56,8 +60,8 @@ extern "C" fn mv_product(mat: Mat, x: rust_slepc_bindings::Vec, y: rust_slepc_bi
 }
 
 /// Diagonalize the PolaronPolariton using SLEPc
-pub fn diagonalize_slepc(
-    pp: &PolaronPolariton, 
+pub fn diagonalize_slepc<T: SolverOperator<f64>>(
+    op: &T, 
     n_eig: usize,
     block_size: usize, 
     solve_type: Option<EPSType>,
@@ -65,46 +69,39 @@ pub fn diagonalize_slepc(
 ) -> (Array1<f64>, Array2<f64>) {
     // Create a shell matrix for the operator
     let mut a = std::ptr::null_mut();
-    let n = pp.dimension() as c_int;
+    let n = op.dimension() as c_int;
     
     timed_println!("Creating shell matrix of dimension {}", n);
     
     unsafe {
         // Create shell matrix
-        let op_ptr = pp as *const _ as *mut c_void;
+        let op_ptr = op as *const T as *const c_void as *mut c_void;
         MatCreateShell(PETSC_COMM_WORLD, n, n, n, n, op_ptr, &mut a);
         
         // Set the matrix-vector product operation
-        MatShellSetOperation(a, MATOP_MULT, mv_product as *mut c_void);
+        MatShellSetOperation(a, MATOP_MULT, mv_product::<T> as *mut c_void);
     }
     
     // Create and configure the eigensolver
     let mut solver = Eigensolver::new().expect("Failed to create eigensolver");
     solver.set_operators(a, None).expect("Failed to set operators");
     
-    // // Use a more modest ncv value
-    // let mut ncv = std::cmp::min(pp.dimension(), 3 * n_eig + 10);
-    // let mpd_val = match mpd {
-    //     Some(m) => std::cmp::min(m, ncv),
-    //     None => ncv
-    // };
-
-    // ncv = ncv.min(n_eig + mpd_val);
-    
     // Set dimensions with proper values
     solver.set_dimensions(n_eig, None, None).expect("Failed to set dimensions");
 
     // For Davidson, set block size
     match solve_type {
-        Some(EPSType::JacobiDavidson) =>      unsafe {
+        Some(EPSType::JacobiDavidson) => unsafe {
             EPSJDSetBlockSize(solver.eps, block_size as c_int);
-
         },
-        Some(EPSType::GeneralizedDavidson) => unsafe {EPSGDSetBlockSize(solver.eps, block_size as c_int);},
+        Some(EPSType::GeneralizedDavidson) => unsafe {
+            EPSGDSetBlockSize(solver.eps, block_size as c_int);
+        },
         Some(EPSType::KrylovSchur) => {
             let mpd = Some(block_size * 4);
             let ncv = Some(mpd.unwrap() + n_eig);
-            solver.set_dimensions(n_eig, ncv, Some(block_size * 4)).expect("Failed to set dimensions");}
+            solver.set_dimensions(n_eig, ncv, Some(block_size * 4)).expect("Failed to set dimensions");
+        }
         _ => {}
     }
     
@@ -116,7 +113,7 @@ pub fn diagonalize_slepc(
     // Set more lenient tolerances and more iterations
     solver.set_tolerances(1e-8, 10000).expect("Failed to set tolerances");
     
-    // Set the solver type - try ARPACK which is often more robust
+    // Set the solver type
     let solver_type = solve_type.unwrap_or(EPSType::ARPACK);
     timed_println!("Using solver type: {:?}", solver_type);
     solver.set_type(solver_type).expect("Failed to set eigensolver");
@@ -178,10 +175,10 @@ pub fn diagonalize_slepc(
     
     // Always create arrays of the requested size
     let mut eigenvalues = Array1::zeros(n_eig);
-    let mut eigenvectors = Array2::zeros((pp.dimension(), n_eig));
+    let mut eigenvectors = Array2::zeros((op.dimension(), n_eig));
     
     // Create vectors for eigenvectors
-    let vr = unsafe { create_vector(pp.dimension()).expect("Failed to create vector") };
+    let vr = unsafe { create_vector(op.dimension()).expect("Failed to create vector") };
     
     // Extract eigenvalues and eigenvectors for the converged ones
     let n_eig_actual = std::cmp::min(n_eig, nconv);
@@ -195,10 +192,10 @@ pub fn diagonalize_slepc(
             solver.get_eigenpair(i, vr).expect("Failed to get eigenvector");
             
             // Copy to eigenvectors array
-            let mut vec_temp = vec![0.0; pp.dimension()];
+            let mut vec_temp = vec![0.0; op.dimension()];
             get_vector_array(vr, &mut vec_temp).expect("Failed to get vector array");
             
-            for j in 0..pp.dimension() {
+            for j in 0..op.dimension() {
                 eigenvectors[[j, i]] = vec_temp[j];
             }
         }

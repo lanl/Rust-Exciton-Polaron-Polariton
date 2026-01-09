@@ -528,3 +528,28 @@ macro_rules! impl_matrix_ops_sparse {
 impl_matrix_ops_dense!(f64);
 impl_matrix_ops_sparse!(f64);
 
+
+pub trait ArrayOperator<T> {
+    fn apply(&self, x: &Array1<T>) -> Vec<T>;
+}
+
+pub trait DiagOperator<T> {
+    fn form_diagonal(&self) -> Array1<T>;
+}
+
+pub trait Operator<T> {
+    /// Apply the operator to a vector
+    fn apply(&self, x: &[T], y: &mut [T]);
+}
+
+/// Trait for operators that can be used with solvers
+pub trait SolverOperator<T: Clone> {
+    /// Apply the operator to a vector
+    fn apply(&self, x: &[T], y: &mut [T]);
+    
+    /// Get the diagonal of the operator (used for preconditioning)
+    fn get_diagonal(&self) -> Vec<T>;
+    
+    /// Get the dimension of the operator
+    fn dimension(&self) -> usize;
+}

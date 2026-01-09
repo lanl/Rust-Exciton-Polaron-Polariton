@@ -7,36 +7,11 @@ use rayon::{prelude::*};
 use indicatif::{ProgressBar, ProgressStyle};
 use crate::timed_println;
 
-use crate::utils::{PPConfig, BosonMode, Polarization, save_band_data};
+use crate::utils::{PPConfig, BosonMode, Polarization, save_band_data, ArrayOperator, DiagOperator, Operator, SolverOperator};
 use crate::matrix_elements::LMMatrixElementArray;
 
 pub fn kron_1d(a: &Array1<f64>, b: &Array1<f64>) -> Array1<f64> {
     a.iter().flat_map(|&x| b.iter().map(move |&y| x * y)).collect::<Array1<f64>>()
-}
-
-pub trait ArrayOperator<T> {
-    fn apply(&self, x: &Array1<T>) -> Vec<T>;
-}
-
-pub trait DiagOperator<T> {
-    fn form_diagonal(&self) -> Array1<T>;
-}
-
-pub trait Operator<T> {
-    /// Apply the operator to a vector
-    fn apply(&self, x: &[T], y: &mut [T]);
-}
-
-/// Trait for operators that can be used with solvers
-pub trait SolverOperator<T: Clone> {
-    /// Apply the operator to a vector
-    fn apply(&self, x: &[T], y: &mut [T]);
-    
-    /// Get the diagonal of the operator (used for preconditioning)
-    fn get_diagonal(&self) -> Vec<T>;
-    
-    /// Get the dimension of the operator
-    fn dimension(&self) -> usize;
 }
 
 /// Represents the photonic part of the Hamiltonian
@@ -1111,7 +1086,7 @@ pub fn diagonalize_pp_sing_ex(
     use crate::slepc::diagonalize_slepc;
     use rust_slepc_bindings::{EPSType};
 
-    diagonalize_slepc(&pp, n_eig, block_size, Some(EPSType::KrylovSchur), initial_vec)           
+    diagonalize_slepc(pp, n_eig, block_size, Some(EPSType::KrylovSchur), initial_vec)           
 }
 
 // Replace the specific band structure calculation functions with a unified one
