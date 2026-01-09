@@ -3,7 +3,6 @@ use std::path::Path;
 use indicatif::{ProgressBar, ProgressStyle};
 
 use sprs::CsMat;
-use arpack::{Config, Operator}; 
 
 use crate::{hamiltonians::{LMHamiltonian, PPHamiltonian}, utils::SolverOperator};
 
@@ -22,41 +21,6 @@ pub fn diagonalize_sparse(
     let op = CsMatOperator{matrix: matrix};
     
     diagonalize_slepc(&op, n_eig, block_size, solve_type, initial_guess)
-}
-
-fn _diagonalize_sparse_arpack(
-    matrix: CsMat<f64>,
-    n_eig: usize,) 
-    -> (Array1<f64> , Array2<f64>){
-
-    let n = matrix.shape().0;
-
-    // Create SolverOperator
-    let op = ArpackOperator::new(matrix);
-    
-    // Configure ARPACK
-    let config = Config::new()
-        .which(arpack::Which::SA)  // Smallest algebraic eigenvalues
-        .tol(1e-10)                // Tolerance
-        .max_iter(1000);          // Maximum iterations
-    
-    // Solve eigenvalue problem
-    let result = arpack::eigs(&op, n,n_eig, config).unwrap();
-    
-    // Convert to ndarray format
-    let eigenvalues = Array1::from_vec(result.values);
-    
-    // Convert eigenvectors to ndarray format
-    let n = result.vectors.len() / n_eig;
-    let mut eigenvectors = Array2::zeros((n, n_eig));
-    
-    for i in 0..n_eig {
-        for j in 0..n {
-            eigenvectors[[j, i]] = result.vectors[i * n + j];
-        }
-    }
-    
-    (eigenvalues, eigenvectors)
 }
 
 pub fn diagonalize_lm_ham_sparse(
@@ -78,29 +42,6 @@ pub fn diagonalize_pp_ham_sparse(
     let h_pp = polaron_polariton.build_pp_hamiltonian();
     
     diagonalize_sparse(h_pp, n_eigenvalues, 128, None, initial_guess) 
-}
-
-
-/// ARPACK operator for sparse matrix eigenvalue problems
-struct ArpackOperator {
-    matrix: CsMat<f64>,
-}
-
-impl ArpackOperator {
-    fn new(matrix: CsMat<f64>) -> Self {
-        Self { matrix }
-    }
-}
-
-impl Operator<f64> for ArpackOperator {
-    fn apply(&self, x: &[f64], y: &mut [f64]) {
-        
-        // Apply matrix-vector product
-        let mut result = vec![0.0; y.len()];
-        sprs::prod::mul_acc_mat_vec_csr(self.matrix.view(), x, &mut result);
-        y.copy_from_slice(&result);
-    }
-    
 }
 
 struct CsMatOperator {
