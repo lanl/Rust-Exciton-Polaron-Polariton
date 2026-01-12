@@ -736,6 +736,21 @@ impl SolverOperator<f64> for PolaronPolariton {
             n_ex * n_ph
         }
     }
+
+    fn diagonalize(&self, n_eig: Option<usize>, solve_type: Option<rust_slepc_bindings::EPSType>, initial_guess: Option<&Array2<f64>>) -> (Array1<f64>, Array2<f64>) {
+        
+        let block_size = 128;
+        
+        use crate::slepc::diagonalize_slepc;
+
+        if let Some(n) = n_eig {                   
+            diagonalize_slepc(self, n, block_size, solve_type, initial_guess)
+        }
+        else {
+            timed_println!("Warning: No eigenvalue count specified, using default of 128");
+            diagonalize_slepc(self, block_size, 128, solve_type, initial_guess)
+        }
+    }
 }
 
 pub struct SingExWrapper {

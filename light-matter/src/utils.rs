@@ -1,4 +1,5 @@
 use ndarray::{Array1, Array2, array};
+use rust_slepc_bindings::EPSType;
 use serde::{Serialize, Deserialize};
 use sprs::smmp::mul_csr_csr;
 use std::path::Path;
@@ -7,6 +8,10 @@ use exciton_2d::ExcitonConfig;
 use num_complex::Complex;
 use ndarray::linalg::kron;
 use num_traits::{NumCast, One, Zero};
+use ndarray_linalg::{Eigh};
+use crate::timed_println;
+use crate::slepc::diagonalize_slepc;
+
 
 // Speed of light in atomic units
 const C: f64 = 137.036;
@@ -348,6 +353,7 @@ pub trait MatrixOps: Clone {
 
     fn from_dense<T>(dense: &Array2<T>) -> Self
         where T: Clone + NumCast + Zero,;
+
 }
 
 // Implement for dense matrices
@@ -516,7 +522,6 @@ macro_rules! impl_matrix_ops_sparse {
                 
                 trimat.to_csr()
             }
-
         }
     };
 }
@@ -551,6 +556,9 @@ pub trait SolverOperator<T: Clone>: Send + Sync  {
     
     /// Get the dimension of the operator
     fn dimension(&self) -> usize;
+
+    /// Diagonalize operator
+    fn diagonalize(&self, n_eig: Option<usize>, solve_type: Option<EPSType>, initial_guess: Option<&Array2<f64>>) -> (Array1<f64>, Array2<f64>);
 }
 
 #[derive(Clone)]
@@ -587,6 +595,16 @@ impl SolverOperator<f64> for CsMatOperator {
 
     fn dimension(&self) -> usize {
         self.matrix.shape().0
+    }
+
+    fn diagonalize(&self, n_eig: Option<usize>, solve_type: Option<EPSType>, initial_guess: Option<&Array2<f64>>) -> (Array1<f64>, Array2<f64>) {
+        if let Some(n) = n_eig {                   
+            diagonalize_slepc(self, n, 128, solve_type, initial_guess)
+        }
+        else {
+            timed_println!("Warning: No eigenvalue count specified, using default of 128");
+            diagonalize_slepc(self, 128, 128, solve_type, initial_guess)
+        }
     }
 }
 
@@ -626,6 +644,12 @@ impl SolverOperator<f64> for DenseOperator {
 
     fn dimension(&self) -> usize {
         self.matrix.shape()[0]
+    }
+
+    fn diagonalize(&self, _: Option<usize>, _: Option<EPSType>, _: Option<&Array2<f64>>) 
+        -> (Array1<f64>, Array2<f64>) {
+        
+        self.matrix.eigh(ndarray_linalg::UPLO::Upper).unwrap()
     }
 }
 
@@ -1005,6 +1029,16 @@ impl SolverOperator<f64> for ComposedOperator<f64> {
     
     fn dimension(&self) -> usize {
         ComposedOperator::dimension(self)
+    }
+
+    fn diagonalize(&self, n_eig: Option<usize>, solve_type: Option<EPSType>, initial_guess: Option<&Array2<f64>>) -> (Array1<f64>, Array2<f64>) {
+        if let Some(n) = n_eig {                   
+            diagonalize_slepc(self, n, 128, solve_type, initial_guess)
+        }
+        else {
+            timed_println!("Warning: No eigenvalue count specified, using default of 128");
+            diagonalize_slepc(self, 128, 128, solve_type, initial_guess)
+        }
     }
 }
 
