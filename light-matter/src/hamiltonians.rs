@@ -231,7 +231,7 @@ impl<M: MatrixOps> ExcitonicHamiltonian<M> {
 pub struct LMHamiltonian <M: MatrixOps> {
     pub exciton: ExcitonicHamiltonian<M>,
     pub photon: BosonicHamiltonian<M>,
-    matrix_elements: LMMatrixElementArray,
+    pub matrix_elements: LMMatrixElementArray,
     pub coupling: f64,
     p_c_sin: Option<Vec<M>>,
     p_q: Option<Vec<M>>,

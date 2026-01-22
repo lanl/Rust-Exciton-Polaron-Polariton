@@ -4,7 +4,7 @@ use std::{collections::HashMap, f64::consts::PI};
 use rayon::prelude::*;
 use log::warn;
 use ndarray::{Array1, Array2};
-use crate::utils::BosonMode;
+use crate::utils::{BosonMode};
 
 use crate::timed_println;
 
@@ -115,7 +115,16 @@ impl LMMatrixElementArray {
                     matrix_2[[idx1, idx2]] = element_2;
                 }
             }
+
+            // timed_println!("q_idx = {}", q_idx);
+            // timed_println!("q_inds = {:?}", q_inds);
             
+            // if q_idx >  modes.len() && q_inds.len() == 1{
+            //     let disp_mat = PrettyArray2(&matrix_2, 4);
+            //     timed_println!("Sine Matrix for phonon = ");
+            //     println!("{}", disp_mat);
+            // }
+
             // Return tuple of q_inds and computed matrices
             (q_inds.clone(), matrix_1, matrix_2)
         }).collect();

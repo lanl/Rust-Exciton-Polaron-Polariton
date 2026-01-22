@@ -11,7 +11,7 @@ use ndarray::{Array1, Array2};
 use ndarray_linalg::Eigh;
 use num_complex::Complex64;
 use std::collections::HashMap;
-use std::path::Path;
+// use std::path::Path;
 use std::time::Instant;
 use ordered_float::OrderedFloat;
 
@@ -72,15 +72,15 @@ impl RelativeHamiltonian {
             k_eigvals
         );
         
-        if Path::new(&rel_filename).exists() && !self.recalculate {
-            if self.verbose {info!("Loading relative coordinate eigenstates from {}", rel_filename)};
-            // In a real implementation, we'd deserialize from JSON
-            // For now, we'll create ⋆⋆⋆⋆⋆ data
-            let eigvals = Array1::zeros(k_eigvals);
-            let eigvecs = Array2::zeros((self.grid.grid_size * self.grid.grid_size, k_eigvals));
-            let parities = Array1::from_vec(vec![1; k_eigvals]);
-            return (eigvals, eigvecs, parities);
-        }
+        // if Path::new(&rel_filename).exists() && !self.recalculate {
+        //     if self.verbose {info!("Loading relative coordinate eigenstates from {}", rel_filename)};
+        //     // In a real implementation, we'd deserialize from JSON
+        //     // For now, we'll create ⋆⋆⋆⋆⋆ data
+        //     let eigvals = Array1::zeros(k_eigvals);
+        //     let eigvecs = Array2::zeros((self.grid.grid_size * self.grid.grid_size, k_eigvals));
+        //     let parities = Array1::from_vec(vec![1; k_eigvals]);
+        //     return (eigvals, eigvecs, parities);
+        // }
         
         let start_time = Instant::now();
         if self.verbose {

@@ -27,7 +27,7 @@ fn extract_params_from_filename(path: &Path) -> Option<DielectricParams> {
     let filename = path.file_name()?.to_str()?;
     
     // Skip if not a dielectric function file
-    if !filename.starts_with("dielectric_") {
+    if !filename.starts_with("dielectric_sin_") {
         return None;
     }
     
@@ -82,6 +82,21 @@ pub fn plot_dielectric_function(
 ) -> Result<(), Box<dyn std::error::Error>> {
 
     let verbose = false;
+    let dark_mode = false;
+
+    let mut background = &WHITE;
+    let mut text_color = &BLACK;
+
+    let mut _ref_colors = vec![(255.,0.,0.), (0.,0.,255.)];
+
+    if dark_mode {
+        background = &BLACK;
+        text_color = &WHITE;
+        _ref_colors = vec![(237.,110.,87.), (148.,33.,148.), (72.,159.,248.)];
+    }
+
+
+    let colors = [RGBColor(0,0,0), RGBColor(255,0,0), RGBColor(0,0,255)];
 
     timed_println!("Plotting dielectric function from directory: {}", dir_path);
     // Get all dielectric function files in the directory
@@ -137,29 +152,31 @@ pub fn plot_dielectric_function(
                         timed_println!("Skipping file with coupling {:.4} (not in requested list): {}", 
                                      params.lm_coupling, path.display());
                     }
-                } else if let Some(coupling) = extract_coupling_from_filename(&path) {
-                    // Fall back to old format
-                    let coupling_match = coupling_values.iter().any(|&c| (c - coupling).abs() < 1e-10);
-                    if coupling_match {
-                        // Create a default params object with just the coupling
-                        let default_params = DielectricParams {
-                            a0: 0.0,
-                            v0: 0.0,
-                            n_rel: 0,
-                            lm_coupling: coupling,
-                            n_modes: 0,
-                            pn_coupling: 0.0,
-                            pn_n_fock: 0,
-                            n_eig: 0,
-                            gamma: 0.0,
-                        };
-                        timed_println!("Found matching file (old format) for coupling {:.4}: {}", coupling, path.display());
-                        return Some((path, default_params));
-                    } else if verbose {
-                        timed_println!("Skipping file with coupling {:.4} (old format, not in requested list): {}", 
-                                     coupling, path.display());
-                    }
-                } else if verbose {
+                } 
+                // else if let Some(coupling) = extract_coupling_from_filename(&path) {
+                //     // Fall back to old format
+                //     let coupling_match = coupling_values.iter().any(|&c| (c - coupling).abs() < 1e-10);
+                //     if coupling_match {
+                //         // Create a default params object with just the coupling
+                //         let default_params = DielectricParams {
+                //             a0: 0.0,
+                //             v0: 0.0,
+                //             n_rel: 0,
+                //             lm_coupling: coupling,
+                //             n_modes: 0,
+                //             pn_coupling: 0.0,
+                //             pn_n_fock: 0,
+                //             n_eig: 0,
+                //             gamma: 0.0,
+                //         };
+                //         timed_println!("Found matching file (old format) for coupling {:.4}: {}", coupling, path.display());
+                //         return Some((path, default_params));
+                //     } else if verbose {
+                //         timed_println!("Skipping file with coupling {:.4} (old format, not in requested list): {}", 
+                //                      coupling, path.display());
+                //     }
+                // } 
+                else if verbose {
                     timed_println!("Skipping file (couldn't extract coupling): {}", path.display());
                 }
             }
@@ -236,7 +253,7 @@ pub fn plot_dielectric_function(
     let resolution = if zoomed {(1600, 1000)} else {(1600*2, 1000*2)};
     let save_path = save_path.unwrap_or("dielectric_function.svg");
     let root = SVGBackend::new(save_path, resolution).into_drawing_area(); // Increased plot size
-    root.fill(&WHITE)?;
+    root.fill(background)?;
     
     // Split the drawing area for multiple plots if needed
     let areas = if plot_type == DielectricPlotType::Both {
@@ -322,7 +339,7 @@ pub fn plot_dielectric_function(
         
         let area_index = if plot_type == DielectricPlotType::Both { 0 } else { 0 };
         let mut chart = ChartBuilder::on(&areas[area_index])
-            .caption(format!("{} - Real Part (symlog scale, threshold={})", title, threshold), ("sans-serif", 30).into_font().color(&BLACK))
+            .caption(format!("{} - Real Part (symlog scale, threshold={})", title, threshold), ("sans-serif", 30).into_font().color(text_color))
             .margin(10)
             .margin_top(20)
             .margin_bottom(10)
@@ -333,8 +350,8 @@ pub fn plot_dielectric_function(
         chart.configure_mesh()
             .x_desc("Frequency (a.u.)")
             .y_desc("Re[ε(ω)]")
-            .axis_desc_style(("sans-serif", 20))
-            .label_style(("sans-serif", 18))
+            .axis_desc_style(("sans-serif", 20).into_font().color(text_color))
+            .label_style(("sans-serif", 18).into_font().color(text_color))
             .y_label_formatter(&|y| {
                 // Inverse symlog to show original values on axis
                 let original = inv_symlog(*y);
@@ -355,12 +372,9 @@ pub fn plot_dielectric_function(
             let (omegas, re_eps, _, params) = &all_data[key];
             
             // Create a color gradient from blue to red
-            let color = RGBColor(
-                ((1.0 - i as f64 / (couplings.len() - 1) as f64) * 255.0) as u8, // More red for higher coupling
-                0,
-                ((i as f64 / (couplings.len() - 1) as f64) * 255.0) as u8  // More blue for lower coupling
-            );
-            
+            // let color = interpolate_colormap(&ref_colors, i as f64/ (couplings.len() - 1) as f64);
+            let color = colors[i];
+
             // Filter data points within the omega range and apply symlog transformation
             let points: Vec<(f64, f64)> = omegas.iter()
                 .zip(re_eps.iter())
@@ -414,7 +428,7 @@ pub fn plot_dielectric_function(
 
         let area_index = if plot_type == DielectricPlotType::Both { 1 } else { 0 };
         let mut chart = ChartBuilder::on(&areas[area_index])
-            .caption(format!("{} - Imaginary Part", title), ("sans-serif", 30).into_font().color(&BLACK))
+            .caption(format!("{} - Imaginary Part", title), ("sans-serif", 30).into_font().color(text_color))
             .margin(10)
             .margin_top(20)
             .margin_bottom(10)
@@ -426,8 +440,9 @@ pub fn plot_dielectric_function(
         chart.configure_mesh()
             .x_desc("Frequency (a.u.)")
             .y_desc("Im[ε(ω)]")
-            .axis_desc_style(("sans-serif", 20))
-            .label_style(("sans-serif", 18))
+            .axis_desc_style(("sans-serif", 20).into_font().color(text_color))
+            .axis_style(text_color)
+            .label_style(("sans-serif", 18).into_font().color(text_color))
             .disable_mesh() // Remove fine grid lines
             .draw()?;
         
@@ -435,13 +450,9 @@ pub fn plot_dielectric_function(
         for (i, (key, coupling)) in couplings.iter().enumerate().rev() {
             let (omegas, _, im_eps, params) = &all_data[key];
             
-            // Create a color gradient from blue to red
-            let color = RGBColor(
-                ((1.0 - i as f64 / (couplings.len() - 1) as f64) * 255.0) as u8, // More red for higher coupling
-                0,
-                ((i as f64 / (couplings.len() - 1) as f64) * 255.0) as u8  // More blue for lower coupling
-            );
-            
+            // let color = _interpolate_colormap(&ref_colors, i as f64/ (couplings.len() - 1) as f64);
+            let color = colors[i];
+
             // Filter data points within the omega range
             let points: Vec<(f64, f64)> = omegas.iter()
                 .zip(im_eps.iter())
@@ -488,7 +499,7 @@ pub fn plot_dielectric_function(
 }
 
 /// Helper function to extract coupling strength from filename
-fn extract_coupling_from_filename(path: &Path) -> Option<f64> {
+fn _extract_coupling_from_filename(path: &Path) -> Option<f64> {
     let filename = path.file_name()?.to_str()?;
     let parts: Vec<&str> = filename.split('_').collect();
     
@@ -559,12 +570,22 @@ pub fn plot_band_structure(
     v0: f64,                            // Potential strength
     coupling: f64,                      // Light-matter coupling
 ) {
+    let dark_mode = false;
+
+    let mut background = &WHITE;
+    let mut text_color = &BLACK;
+
+    if dark_mode {
+        background = &BLACK;
+        text_color = &WHITE;
+    }
+
     if let Some(path) = save_path {
         info!("Saving band structure plot to {}", path);
         
         // Create a larger drawing area with better resolution
         let root = BitMapBackend::new(path, (1200, 900)).into_drawing_area();
-        root.fill(&WHITE).unwrap();
+        root.fill(background).unwrap();
         
         // Create x-axis for the plot (path length)
         let mut x = vec![0.0; k_points.len()];
@@ -618,7 +639,7 @@ pub fn plot_band_structure(
 
         // Set up chart with better styling
         let mut chart = ChartBuilder::on(&root)
-            .caption(title, ("sans-serif", 30).into_font().color(&BLACK))
+            .caption(title, ("sans-serif", 30).into_font().color(text_color))
             .margin(10)
             .margin_top(20)
             .margin_bottom(10)
@@ -646,15 +667,15 @@ pub fn plot_band_structure(
                 "".to_string()
             })
             .y_desc("Energy (a.u.)")
-            .axis_desc_style(("sans-serif", 20))
-            .label_style(("sans-serif", 18))
+            .axis_desc_style(("sans-serif", 20).into_font().color(text_color))
+            .label_style(("sans-serif", 18).into_font().color(text_color))
             .disable_mesh()
             .draw()
             .unwrap();
         
         // Draw vertical lines at high-symmetry points
         let line_style = ShapeStyle {
-            color: BLACK.mix(0.6),
+            color: text_color.mix(0.6),
             filled: false,
             stroke_width: 3,
         };
@@ -691,4 +712,41 @@ pub fn plot_band_structure(
         root.present().unwrap();
         info!("Band structure plot saved to {}", path);
     }
+}
+
+fn _interpolate_colormap(colors: &[(f64, f64, f64)], t: f64) -> RGBColor {
+    // Handle edge cases
+    if colors.is_empty() {
+        return RGBColor(0,0,0);
+    }
+    if colors.len() == 1 {
+        return RGBColor(colors[0].0 as u8, colors[0].1 as u8, colors[0].2 as u8);
+    }
+    
+    // Clamp t to [0.0, 1.0]
+    let t = t.clamp(0.0, 1.0);
+    
+    // Calculate which segment we're in
+    let n_segments = colors.len() - 1;
+    let segment_length = 1.0 / n_segments as f64;
+    let segment_index = (t / segment_length).floor() as usize;
+    
+    // Handle the case where t = 1.0 exactly
+    if segment_index >= n_segments {
+        return RGBColor(colors[colors.len() - 1].0 as u8, colors[colors.len() - 1].1 as u8, colors[colors.len() - 1].2 as u8);
+    }
+    
+    // Calculate local interpolation parameter within the segment
+    let local_t = (t - segment_index as f64 * segment_length) / segment_length;
+    
+    // Get the two colors to interpolate between
+    let color1 = colors[segment_index];
+    let color2 = colors[segment_index + 1];
+    
+    // Linear interpolation
+    let r = color1.0 + (color2.0 - color1.0) * local_t;
+    let g = color1.1 + (color2.1 - color1.1) * local_t;
+    let b = color1.2 + (color2.2 - color1.2) * local_t;
+    
+    RGBColor(r as u8, g as u8, b as u8)
 }

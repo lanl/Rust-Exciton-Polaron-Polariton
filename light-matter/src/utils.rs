@@ -1,3 +1,4 @@
+use log::warn;
 use ndarray::{Array1, Array2, array};
 use rust_slepc_bindings::EPSType;
 use serde::{Serialize, Deserialize};
@@ -219,7 +220,7 @@ impl PPConfig {
 
 use std::fmt;
 #[derive(Debug)]
-pub struct PrettyArray2<'a>(&'a Array2<f64>, usize); // Second parameter is precision
+pub struct PrettyArray2<'a>(pub &'a Array2<f64>, pub usize); // Second parameter is precision
 
 impl<'a> fmt::Display for PrettyArray2<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -1036,7 +1037,7 @@ impl SolverOperator<f64> for ComposedOperator<f64> {
             diagonalize_slepc(self, n, 128, solve_type, initial_guess)
         }
         else {
-            timed_println!("Warning: No eigenvalue count specified, using default of 128");
+            warn!("Warning: No eigenvalue count specified, using default of 128");
             diagonalize_slepc(self, 128, 128, solve_type, initial_guess)
         }
     }

@@ -22,10 +22,13 @@ pub mod visualization;
 pub use visualization::{plot_band_structure, plot_dielectric_function, DielectricPlotType};
 
 pub mod color_band_plot;
+pub mod dielectric_function;
+pub mod band_structure;
 
 use crate::utils::PPConfig;
 
 pub mod sing_ex;
+pub mod sing_ex_new;
 
 pub mod dense_methods;
 
@@ -63,7 +66,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     let total_coupling = 0.015 ;  // Coupling strength
     timed_println!("total_coupling = {}", total_coupling);
     let omega_0 = 0.15;    // Photon frequency
-    let n_modes = 5;
+    let n_modes = 23;
     let coupling = total_coupling / (n_modes as f64);
 
     // Define photon modes
@@ -172,10 +175,13 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
 
         Method::SingEx => {
             timed_println!("Using Mat-Vec methods for light-matter coupling in single photon limit.");
-            let n_eig = 16;
-            timed_println!("Calculating {} eigenstates", n_eig);
-            
+            let n_eig = 256;
+
+            let calculate = false;
+                
             let zoomed = true;
+
+            let (k_points_color, eigvals_list_color, photonic_character_list);
 
             let start_time = Instant::now();
 
@@ -183,21 +189,30 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
             pp_wrapper.generate_pp();
             let mut pp = pp_wrapper.polaron_polariton.unwrap();
 
-            let time1 = Instant::now();
-            let gen_time = time1.duration_since(start_time);
-            timed_println!("Precomputed matrix elements in {:?}", gen_time);
-                        
-            // Calculate and plot color-coded band structure
-            timed_println!("Calculating color-coded band structure...");
-            let (k_points_color, eigvals_list_color, photonic_character_list) = 
-                color_band_plot::calculate_color_band_structure_mpi_simple(
-                    &mut pp, n_k_points, n_eig, &sym_points, &pp_config, true, zoomed);
+            if calculate {
+                timed_println!("Calculating {} eigenstates", n_eig);
 
-            timed_println!("Calculated Band Structure in {:?}", Instant::now().duration_since(time1));
+                let time1 = Instant::now();
+                let gen_time = time1.duration_since(start_time);
+                timed_println!("Precomputed matrix elements in {:?}", gen_time);
+                            
+                // Calculate and plot color-coded band structure
+                timed_println!("Calculating color-coded band structure...");
+                (k_points_color, eigvals_list_color, photonic_character_list) = 
+                    color_band_plot::calculate_color_band_structure_mpi_simple(
+                        &mut pp, n_k_points, n_eig, &sym_points, &pp_config, true, zoomed);
+
+                timed_println!("Calculated Band Structure in {:?}", Instant::now().duration_since(time1));
+            }
+            else {
+                (k_points_color, eigvals_list_color, photonic_character_list) = 
+                    color_band_plot::load_color_band_structure(
+                    &mut pp, n_k_points, n_eig, &pp_config, zoomed);
+            }
                 
             // Plot using gnuplot (only on rank 0 which has the data)
             let mut save_path = format!("sing_ex_color_disp_plot_{}_n{}",total_coupling, n_modes);
-            save_path += if zoomed {"_zoomed.png"} else {".png"};
+            save_path += if zoomed {"_zoomed.pdf"} else {".pdf"};
 
             if !k_points_color.is_empty() {
                 if let Err(e) = color_band_plot::plot_color_band_structure(
@@ -215,9 +230,9 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
 fn run_dielectric_scan(e_config: ExcitonConfig) {
     // Check if we should calculate or just plot
     let calculate = true; // Set to false to skip calculation and just plot
-    let use_cached = true; // Set to true to use cached diagonalization results (allows testing different gamma values)
+    let use_cached = false; // Set to true to use cached diagonalization results (allows testing different gamma values)
 
-    let zoomed = true;
+    let zoomed = false;
 
     // Parameters for diagonalization
     let n_rel = 9;      // Number of relative coordinate states
@@ -225,8 +240,8 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
     
     // Light-matter coupling parameters
     // let coupling_values = Array1::linspace(0.00, 0.05, 1); // Scan from weak to strong coupling
-    let total_coupling_values = Array1::from_vec(vec![0.0, 0.00725, 0.015]);
-    // let total_coupling_values = Array1::from_vec(vec![0.0, 0.0001, 0.0002]);
+    // let total_coupling_values = Array1::from_vec(vec![0.0, 0.00725, 0.015]);
+    let total_coupling_values = Array1::from_vec(vec![0.0, 0.01, 0.0175]);
 
     let omega_0 = 0.15;    // Photon frequency
     let n_modes = 16;
@@ -243,20 +258,20 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
         })}).collect();
     
     // Define phonon parameters
-    let pn_coupling = 0.000005; // 1 cm^-1
+    let pn_coupling = 0.0025; // 1 cm^-1
     let pn_omega = 0.0025; // 500 cm^-1
     // let pn_coupling = 0.0; // 10 cm^-1
     let pn_k = arr1(&[0.,0.05]); // 1 nm^1
-    let pn_n_fock = 16;
+    let pn_n_fock = 4;
 
     // Parameters for dielectric function calculation
-    let n_eig = 4096;  // Number of eigenstates to use
+    let n_eig = 1024;  // Number of eigenstates to use
     let omegas = Array1::linspace(0.1, 0.25, 100000);  // Frequency range
     let gamma = 5e-5;  // Broadening parameter
 
     let omega_range;
     if !zoomed {
-        omega_range = Some((0.14,0.22));
+        omega_range = Some((0.14,0.25));
     }
     else{
         omega_range = Some((0.168,0.18));
@@ -510,7 +525,7 @@ fn main() {
     // davidson::davidson_test();
 
     // Choose which function to run
-    let run_mode = "bandstructure"; // Options: "bandstructure", "dielectric_scan"
+    let run_mode = "dielectric_scan"; // Options: "bandstructure", "dielectric_scan"
 
     initialize().expect("Failed to initialize SLEPc");
     

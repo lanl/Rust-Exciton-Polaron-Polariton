@@ -88,7 +88,7 @@ fn plot_n_colored_bands(system: &Exciton2DGridSystem, args: &Args) {
     );
     
     // Plot the band structure
-    let band_path = format!("{}/n_colored_band_structure_a0{}_v0{}.png", 
+    let band_path = format!("{}/n_colored_band_structure_a0{}_v0{}.pdf", 
                            args.output_dir, system.a0, system.v0);
     
     system.plot_n_colored_band_structure(

@@ -248,6 +248,8 @@ pub fn plot_n_colored_band_structure(
     save_path: &str,
     v0: f64
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let dark = true;
+
     // Create x-axis for the plot (path length)
     let mut x = vec![0.0; k_points.len()];
     for i in 1..k_points.len() {
@@ -324,7 +326,12 @@ pub fn plot_n_colored_band_structure(
     let mut script = File::create(&script_path)?;
     
     // Write gnuplot script
-    writeln!(script, "set terminal pngcairo enhanced font 'Arial,40' size 2400,1800")?;
+    if dark {
+        writeln!(script, "set terminal pdfcairo enhanced font 'Arial,40' size 16,12 background rgb '#000000'")?;
+    }
+    else {
+        writeln!(script, "set terminal pdfcairo enhanced font 'Arial,40' size 16,12")?;
+    }
     writeln!(script, "set output '{}'", save_path)?;
     
     // Set margins to make room for the colorbar
@@ -333,9 +340,17 @@ pub fn plot_n_colored_band_structure(
     writeln!(script, "set tmargin 3")?;
     writeln!(script, "set bmargin 3")?;
     
-    writeln!(script, "set title 'Exciton Band Structure (a₀={:.1}, V₀={:.1})' font 'Arial,16'", a0, v0)?;
-    writeln!(script, "set xlabel 'Wave vector'")?;
-    writeln!(script, "set ylabel 'Energy (a.u.)'")?;
+    if dark {
+        writeln!(script, "set title 'Exciton Band Structure (a₀={:.1}, V₀={:.1})' font 'Arial,16'", a0, v0)?;
+        writeln!(script, "set xlabel 'Wave vector'")?;
+        writeln!(script, "set ylabel 'Energy (a.u.)'")?;
+    }
+    else {
+        writeln!(script, "set title 'Exciton Band Structure (a₀={:.1}, V₀={:.1})' font 'Arial,16' textcolor rgb '#e0e0e0'", a0, v0)?;
+        writeln!(script, "set xlabel 'Wave vector' textcolor rgb '#e0e0e0'")?;
+        writeln!(script, "set ylabel 'Energy (a.u.)' textcolor rgb '#e0e0e0'")?;
+    }
+
     writeln!(script, "set xrange [{}:{}]", x[0], x[x.len() - 1])?;
     writeln!(script, "set yrange [{}:{}]", min_energy, max_energy)?;
     
@@ -343,8 +358,17 @@ pub fn plot_n_colored_band_structure(
     writeln!(script, "set palette rgbformulae 22,13,-22")?;
     writeln!(script, "set colorbox vertical user origin 0.88,0.1 size 0.03,0.8")?;
     writeln!(script, "set cbrange [{}:{}]", min_n, max_n)?;
-    writeln!(script, "set cblabel 'Principal Quantum Number (n)' offset 2,0")?;
-    writeln!(script, "set cbtics 1")?;
+    if dark {
+        writeln!(script, "set cblabel 'Principal Quantum Number (n)' offset 2,0 textcolor rgb '#e0e0e0'")?;
+        writeln!(script, "set cbtics 1")?;
+        writeln!(script, "set xtics textcolor rgb '#e0e0e0'")?;
+        writeln!(script, "set ytics textcolor rgb '#e0e0e0'")?;
+        writeln!(script, "set border linecolor rgb '#808080'")?;
+    }
+    else {
+        writeln!(script, "set cblabel 'Principal Quantum Number (n)' offset 2,0")?;
+        writeln!(script, "set cbtics 1")?;
+    }
     
     // Set up x-axis with symmetry point labels
     writeln!(script, "set xtics ('Γ' {}, 'X' {}, 'M' {}, 'Γ' {})", 

@@ -7,7 +7,7 @@ use rayon::{prelude::*};
 use indicatif::{ProgressBar, ProgressStyle};
 use crate::timed_println;
 
-use crate::utils::{PPConfig, BosonMode, Polarization, save_band_data, ArrayOperator, DiagOperator, Operator, SolverOperator};
+use crate::utils::{ArrayOperator, BosonMode, DiagOperator, Operator, PPConfig, Polarization, PrettyArray2, SolverOperator, save_band_data};
 use crate::matrix_elements::LMMatrixElementArray;
 
 /// Represents the photonic part of the Hamiltonian
@@ -528,7 +528,14 @@ impl Operator<f64> for PPOffHamiltonian {
 
         if self.phonon.is_some() && self.pn_coupling.abs() > 1e-12 {
             let phonon_mode_ind: i32 = self.photon.photon_modes.len() as i32;
-            let cos_mat_phonon = matrix_element_arrays_ref.cos_mat.get(&vec![phonon_mode_ind]).unwrap();
+            let _cos_mat_phonon = matrix_element_arrays_ref.cos_mat.get(&vec![phonon_mode_ind]).unwrap();
+
+            //// TEST: Using Sin(x_r) instead of Cos(x_r)
+            let sin_mat_phonon = matrix_element_arrays_ref.sin_mat.get(&vec![phonon_mode_ind]).unwrap();
+                            
+            // let disp_mat = PrettyArray2(&sin_mat_phonon, 4);
+            // timed_println!("Sine Matrix for phonon = ");
+            // println!("{}", disp_mat);
 
             y_pn_list = (0..n_pn-1).into_par_iter().flat_map(|pn_ind| {
                 let sqrt_pn_plus_1 = ((pn_ind + 1) as f64).sqrt();
@@ -546,7 +553,7 @@ impl Operator<f64> for PPOffHamiltonian {
                         let x_ph_pn = x_vec.slice(s![pn_dex_start..;stride]);
                         
                         // Calculate b_dag_term using BLAS-powered dot product
-                        let b_dag_term = &cos_mat_phonon.dot(&x_ph_pn) * pn_coupling_factor;
+                        let b_dag_term = &sin_mat_phonon.dot(&x_ph_pn) * pn_coupling_factor;
                         
                         // Add to y at phonon pn_ind+1 and photon in ph_ind
                         let indices: Vec<usize> = (0..n_ex).map(|ex_ind| (pn_ind + 1) + ph_ind * n_pn + ex_ind * stride).collect();
@@ -560,7 +567,7 @@ impl Operator<f64> for PPOffHamiltonian {
                         let x_ph_pn_plus_1 = x_vec.slice(s![pn_exc_start..;stride]);
                         
                         // Calculate b_term using BLAS-powered dot product
-                        let b_term = &cos_mat_phonon.dot(&x_ph_pn_plus_1) * pn_coupling_factor;
+                        let b_term = &sin_mat_phonon.dot(&x_ph_pn_plus_1) * pn_coupling_factor;
                         
                         // Add to y at phonon pn_ind and photon in ph_ind
                         let indices: Vec<usize> = (0..n_ex).map(|ex_ind| pn_ind + ph_ind * n_pn + ex_ind * stride).collect();
@@ -835,7 +842,7 @@ pub fn get_dielectric_function_filename(
     gamma: f64
 ) -> String {
     format!(
-        "{}/dielectric_a0{}_V0{}_nrel{}_lmcoup{}_nmodes{}_pncoup{}_npn{}_neig{}_gamma{:.1e}.dat",
+        "{}/dielectric_sin_a0{}_V0{}_nrel{}_lmcoup{}_nmodes{}_pncoup{}_npn{}_neig{}_gamma{:.1e}.dat",
         save_dir,
         pp_config.e_config.a0,
         pp_config.e_config.v0,
@@ -1002,12 +1009,49 @@ fn compute_dielectric_cache(
     }
     let n_rel_par = [n_rel_even, n_rel_odd];
 
-    // Pre-calculate parity indices for all eigenvectors
+    // Pre-calculate parity indices for all eigenvectors -> Odd = 1, Even = 0
     let parity_indices: Vec<usize> = parities.iter().map(|&p| (p == -1) as usize).collect();
 
     let x_rel = &Array2::from_shape_fn((n_rel,n_rel), |(r_ind1, r_ind2)| {
         pp.pp_off_ham.matrix_element_arrays.as_ref().unwrap().get_x(&states[r_ind1], &states[r_ind2], mu, &lag_coeffs)
     });
+
+    timed_println!("<x> for Relative Coordinate:");
+    println!("{}", PrettyArray2(&x_rel, 4));
+
+    // Get n, m for even and odd states
+    let mut odd_par_states = Vec::new();
+    let mut even_par_states = Vec::new();
+
+    states.iter().for_each(|(n,m)| { 
+        if m.abs() % 2 == 1 {
+            odd_par_states.push((*n, *m));
+        }
+        else if m.abs() % 2 == 0 {
+            even_par_states.push((*n, *m));
+        }
+     });
+
+     println!("odd_par_states = {:?}", odd_par_states);
+     println!("even_par_states = {:?}", even_par_states);
+
+
+
+    let rel_idx_converter = |(rel_par_idx, par): (usize,usize)| {
+
+        if par == 1 {
+            let state = odd_par_states[rel_par_idx];
+
+            let r_idx = states.iter().position(|&s| s == state).unwrap();
+            return r_idx
+        }
+        else {
+            let state = even_par_states[rel_par_idx];
+
+            let r_idx = states.iter().position(|&s| s == state).unwrap();
+            return r_idx
+        }
+    };
 
     // Get <x> in the Exciton basis
     let x_exc = &Array2::from_shape_fn((n_ex_eig,n_ex_eig) , |(idx1, idx2)| {
@@ -1017,26 +1061,57 @@ fn compute_dielectric_cache(
             let idx1_par = parity_indices[idx1];
             let idx2_par = parity_indices[idx2];
 
+            // if idx1_par == idx2_par {
+            //     return 0.0
+            // }
+
             // Calculate the matrix elements using iterators
-            (0..n_rel_par[idx1_par])
-                .flat_map(|rel_ind1| {
-                    let r_ind1 = rel_ind1 + idx1_par * n_rel_even;
-                    
-                    (0..n_rel_par[idx2_par]).flat_map(move |rel_ind2| {
-                        let r_ind2 = rel_ind2 + idx2_par * n_rel_even;
+            (0..n_rel_par[idx1_par]).flat_map(|rel_ind1| {
+                let r_ind1 = rel_idx_converter((rel_ind1,idx1_par));
+                
+                (0..n_rel_par[idx2_par]).flat_map(move |rel_ind2| {
+                    let r_ind2 = rel_idx_converter((rel_ind2,idx2_par));
 
-                        (0..n_com).map(move |com_ind| {
-                            let i1 = n_com * rel_ind1 + com_ind;
-                            let i2 = n_com * rel_ind2 + com_ind;
-                            let a1 = vec1[i1];
-                            let a2 = vec2[i2];
+                    (0..n_com).map(move |com_ind| {
+                        let i1 = n_com * rel_ind1 + com_ind;
+                        let i2 = n_com * rel_ind2 + com_ind;
+                        let a1 = vec1[i1];
+                        let a2 = vec2[i2];
 
-                            a1 * a2 * x_rel[[r_ind1,r_ind2]]
-                        })
+                        a1 * a2 * x_rel[[r_ind1,r_ind2]]
                     })
                 })
-                .fold(0.0, |acc, val| acc + val)
+            })
+            .fold(0.0, |acc, val| acc + val)
     });
+
+
+    // // Debug: Get the Relative Coordinate EV distribution in Exciton EV
+
+    // let e_vecs_rel = &Array2::from_shape_fn( (n_rel, n_ex_eig), |(rel_idx, ex_idx)| {
+
+    //     let e_vec = &e_vecs[ex_idx];
+    //     let vec_par = parity_indices[ex_idx];
+
+    //     let r_ind = rel_idx + vec_par * n_rel_odd;
+
+    //     (0..n_com).map(|com_idx| {
+    //         let idx = n_com * r_ind + com_idx;
+
+    //         e_vec[idx]
+    //     }).sum::<f64>()
+    // });
+    // timed_println!("Relative Coordinate EV distribution in Exciton EV:");
+    // println!("{}", PrettyArray2(&e_vecs_rel, 4));
+
+
+    timed_println!("<x> for exciton:");
+    println!("{}", PrettyArray2(&x_exc, 4));
+
+    timed_println!("Exciton eigenvalues transitions");
+    let e_vals_transition = pp.exciton.e_vals.as_ref().unwrap() - pp.exciton.e_vals.as_ref().unwrap()[0];
+    println!("{}", e_vals_transition);
+    
 
     // Diagonalize at the Gamma point
     let (pp_vals, pp_vecs) = diagonalize_pp_sing_ex(pp, n_eig, None);

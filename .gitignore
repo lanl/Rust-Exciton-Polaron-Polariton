@@ -16,6 +16,7 @@
 *.dat
 core.*
 *.done
+*.pdf
 
 # Environment-specific directories (ignored by default)
 /.cargo/

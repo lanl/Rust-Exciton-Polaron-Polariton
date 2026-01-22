@@ -220,6 +220,40 @@ pub fn calculate_color_band_structure(
     (k_points, sorted_eigvals, sorted_photonic)
 }
 
+pub fn load_color_band_structure(
+    pp: &mut PolaronPolariton,
+    n_k_points: usize,
+    n_eig: usize,
+    pp_config: &PPConfig,
+    zoomed: bool
+) -> (Vec<Vec<f64>>, Vec<Array1<f64>>, Vec<Vec<f64>>) {
+    let save_dir = "pp_data".to_string();
+    std::fs::create_dir_all(&save_dir).unwrap_or_else(|_| {});
+    
+    // Generate filename for the color band structure data
+    let mut filename = format!(
+        "{}/color_band_a0{}_V0{}_nrel{}_nbands{}_npoints{}_phcoup{}_nmodes{}_pncoup{}_npn{}_neig{}",
+        save_dir,
+        pp_config.e_config.a0,
+        pp_config.e_config.v0,
+        pp_config.n_rel,
+        pp_config.n_bands,
+        n_k_points,
+        pp_config.lm_coupling,
+        pp.pp_off_ham.photon.photon_modes.len(),
+        pp_config.pn_coupling,
+        pp_config.pn_n_fock,
+        n_eig
+    );
+
+    filename += if zoomed { "_zoomed.bin" } else { ".bin" };
+    
+    timed_println!("Loading cached color band structure data from {}", filename);
+    match ColorBandData::load_from_file(&filename) {
+        Ok(data) => return data.to_results(),
+        Err(e) => panic!("Failed to load cached data: {}, recalculating...", e)
+    }
+}
 
 /// Calculate band structure with MPI parallelization (alternative implementation)
 /// 
@@ -278,9 +312,6 @@ pub fn calculate_color_band_structure_mpi_simple(
     if rank == 0 {
         timed_println!("Running with {} MPI ranks (simple mode)", world_size);
     }
-
-    let save_dir = "pp_data".to_string();
-    std::fs::create_dir_all(&save_dir).unwrap_or_else(|_| {});
 
     // Start timer on rank 0
     let start_time = if rank == 0 {
@@ -525,6 +556,9 @@ pub fn plot_color_band_structure(
     coupling: f64,
     zoomed: bool
 ) -> Result<(), Box<dyn std::error::Error>> {
+
+    let dark = true;
+
     // Create x-axis for the plot (path length)
     let mut x = vec![0.0; k_points.len()];
     for i in 1..k_points.len() {
@@ -602,7 +636,12 @@ pub fn plot_color_band_structure(
     let mut script = File::create(&script_path)?;
     
     // Write gnuplot script
-    writeln!(script, "set terminal pngcairo enhanced font 'Arial,40' size 2400,1800")?;
+    if dark {
+        writeln!(script, "set terminal pdfcairo enhanced font 'Arial,40' size 16,12 background rgb '#000000'")?;
+    }
+    else {
+        writeln!(script, "set terminal pdfcairo enhanced font 'Arial,40' size 16,12")?;
+    }
     writeln!(script, "set output '{}'", save_path)?;
     
     // Set margins to make room for the colorbar
@@ -610,10 +649,17 @@ pub fn plot_color_band_structure(
     writeln!(script, "set rmargin 10")?;
     writeln!(script, "set tmargin 3")?;
     writeln!(script, "set bmargin 3")?;
-    
-    writeln!(script, "set title 'Exciton-Polariton Band Structure (a₀={:.1}, V₀={:.1}, g={:.3})' font 'Arial,16'", a0, v0, coupling)?;
-    writeln!(script, "set xlabel 'Wave vector'")?;
-    writeln!(script, "set ylabel 'Energy (a.u.)'")?;
+        
+    if dark {
+        writeln!(script, "set title 'Exciton-Polariton Band Structure (a₀={:.1}, V₀={:.1}, g={:.3})' font 'Arial,16' textcolor rgb '#e0e0e0'", a0, v0, coupling)?;
+        writeln!(script, "set xlabel 'Wave vector' textcolor rgb '#e0e0e0'")?;
+        writeln!(script, "set ylabel 'Energy (a.u.)' textcolor rgb '#e0e0e0'")?;
+    }
+    else {
+        writeln!(script, "set title 'Exciton-Polariton Band Structure (a₀={:.1}, V₀={:.1}, g={:.3})' font 'Arial,16'", a0, v0, coupling)?;
+        writeln!(script, "set xlabel 'Wave vector'")?;
+        writeln!(script, "set ylabel 'Energy (a.u.)'")?;
+    }
     writeln!(script, "set xrange [{}:{}]", x[0], x[x.len() - 1])?;
     writeln!(script, "set yrange [{}:{}]", min_energy, max_energy)?;
     
@@ -621,8 +667,17 @@ pub fn plot_color_band_structure(
     writeln!(script, "set palette rgbformulae 22,13,-22")?;
     writeln!(script, "set colorbox vertical user origin 0.88,0.1 size 0.03,0.8")?;
     writeln!(script, "set cbrange [0:1]")?;
-    writeln!(script, "set cblabel 'Photonic Character' offset 2,0")?;
-    writeln!(script, "set cbtics 0.2")?;
+    if dark {
+        writeln!(script, "set cblabel 'Photonic Character' offset 2,0 textcolor rgb '#e0e0e0'")?;
+        writeln!(script, "set cbtics 0.2 textcolor rgb '#e0e0e0'")?;
+        writeln!(script, "set xtics textcolor rgb '#e0e0e0'")?;
+        writeln!(script, "set ytics textcolor rgb '#e0e0e0'")?;
+        writeln!(script, "set border linecolor rgb '#808080'")?;
+    }
+    else {
+        writeln!(script, "set cblabel 'Photonic Character' offset 2,0")?;
+        writeln!(script, "set cbtics 0.2")?;
+    }
     
     // Define color functions based on photonic character with transparency support
     writeln!(script, "# Define RGB components for our color gradient - exactly matching the palette")?;
@@ -659,8 +714,14 @@ pub fn plot_color_band_structure(
     if !zoomed {
         // Draw vertical lines at symmetry points
         for &pos in &sym_positions {
-            writeln!(script, "set arrow from {},{} to {},{} nohead lc rgb '#888888' lw 6", 
-                    pos, min_energy, pos, max_energy)?;
+            if dark {
+                writeln!(script, "set arrow from {},{} to {},{} nohead lc rgb '#606060' lw 6", 
+                        pos, min_energy, pos, max_energy)?;
+            }
+            else {
+                writeln!(script, "set arrow from {},{} to {},{} nohead lc rgb '#888888' lw 6", 
+                        pos, min_energy, pos, max_energy)?;
+            }
         }
     }
     
