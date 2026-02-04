@@ -7,9 +7,10 @@ use std::time::Instant;
 use rust_slepc_bindings::{
     Eigensolver, EPS_WHICH_SMALLEST_REAL,
     Mat, PETSC_COMM_WORLD,
-    create_vector, destroy_vector, get_vector_array, EPSType, PetscError,
+    create_complex_vector as create_vector, destroy_vector, get_vector_array, EPSType, PetscError,
     EPSGDSetBlockSize, EPSJDSetBlockSize
 };
+use num_complex::Complex64 as c64;
 use crate::timed_println;
 
 // Global counters for tracking callback overhead
@@ -32,7 +33,7 @@ unsafe extern "C" {
 // Constants needed for this implementation
 const MATOP_MULT: c_int = 3; // Matrix-vector product operation
 
-// Instrumented callback function for matrix-vector product
+// Instrumented callback function for matrix-vector product (complex version)
 extern "C" fn mv_product_instrumented(mat: Mat, x: rust_slepc_bindings::Vec, y: rust_slepc_bindings::Vec) -> c_int {
     let callback_start = Instant::now();
     
@@ -42,7 +43,7 @@ extern "C" fn mv_product_instrumented(mat: Mat, x: rust_slepc_bindings::Vec, y: 
         MatShellGetContext(mat, &mut ctx_ptr);
         let op = &*(ctx_ptr as *const PolaronPolariton);
         
-        // Get arrays from vectors
+        // Get arrays from vectors (PETSc stores complex as interleaved real/imag)
         let mut x_array: *mut c_double = std::ptr::null_mut();
         let mut y_array: *mut c_double = std::ptr::null_mut();
         VecGetArray(x, &mut x_array);
@@ -50,13 +51,27 @@ extern "C" fn mv_product_instrumented(mat: Mat, x: rust_slepc_bindings::Vec, y: 
         
         // Convert to Rust slices
         let n = op.dimension();
-        let x_slice = std::slice::from_raw_parts(x_array, n);
-        let y_slice = std::slice::from_raw_parts_mut(y_array, n);
+        // PETSc complex vectors have 2*n doubles (real and imaginary parts interleaved)
+        let x_raw = std::slice::from_raw_parts(x_array, 2 * n);
+        let y_raw = std::slice::from_raw_parts_mut(y_array, 2 * n);
+        
+        // Convert from interleaved format to Complex64
+        let mut x_complex = vec![c64::new(0.0, 0.0); n];
+        for i in 0..n {
+            x_complex[i] = c64::new(x_raw[2*i], x_raw[2*i + 1]);
+        }
         
         // Time the actual apply operation
         let _apply_start = Instant::now();
-        op.apply(x_slice, y_slice);
+        let mut y_complex = vec![c64::new(0.0, 0.0); n];
+        op.apply(&x_complex, &mut y_complex);
         let _apply_duration = _apply_start.elapsed();
+        
+        // Convert back to interleaved format
+        for i in 0..n {
+            y_raw[2*i] = y_complex[i].re;
+            y_raw[2*i + 1] = y_complex[i].im;
+        }
         
         // Restore arrays
         VecRestoreArray(x, &mut x_array);
@@ -201,7 +216,7 @@ pub fn diagonalize_slepc_instrumented(
     let mut eigenvalues = Array1::zeros(n_eig);
     let mut eigenvectors = Array2::zeros((pp.dimension(), n_eig));
     
-    // Create vectors for eigenvectors
+    // Create vectors for eigenvectors (complex vectors need 2x space)
     let vr = unsafe { create_vector(pp.dimension()).expect("Failed to create vector") };
     
     // Extract eigenvalues and eigenvectors for the converged ones
@@ -213,11 +228,15 @@ pub fn diagonalize_slepc_instrumented(
         unsafe {
             solver.get_eigenpair(i, vr).expect("Failed to get eigenvector");
             
-            let mut vec_temp = vec![0.0; pp.dimension()];
+            // PETSc complex vectors store data as interleaved real/imag
+            let mut vec_temp = vec![0.0; 2 * pp.dimension()];
             get_vector_array(vr, &mut vec_temp).expect("Failed to get vector array");
             
+            // Extract real parts (for Hermitian matrices, eigenvectors can be chosen real)
             for j in 0..pp.dimension() {
-                eigenvectors[[j, i]] = vec_temp[j];
+                let re_part = vec_temp[2*j];
+                // Store real part (imaginary part should be ~0 for Hermitian)
+                eigenvectors[[j, i]] = re_part;
             }
         }
     }
@@ -236,6 +255,7 @@ pub fn diagonalize_slepc_instrumented(
 }
 
 /// Convert an Array2 of initial vectors to a Vec of PETSc Vec objects
+/// For complex vectors, the real values are used as the real part with zero imaginary part
 fn create_petsc_vecs_from_array2(initial_vecs: &Array2<f64>) -> Result<Vec<rust_slepc_bindings::Vec>, PetscError> {
     let n_vecs = initial_vecs.ncols();
     let vec_size = initial_vecs.nrows();
@@ -244,9 +264,11 @@ fn create_petsc_vecs_from_array2(initial_vecs: &Array2<f64>) -> Result<Vec<rust_
     for i in 0..n_vecs {
         let v = unsafe { create_vector(vec_size)? };
         
-        let mut vec_data = vec![0.0; vec_size];
+        // For complex vectors, PETSc stores as interleaved real/imag
+        let mut vec_data = vec![0.0; 2 * vec_size];
         for j in 0..vec_size {
-            vec_data[j] = initial_vecs[[j, i]];
+            vec_data[2*j] = initial_vecs[[j, i]];     // Real part
+            vec_data[2*j + 1] = 0.0;                   // Imaginary part
         }
         
         let mut vec_ptr: *mut c_double = std::ptr::null_mut();
@@ -263,7 +285,8 @@ fn create_petsc_vecs_from_array2(initial_vecs: &Array2<f64>) -> Result<Vec<rust_
             return Err(PetscError(result));
         }
         
-        unsafe { std::ptr::copy_nonoverlapping(vec_data.as_ptr(), vec_ptr, vec_size) };
+        // Copy data to the PETSc vector (2*vec_size for complex)
+        unsafe { std::ptr::copy_nonoverlapping(vec_data.as_ptr(), vec_ptr, 2 * vec_size) };
         
         let result = unsafe { VecRestoreArray(v, &mut vec_ptr) };
         if result != 0 {

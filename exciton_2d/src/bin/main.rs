@@ -83,8 +83,7 @@ fn plot_n_colored_bands(system: &Exciton2DGridSystem, args: &Args) {
         600,
         args.n_rel_states,
         args.n_bands,
-        args.recalculate_bands,
-        0, // select_parity = 0 means both parities
+        args.recalculate_bands
     );
     
     // Plot the band structure
@@ -106,8 +105,8 @@ fn plot_n_colored_bands(system: &Exciton2DGridSystem, args: &Args) {
 /// * `args` - Command-line arguments
 fn scan_parameters(args: &Args) {
     // List of lattice constants and potential strengths to run
-    let a0_list = vec![3.5];
-    let v0_list = vec![0.1, 0.2];
+    let a0_list = vec![9.0];
+    let v0_list = vec![0.1, 0.2, 0.3];
     
     for &a0 in &a0_list {
         for &v0 in &v0_list {
@@ -150,8 +149,7 @@ fn scan_parameters(args: &Args) {
             // Diagonalize the full Hamiltonian
             let (eigvals, _, _, _, _) = system.diagonalize_full_hamiltonian(
                 args.n_rel_states,
-                args.n_bands,
-                1, // select_parity = 0 means both parities
+                args.n_bands
             );
             
             println!("\nFull Hamiltonian eigenvalues:");
@@ -165,8 +163,7 @@ fn scan_parameters(args: &Args) {
                 args.n_k,
                 args.n_rel_states,
                 args.n_bands,
-                args.recalculate_bands,
-                0, // select_parity = 0 means both parities
+                args.recalculate_bands
             );
             let elapsed = start_time.elapsed();
     
@@ -201,7 +198,7 @@ fn main() {
     let config = ExcitonConfig {
         n_kappa: 11,
         a0: 9.0,
-        v0: 0.05,
+        v0: 0.25,
         k: vec![0.0, 0.0],
         m_e: 0.3,
         m_h: 0.3,

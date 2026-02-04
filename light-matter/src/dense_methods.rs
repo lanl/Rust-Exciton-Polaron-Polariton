@@ -3,18 +3,19 @@ use ndarray_linalg::{Eigh};
 use ndarray::{Array1, Array2};
 use std::path::Path;
 use indicatif::{ProgressBar, ProgressStyle};
+use ndarray_linalg::c64;
 use crate::hamiltonians::{LMHamiltonian, PPHamiltonian};
 
-pub fn diagonalize_lm_ham_dense(light_matter: &mut LMHamiltonian<Array2<f64>>) 
-    -> (Array1<f64> , Array2<f64>){
-    let h_lm = light_matter.build_lm_hamiltonian();
+pub fn diagonalize_lm_ham_dense(light_matter: &mut LMHamiltonian<Array2<c64>>) 
+    -> (Array1<f64> , Array2<c64>){
+    let h_lm = light_matter.build_lm_hamiltonian(None);
 
     h_lm.eigh(ndarray_linalg::UPLO::Upper).unwrap()
 }
 
-pub fn diagonalize_pp_ham_dense(polaron_polariton: &mut PPHamiltonian<Array2<f64>>)
-    -> (Array1<f64> , Array2<f64>){
-    let h_pp = polaron_polariton.build_pp_hamiltonian();
+pub fn diagonalize_pp_ham_dense(polaron_polariton: &mut PPHamiltonian<Array2<c64>>)
+    -> (Array1<f64> , Array2<c64>){
+    let h_pp = polaron_polariton.build_pp_hamiltonian(None);
 
     h_pp.eigh(ndarray_linalg::UPLO::Upper).unwrap()
 }
@@ -22,7 +23,7 @@ pub fn diagonalize_pp_ham_dense(polaron_polariton: &mut PPHamiltonian<Array2<f64
 
 /// Calculator for band structure of light-matter coupled systems
 pub struct BandStructureCalculatorLM {
-    pub light_matter: LMHamiltonian<Array2<f64>>,      // Light-matter system
+    pub light_matter: LMHamiltonian<Array2<c64>>,      // Light-matter system
     pub a0: f64,                        // Lattice constant
     pub v0: f64,                        // Potential strength
     pub save_dir: String,               // Directory to save results
@@ -31,12 +32,12 @@ pub struct BandStructureCalculatorLM {
 
 impl BandStructureCalculatorLM {
     /// Creates a new band structure calculator
-    pub fn new(light_matter: LMHamiltonian<Array2<f64>>, a0: f64, v0: f64, save_dir: String, sym_points: Vec<Vec<f64>>) -> Self {
+    pub fn new(light_matter: LMHamiltonian<Array2<c64>>, a0: f64, v0: f64, save_dir: String, sym_points: Vec<Vec<f64>>) -> Self {
         Self { light_matter: light_matter, a0: a0, v0: v0, save_dir: save_dir, sym_points: sym_points}
     }
 
     /// Calculates eigenvalues and eigenvectors at a specific k-point
-    pub fn calculate_at_k_point_lm(&mut self, k: Vec<f64>) -> (Array1<f64> , Array2<f64>) {
+    pub fn calculate_at_k_point_lm(&mut self, k: Vec<f64>) -> (Array1<f64> , Array2<c64>) {
         // Update the light-matter system with the new k-point
         self.light_matter.update_k(k);
 

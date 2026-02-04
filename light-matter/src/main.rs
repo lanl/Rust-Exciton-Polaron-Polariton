@@ -8,7 +8,7 @@ use std::env;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
-
+use ndarray_linalg::c64;
 
 pub mod sparse_methods;
 
@@ -60,13 +60,12 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     // Parameters for diagonalization
     let n_rel = 9;      // Number of relative coordinate states
     let n_ex_eig = 16;  // Number of exciton eigenstates
-    let parity = 0;      // Parity of states to consider
     
     // Light-matter coupling parameters
     let total_coupling = 0.015 ;  // Coupling strength
     timed_println!("total_coupling = {}", total_coupling);
     let omega_0 = 0.15;    // Photon frequency
-    let n_modes = 23;
+    let n_modes = 8;
     let coupling = total_coupling / (n_modes as f64);
 
     // Define photon modes
@@ -115,8 +114,8 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
             timed_println!("Using sparse methods for light-matter coupling.");
 
             // Create light-matter system
-            let photon = BosonicHamiltonian::<CsMat<f64>>::new(photon_modes);
-            let exciton = ExcitonicHamiltonian::new(exciton.full_ham, n_ex_eig, n_rel, parity);
+            let photon = BosonicHamiltonian::<CsMat<c64>>::new(photon_modes);
+            let exciton = ExcitonicHamiltonian::new(exciton.full_ham, n_ex_eig, n_rel);
             let light_matter = LMHamiltonian::new(exciton, photon, coupling);
 
             // Start timing the band structure calculation
@@ -148,8 +147,8 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
             timed_println!("Using dense methods for light-matter coupling.");
 
             // Create light-matter system
-            let photon = BosonicHamiltonian::<Array2<f64>>::new(photon_modes);
-            let exciton = ExcitonicHamiltonian::new(exciton.full_ham, n_ex_eig, n_rel, parity);
+            let photon = BosonicHamiltonian::<Array2<c64>>::new(photon_modes);
+            let exciton = ExcitonicHamiltonian::new(exciton.full_ham, n_ex_eig, n_rel);
             let light_matter = LMHamiltonian::new(exciton, photon, coupling);
 
             // Start timing the band structure calculation
@@ -175,11 +174,11 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
 
         Method::SingEx => {
             timed_println!("Using Mat-Vec methods for light-matter coupling in single photon limit.");
-            let n_eig = 256;
+            let n_eig = 128;
 
-            let calculate = false;
+            let calculate = true;
                 
-            let zoomed = true;
+            let zoomed = false;
 
             let (k_points_color, eigvals_list_color, photonic_character_list);
 
@@ -200,7 +199,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
                 timed_println!("Calculating color-coded band structure...");
                 (k_points_color, eigvals_list_color, photonic_character_list) = 
                     color_band_plot::calculate_color_band_structure_mpi_simple(
-                        &mut pp, n_k_points, n_eig, &sym_points, &pp_config, true, zoomed);
+                        &mut pp, n_k_points, n_eig, &sym_points, &pp_config, false, zoomed);
 
                 timed_println!("Calculated Band Structure in {:?}", Instant::now().duration_since(time1));
             }
@@ -244,28 +243,38 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
     let total_coupling_values = Array1::from_vec(vec![0.0, 0.01, 0.0175]);
 
     let omega_0 = 0.15;    // Photon frequency
-    let n_modes = 16;
-    let coupling_values = total_coupling_values /( n_modes as f64);
-    
-    // Define photon modes
-    let qx_values = Array1::linspace(-0.001, 0.001, n_modes); // Photon wavevectors along x
-    let qy_values = Array1::linspace(-0.001, 0.001, n_modes);
+    let n_modes = 23;
+    let coupling_values = total_coupling_values /( (n_modes) as f64);
     let qz = omega_0 / C;
+
+    // Define photon modes
+    let qx_values = Array1::linspace(-0.0011, 0.0011, n_modes); // Photon wavevectors along x
+    let qy_values = Array1::linspace(-0.0011, 0.0011, n_modes);
 
     let q_values: Vec<Vector3D> = qx_values.iter().flat_map(|qx| {
         qy_values.iter().map(|qy| {
             Vector3D { x: *qx, y: *qy, z: qz }
         })}).collect();
+
+    // // 1D Array of q in x-direction
+    // let qx_values = Array1::linspace(-0.001, 0.001, n_modes*n_modes);
+
+    // let q_values: Vec<Vector3D> = qx_values.iter().map(|qx| {
+    //         Vector3D { x: *qx, y: 0.0, z: qz }
+    //     }).collect();
     
     // Define phonon parameters
-    let pn_coupling = 0.0025; // 1 cm^-1
+    // let pn_coupling = 0.01; // 114 cm^-1
+    // let pn_coupling = 0.004385964912; // 50 cm^-1
+    // let pn_coupling = 0.008771929825; // 100 cm^-1
+    let pn_coupling = 0.0;
     let pn_omega = 0.0025; // 500 cm^-1
     // let pn_coupling = 0.0; // 10 cm^-1
     let pn_k = arr1(&[0.,0.05]); // 1 nm^1
-    let pn_n_fock = 4;
+    let pn_n_fock = 1;
 
     // Parameters for dielectric function calculation
-    let n_eig = 1024;  // Number of eigenstates to use
+    let n_eig = 512+128;  // Number of eigenstates to use
     let omegas = Array1::linspace(0.1, 0.25, 100000);  // Frequency range
     let gamma = 5e-5;  // Broadening parameter
 
@@ -525,7 +534,7 @@ fn main() {
     // davidson::davidson_test();
 
     // Choose which function to run
-    let run_mode = "dielectric_scan"; // Options: "bandstructure", "dielectric_scan"
+    let run_mode = "bandstructure"; // Options: "bandstructure", "dielectric_scan"
 
     initialize().expect("Failed to initialize SLEPc");
     
@@ -543,7 +552,6 @@ fn main() {
         }
     }
     
-
     // Finalize SLEPc
     finalize().expect("Failed to finalize SLEPc");
 }

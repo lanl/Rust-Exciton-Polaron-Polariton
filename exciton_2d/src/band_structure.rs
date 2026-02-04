@@ -108,41 +108,28 @@ impl ColorBandData {
 /// This function computes the expectation value of the principal quantum number n
 /// for a given eigenstate of the full Hamiltonian. This value indicates which
 /// relative coordinate state contributes most to the eigenstate.
+///
+/// Note: Eigenvectors are complex due to -i*sin matrix elements.
 pub fn calculate_n_expectation(
     full_ham: &FullHamiltonian,
-    eigenvector: &Array1<f64>,
-    parity: i32,
+    eigenvector: &Array1<num_complex::Complex64>,
     n_rel_states: usize
 ) -> f64 {
     // Get the number of center-of-mass states
     let n_com_states = full_ham.kappa_vectors.len();
     
-    // Get the mapping from relative state index to (n,m) quantum numbers
-    // This is a simplified approach - in a real implementation, you would need to 
-    // extract this information from your relative Hamiltonian solution
-    let mut n_values_both: (Vec<i32>,Vec<i32>) = (Vec::new(),Vec::new());
+    // Get the mapping from relative state index to n quantum number
+    // Generate all states in order
+    let mut n_values: Vec<i32> = Vec::new();
     let mut n: i32 = 0;
-    while (n_values_both.0.len() + n_values_both.1.len()) < n_rel_states {
-        for m in -n..=n {
-            if n >= m.abs() {  // Valid state condition
-                if m % 2 == 0 {
-                    n_values_both.0.push(n);
-                }
-                else {
-                    n_values_both.1.push(n);
-                }
+    while n_values.len() < n_rel_states {
+        for _m in -n..=n {
+            n_values.push(n);
+            if n_values.len() >= n_rel_states {
+                break;
             }
         }
         n += 1;
-    }
-    
-    let n_values: Vec<i32>;
-    
-    if parity == 1 {
-        n_values = n_values_both.0;
-    }
-    else {
-        n_values = n_values_both.1;
     }
     
     // Calculate the expectation value of n
@@ -153,7 +140,8 @@ pub fn calculate_n_expectation(
         for i_com in 0..n_com_states {
             let i = i_rel * n_com_states + i_com;
             if i < eigenvector.len() {
-                let prob = eigenvector[i] * eigenvector[i];
+                // For complex eigenvectors, probability is |ψ|²
+                let prob = eigenvector[i].norm_sqr();
                 n_expectation += prob * n_values[i_rel] as f64;
                 total_prob += prob;
             }
@@ -174,6 +162,8 @@ pub fn calculate_n_expectation(
 /// Brillouin zone, including the expectation value of the principal quantum number
 /// for each eigenstate. These expectation values can be used to color-code the
 /// bands to visualize their character.
+///
+/// Note: With sine matrix elements, parity is not conserved. All states are included.
 pub fn calculate_n_colored_band_structure(
     full_ham: &FullHamiltonian,
     n_points: usize,
@@ -181,7 +171,6 @@ pub fn calculate_n_colored_band_structure(
     n_bands: usize,
     a0: f64,
     v0: f64,
-    select_parity: i32,
     save_dir: &str,
     recalculate: bool
 ) -> (Vec<Vec<f64>>, Vec<Array1<f64>>, Vec<Vec<f64>>) {
@@ -190,14 +179,13 @@ pub fn calculate_n_colored_band_structure(
     
     // Generate filename for the color band structure data
     let filename = format!(
-        "{}/n_colored_band_a0{}_V0{}_nrel{}_nbands{}_npoints{}_par{}.bin",
+        "{}/n_colored_band_a0{}_V0{}_nrel{}_nbands{}_npoints{}.bin",
         save_dir,
         full_ham.rel_ham.grid.box_size,
         v0,
         n_rel_states,
         n_bands,
-        n_points,
-        select_parity
+        n_points
     );
     
     // Check if cached data exists and should be used
@@ -312,15 +300,14 @@ pub fn calculate_n_colored_band_structure(
         full_ham_local.k = k_point.clone();
         
         // Diagonalize the Hamiltonian
-        let (eigvals, eigvecs, _,_, parities) = 
-            full_ham_local.diagonalize_full_hamiltonian(n_rel_states, n_bands, select_parity);
+        let (eigvals, eigvecs, _,_, _parities) = 
+            full_ham_local.diagonalize_full_hamiltonian(n_rel_states, n_bands);
         
         // Calculate n-expectation for each eigenstate
         let n_expectation: Vec<f64> = (0..eigvals.len())
             .map(|i| calculate_n_expectation(
                 &full_ham_local, 
-                &eigvecs[i], 
-                parities[i],
+                &eigvecs[i],
                 n_rel_states
             ))
             .collect();
@@ -404,7 +391,6 @@ impl BandStructureCalculator {
     /// * `n_rel_states` - Number of relative coordinate states included
     /// * `n_bands` - Number of bands calculated
     /// * `v0` - Potential strength
-    /// * `select_parity` - Parity selection (0: both, 1: even, -1: odd)
     ///
     /// # Returns
     /// A filename string based on the calculation parameters
@@ -414,10 +400,9 @@ impl BandStructureCalculator {
         n_rel_states: usize,
         n_bands: usize,
         v0: f64,
-        select_parity: i32,
     ) -> String {
         format!(
-            "{}/band_a0{}_V0{}_grid{}_box{}_nrel{}_nbands{}_npoints{}_par{}.json",
+            "{}/band_a0{}_V0{}_grid{}_box{}_nrel{}_nbands{}_npoints{}.json",
             self.save_dir,
             self.a0,
             v0,
@@ -425,28 +410,27 @@ impl BandStructureCalculator {
             self.full_ham.rel_ham.grid.box_size,
             n_rel_states,
             n_bands,
-            n_points,
-            select_parity
+            n_points
         )
     }
     
     /// Calculates eigenvalues and eigenvectors at a specific k-point
     ///
+    /// Note: With sine matrix elements, parity is not conserved. All states are included.
+    ///
     /// # Arguments
     /// * `k_point` - Wave vector in the Brillouin zone
     /// * `n_rel_states` - Number of relative coordinate states to include
     /// * `n_bands` - Number of bands to calculate
-    /// * `select_parity` - Parity selection (0: both, 1: even, -1: odd)
     ///
     /// # Returns
-    /// A tuple containing eigenvalues, eigenvectors, and parity values
+    /// A tuple containing eigenvalues, eigenvectors, and parity values (of unperturbed states)
     pub fn calculate_at_k_point(
         &self,
         k_point: &[f64],
         n_rel_states: usize,
         n_bands: usize,
-        select_parity: i32,
-    ) -> (Array1<f64>, Vec<Array1<f64>>,Array1<i32>) {
+    ) -> (Array1<f64>, Vec<Array1<num_complex::Complex64>>, Array1<i32>) {
         // Store original K value
         let original_k = self.full_ham.k.clone();
         
@@ -458,7 +442,6 @@ impl BandStructureCalculator {
         let (eigvals, eigvecs, _, _, parities) = full_ham.diagonalize_full_hamiltonian(
             n_rel_states,
             n_bands,
-            select_parity,
         );
         
         // Restore original K value
@@ -474,16 +457,17 @@ impl BandStructureCalculator {
     /// Brillouin zone. It uses symmetry to reduce the number of calculations
     /// and can parallelize the computation across multiple threads.
     ///
+    /// Note: With sine matrix elements, parity is not conserved. All states are included.
+    ///
     /// # Arguments
     /// * `n_points` - Number of k-points along each path segment
     /// * `n_rel_states` - Number of relative coordinate states to include
     /// * `n_bands` - Number of bands to calculate
     /// * `v0` - Potential strength
     /// * `recalculate_bands` - Whether to force recalculation
-    /// * `select_parity` - Parity selection (0: both, 1: even, -1: odd)
     ///
     /// # Returns
-    /// A tuple containing k-points, eigenvalues, and parity values
+    /// A tuple containing k-points, eigenvalues, and parity values (of unperturbed states)
     pub fn calculate_band_structure(
         &self,
         n_points: usize,
@@ -491,10 +475,9 @@ impl BandStructureCalculator {
         n_bands: usize,
         v0: f64,
         recalculate_bands: bool,
-        select_parity: i32,
     ) -> (Vec<Vec<f64>>, Vec<Array1<f64>>, Vec<Array1<i32>>) {
         // Check if we should try to load from file
-        let filename = self.get_band_structure_filename(n_points, n_rel_states, n_bands, v0, select_parity);
+        let filename = self.get_band_structure_filename(n_points, n_rel_states, n_bands, v0);
         
         if !recalculate_bands && Path::new(&filename).exists() {
             if self.verbose {
@@ -616,7 +599,7 @@ impl BandStructureCalculator {
             // Parallelize the computation
             unique_k_points.par_iter()
                 .map(|k_point| {
-                    let (evals, _, pars) = self.calculate_at_k_point(k_point, n_rel_states, n_bands, select_parity);
+                    let (evals, _, pars) = self.calculate_at_k_point(k_point, n_rel_states, n_bands);
                     progress_bar.inc(1); // Increment the progress bar
                     (evals, pars)
                 })

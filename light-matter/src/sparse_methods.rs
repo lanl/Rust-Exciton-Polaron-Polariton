@@ -1,6 +1,7 @@
 use ndarray::{Array1, Array2};
 use std::path::Path;
 use indicatif::{ProgressBar, ProgressStyle};
+use ndarray_linalg::c64;
 
 use sprs::CsMat;
 
@@ -9,12 +10,12 @@ use crate::{hamiltonians::{LMHamiltonian, PPHamiltonian}, utils::{CsMatOperator}
 use rust_slepc_bindings::EPSType;
 
 pub fn diagonalize_sparse(
-    matrix: CsMat<f64>, 
+    matrix: CsMat<c64>, 
     n_eig: usize,
     block_size: usize, 
     solve_type: Option<EPSType>,
-    initial_guess: Option<&Array2<f64>>) 
-    -> (Array1<f64> , Array2<f64>){
+    initial_guess: Option<&Array2<c64>>) 
+    -> (Array1<f64> , Array2<c64>){
 
     use crate::slepc::diagonalize_slepc;
 
@@ -24,29 +25,29 @@ pub fn diagonalize_sparse(
 }
 
 pub fn diagonalize_lm_ham_sparse(
-    light_matter: &mut LMHamiltonian<CsMat<f64>>, 
+    light_matter: &mut LMHamiltonian<CsMat<c64>>, 
     n_eigenvalues: usize,
-    initial_guess: Option<&Array2<f64>>) 
-    -> (Array1<f64> , Array2<f64>){
+    initial_guess: Option<&Array2<c64>>) 
+    -> (Array1<f64> , Array2<c64>){
 
-    let h_lm = light_matter.build_lm_hamiltonian();
+    let h_lm = light_matter.build_lm_hamiltonian(None);
 
     diagonalize_sparse(h_lm, n_eigenvalues, 128, None, initial_guess) 
 }
 
 pub fn diagonalize_pp_ham_sparse(
-    polaron_polariton: &mut PPHamiltonian<CsMat<f64>>, 
+    polaron_polariton: &mut PPHamiltonian<CsMat<c64>>, 
     n_eigenvalues: usize,
-    initial_guess: Option<&Array2<f64>>) 
-    -> (Array1<f64> , Array2<f64>){
-    let h_pp = polaron_polariton.build_pp_hamiltonian();
+    initial_guess: Option<&Array2<c64>>) 
+    -> (Array1<f64> , Array2<c64>){
+    let h_pp = polaron_polariton.build_pp_hamiltonian(None);
     
     diagonalize_sparse(h_pp, n_eigenvalues, 128, None, initial_guess) 
 }
 
 /// Calculator for band structure of light-matter coupled systems
 pub struct BandStructureCalculatorLM {
-    pub light_matter: LMHamiltonian<CsMat<f64>>,      // Light-matter system
+    pub light_matter: LMHamiltonian<CsMat<c64>>,      // Light-matter system
     pub a0: f64,                        // Lattice constant
     pub v0: f64,                        // Potential strength
     pub save_dir: String,               // Directory to save results
@@ -55,12 +56,12 @@ pub struct BandStructureCalculatorLM {
 
 impl BandStructureCalculatorLM {
     /// Creates a new band structure calculator
-    pub fn new(light_matter: LMHamiltonian<CsMat<f64>>, a0: f64, v0: f64, save_dir: String, sym_points: Vec<Vec<f64>>) -> Self {
+    pub fn new(light_matter: LMHamiltonian<CsMat<c64>>, a0: f64, v0: f64, save_dir: String, sym_points: Vec<Vec<f64>>) -> Self {
         Self { light_matter: light_matter, a0: a0, v0: v0, save_dir: save_dir, sym_points: sym_points}
     }
 
     /// Calculates eigenvalues and eigenvectors at a specific k-point using sparse matrices
-    pub fn calculate_at_k_point_lm_sparse(&mut self, k: Vec<f64>, n_eigenvalues: usize) -> (Array1<f64>, Array2<f64>) {
+    pub fn calculate_at_k_point_lm_sparse(&mut self, k: Vec<f64>, n_eigenvalues: usize) -> (Array1<f64>, Array2<c64>) {
         // Update the light-matter system with the new k-point
         self.light_matter.update_k(k);
 

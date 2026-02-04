@@ -4,6 +4,22 @@
 //! of the periodic potential between different eigenstates of the relative coordinate
 //! Hamiltonian. These matrix elements are essential for constructing the full Hamiltonian
 //! that includes both relative and center-of-mass motion.
+//!
+//! ## Matrix Element Convention
+//!
+//! This module computes the **real** sine integrals:
+//! ```text
+//! V_{ij}(κ) = ∫ ψ_i(r) sin(κ·r) ψ_j(r) dr
+//! ```
+//!
+//! The `-i` factor needed for the Hermitian Hamiltonian is applied when constructing
+//! the Hamiltonian matrix in `hamiltonian.rs`, where the full matrix element becomes:
+//! ```text
+//! H_{ij} = -i * V_0 * V_{ij}(κ)
+//! ```
+//!
+//! This separation allows the matrix element calculator to work with real numbers,
+//! while the Hamiltonian builder handles the complex arithmetic.
 use crate::grid::Grid;
 use crate::utils::fast_matrix_element_calc;
 use log::{info, warn};
@@ -55,7 +71,7 @@ impl MatrixElementCalculator {
     /// Precomputes terms needed for potential matrix element calculations
     ///
     /// This method precomputes and caches various terms that are frequently used
-    /// in matrix element calculations, such as coordinate grids and cosine terms
+    /// in matrix element calculations, such as coordinate grids and sine terms
     /// for each reciprocal lattice vector.
     ///
     /// # Arguments
@@ -78,16 +94,16 @@ impl MatrixElementCalculator {
         
         // Precompute potential terms for common kappa values
         for &(kx, ky) in w_kappa.keys() {
-            let mut cos_x = Array2::zeros((self.grid.grid_size, 1));
-            let mut cos_y = Array2::zeros((1, self.grid.grid_size));
+            let mut sin_x = Array2::zeros((self.grid.grid_size, 1));
+            let mut sin_y = Array2::zeros((1, self.grid.grid_size));
             
             for i in 0..self.grid.grid_size {
-                cos_x[[i, 0]] = (kx * self.grid.x[i] / 2.0).cos();
-                cos_y[[0, i]] = (ky * self.grid.y[i] / 2.0).cos();
+                sin_x[[i, 0]] = (kx * self.grid.x[i] / 2.0).sin();
+                sin_y[[0, i]] = (ky * self.grid.y[i] / 2.0).sin();
             }
             
-            let key = format!("cos_term_{:.6}_{:.6}", kx, ky);
-            pre.insert(key, cos_x + cos_y);
+            let key = format!("sin_term_{:.6}_{:.6}", kx, ky);
+            pre.insert(key, sin_x + sin_y);
         }
         drop(pre)
     }
@@ -105,8 +121,11 @@ impl MatrixElementCalculator {
     
     /// Calculates or retrieves a cached potential matrix element
     ///
-    /// This method computes the matrix element of e^(i*kappa·r) between eigenstates i and j,
+    /// This method computes the matrix element of sin(kappa·r) between eigenstates i and j,
     /// using cached values when available to avoid redundant calculations.
+    /// 
+    /// Note: This returns the REAL sine integral. The -i factor is applied when
+    /// constructing the Hamiltonian in hamiltonian.rs.
     ///
     /// # Arguments
     /// * `kappa_pot` - Reciprocal lattice vector
@@ -114,7 +133,7 @@ impl MatrixElementCalculator {
     /// * `j` - Index of the second eigenstate
     ///
     /// # Returns
-    /// The matrix element <i|e^(i*kappa·r)|j>
+    /// The matrix element <i|sin(kappa·r)|j> (real)
     pub fn cached_potential_matrix_element(&self, kappa_pot: (OrderedFloat<f64>, OrderedFloat<f64>), i: usize, j: usize) -> f64 {
         let cache_key = (i, j, kappa_pot);
         
@@ -178,11 +197,13 @@ impl MatrixElementCalculator {
         result
     }
 
-    // Add a new helper method to calculate the matrix element directly
     /// Calculates a matrix element directly without caching
     ///
-    /// This helper method computes the matrix element of e^(i*kappa·r) between
+    /// This helper method computes the matrix element of sin(kappa·r) between
     /// eigenstates i and j directly, without using the cache.
+    ///
+    /// Note: This returns the REAL sine integral. The -i factor is applied when
+    /// constructing the Hamiltonian in hamiltonian.rs.
     ///
     /// # Arguments
     /// * `kappa_pot` - Reciprocal lattice vector
@@ -193,7 +214,7 @@ impl MatrixElementCalculator {
     /// * `y_grid` - Grid of y coordinates
     ///
     /// # Returns
-    /// The matrix element <i|e^(i*kappa·r)|j>
+    /// The matrix element <i|sin(kappa·r)|j> (real)
     fn calculate_matrix_element_directly(
         &self,
         kappa_pot: (OrderedFloat<f64>, OrderedFloat<f64>),
@@ -209,29 +230,32 @@ impl MatrixElementCalculator {
         let psi_j = eigvecs.column(j)
             .to_shape((self.grid.grid_size, self.grid.grid_size)).unwrap().to_owned();
         
-        // Calculate the cosine term
-        let mut cos_x = Array2::zeros((self.grid.grid_size, 1));
-        let mut cos_y = Array2::zeros((1, self.grid.grid_size));
+        // Calculate the sine term
+        let mut sin_x = Array2::zeros((self.grid.grid_size, 1));
+        let mut sin_y = Array2::zeros((1, self.grid.grid_size));
         
         for i in 0..self.grid.grid_size {
-            cos_x[[i, 0]] = (kappa_pot.0.0 * x_grid[[i, 0]] / 2.0).cos();
-            cos_y[[0, i]] = (kappa_pot.1.0 * y_grid[[0, i]] / 2.0).cos();
+            sin_x[[i, 0]] = (kappa_pot.0.0 * x_grid[[i, 0]] / 2.0).sin();
+            sin_y[[0, i]] = (kappa_pot.1.0 * y_grid[[0, i]] / 2.0).sin();
         }
         
-        let cos_term = cos_x + cos_y;
+        let sin_term = sin_x + sin_y;
                 
         fast_matrix_element_calc(
             &psi_i, 
             &psi_j,
-            &cos_term, self.grid.dx
+            &sin_term, self.grid.dx
         )
     }
 
     
     /// Calculates a potential matrix element directly with provided eigenvectors
     ///
-    /// This method computes the matrix element of e^(i*kappa·r) between eigenstates i and j
+    /// This method computes the matrix element of sin(kappa·r) between eigenstates i and j
     /// using the provided eigenvectors, rather than the cached ones.
+    ///
+    /// Note: This returns the REAL sine integral. The -i factor is applied when
+    /// constructing the Hamiltonian in hamiltonian.rs.
     ///
     /// # Arguments
     /// * `kappa_pot` - Reciprocal lattice vector as a slice
@@ -240,7 +264,7 @@ impl MatrixElementCalculator {
     /// * `rel_eigvecs` - Eigenvectors of the relative coordinate Hamiltonian
     ///
     /// # Returns
-    /// The matrix element <i|e^(i*kappa·r)|j>
+    /// The matrix element <i|sin(kappa·r)|j> (real)
     pub fn get_potential_matrix_element_direct(&self, kappa_pot: &[f64], i: usize, j: usize, rel_eigvecs: &Array2<f64>) -> f64 {
         let kappa_pot_tuple = (OrderedFloat(kappa_pot[0]), OrderedFloat(kappa_pot[1]));
         let cache_key = (i, j, kappa_pot_tuple);
@@ -255,32 +279,32 @@ impl MatrixElementCalculator {
         let psi_j = rel_eigvecs.column(j)
             .to_shape((self.grid.grid_size, self.grid.grid_size)).unwrap().to_owned();
         
-        // Get precomputed cosine term if available
+        // Get precomputed sine term if available
         let precomputed = self.precomputed.read().unwrap();
-        let cos_term_key = format!("cos_term_{:.6}_{:.6}", kappa_pot[0], kappa_pot[1]);
+        let sin_term_key = format!("sin_term_{:.6}_{:.6}", kappa_pot[0], kappa_pot[1]);
         
-        let cos_term = if let Some(term) = precomputed.get(&cos_term_key) {
+        let sin_term = if let Some(term) = precomputed.get(&sin_term_key) {
             term.clone()
         } else {
-            // Calculate the cosine term
+            // Calculate the sine term
             let x_grid = precomputed.get("x_grid").unwrap();
             let y_grid = precomputed.get("y_grid").unwrap();
             
-            let mut cos_x = Array2::zeros((self.grid.grid_size, 1));
-            let mut cos_y = Array2::zeros((1, self.grid.grid_size));
+            let mut sin_x = Array2::zeros((self.grid.grid_size, 1));
+            let mut sin_y = Array2::zeros((1, self.grid.grid_size));
             
             for i in 0..self.grid.grid_size {
-                cos_x[[i, 0]] = (kappa_pot[0] * x_grid[[i, 0]] / 2.0).cos();
-                cos_y[[0, i]] = (kappa_pot[1] * y_grid[[0, i]] / 2.0).cos();
+                sin_x[[i, 0]] = (kappa_pot[0] * x_grid[[i, 0]] / 2.0).sin();
+                sin_y[[0, i]] = (kappa_pot[1] * y_grid[[0, i]] / 2.0).sin();
             }
             
-            cos_x + cos_y
+            sin_x + sin_y
         };
         
         let matrix_element = fast_matrix_element_calc(
             &psi_i, 
             &psi_j,
-            &cos_term, self.grid.dx
+            &sin_term, self.grid.dx
         );
         
         // Cache the result
@@ -295,12 +319,15 @@ impl MatrixElementCalculator {
     /// either by loading from disk or calculating them directly. Only non-zero matrix elements
     /// are stored to save memory.
     ///
+    /// Note: This returns REAL sine integrals. The -i factor is applied when
+    /// constructing the Hamiltonian in hamiltonian.rs.
+    ///
     /// # Arguments
     /// * `w_kappa_tuples` - Map of reciprocal lattice vectors to potential coefficients
     /// * `n_rel_states` - Number of relative coordinate states to include
     ///
     /// # Returns
-    /// A map from (i, j, kappa) to the corresponding matrix element <i|e^(i*kappa·r)|j>
+    /// A map from (i, j, kappa) to the corresponding matrix element <i|sin(kappa·r)|j> (real)
     pub fn calculate_matrix_elements(&self, w_kappa_tuples: &HashMap<(OrderedFloat<f64>, OrderedFloat<f64>), f64>, n_rel_states: usize) -> HashMap<(usize, usize, (OrderedFloat<f64>, OrderedFloat<f64>)), f64> {
         // Check if precomputed matrix elements exist
         let matrix_elements_filename = format!(
@@ -344,11 +371,11 @@ impl MatrixElementCalculator {
         if self.verbose {
             // Debug: Print some sample matrix elements
             if !v_rel.is_empty() {
-                info!("Sample matrix elements:");
+                info!("Sample matrix elements (real sine integrals):");
                 let mut sample_count = 0;
                 for (&(i_rel, j_rel, kappa_pot), &val) in &v_rel {
                     if sample_count < 5 {
-                        info!("  <{}|e^(i*{:?}·r)|{}> = {}", i_rel, kappa_pot, j_rel, val);
+                        info!("  <{}|sin({:?}·r)|{}> = {}", i_rel, kappa_pot, j_rel, val);
                         sample_count += 1;
                     }
                 }

@@ -6,6 +6,7 @@ use light_matter::sing_ex::{PolaronPolariton, ExcitonicHamiltonian, PhotonicHami
 use light_matter::utils::{BosonMode, Polarization, SolverOperator};
 use light_matter::slepc_instrumented::{diagonalize_slepc_instrumented, get_instrumentation_data};
 use ndarray::{Array1, arr1};
+use ndarray_linalg::c64;
 use std::sync::Arc;
 use std::time::Instant;
 use rust_slepc_bindings::EPSType;
@@ -61,8 +62,7 @@ fn create_test_system(config: &OverheadTestConfig) -> PolaronPolariton {
     let mut exciton = ExcitonicHamiltonian::new(
         ex_system.full_ham,
         config.n_ex_eig,
-        config.n_rel,
-        0
+        config.n_rel
     );
     exciton.compute_eigenstates();
     
@@ -110,7 +110,7 @@ fn create_test_system(config: &OverheadTestConfig) -> PolaronPolariton {
 /// Measure the time for pure matrix-vector products
 fn benchmark_matvec(pp: &PolaronPolariton, n_iterations: usize) -> (f64, f64) {
     let dim = pp.dimension();
-    let x = Array1::from_elem(dim, 1.0 / (dim as f64).sqrt());
+    let x = Array1::from_elem(dim, c64::from(1.0 / (dim as f64).sqrt()));
     let mut y = Array1::zeros(dim);
     
     // Warm-up

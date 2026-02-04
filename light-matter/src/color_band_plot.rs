@@ -11,6 +11,7 @@ use serde::{Serialize, Deserialize};
 use std::error::Error;
 use std::time::Instant;
 use colored::Colorize;
+use ndarray_linalg::c64;
 
 use crate::timed_println;
 
@@ -18,7 +19,7 @@ use crate::timed_println;
 /// Returns a value between 0 (purely excitonic) and 1 (purely photonic)
 pub fn calculate_photonic_character(
     pp: &PolaronPolariton,
-    eigenvector: &Array1<f64>
+    eigenvector: &Array1<c64>
 ) -> f64 {
     let n_ex = pp.exciton.n_ex_eig;
     let n_ph = pp.pp_diag_ham.photon.photon_modes.len() + 1; // +1 for ground state
@@ -36,7 +37,7 @@ pub fn calculate_photonic_character(
         for ph_idx in 0..n_ph {
             for pn_idx in 0..n_pn {
                 let idx = ex_idx * n_ph * n_pn + ph_idx * n_pn + pn_idx;
-                let prob = eigenvector[idx] * eigenvector[idx];
+                let prob = eigenvector[idx].norm_sqr();
                 
                 if ph_idx > 0 {  // Skip photon ground state
                     photonic_prob += prob;
@@ -175,13 +176,12 @@ pub fn calculate_color_band_structure(
     // Calculate eigenvalues and photonic character at each k-point sequentially
     // to use previous eigenvectors as initial guesses for better convergence
     let mut results: Vec<(usize, Array1<f64>, Vec<f64>)> = Vec::with_capacity(k_points.len());
-    let mut prev_eigvecs: Option<Array2<f64>> = None;
+    let mut prev_eigvecs: Option<Array2<c64>> = None;
     
     for (idx, k) in k_points.iter().enumerate() {
         // Create a thread-local copy of the PolaronPolariton
         pp.update_k(k.clone());
 
-        // Diagonalize with initial guess from previous k-point if available
         let (eigvals, eigvecs) = diagonalize_pp_sing_ex(&pp, n_eig, prev_eigvecs.as_ref());
         
         // Calculate photonic character for each eigenstate
@@ -400,13 +400,22 @@ pub fn calculate_color_band_structure_mpi_simple(
     
     // Calculate eigenvalues and photonic character for this rank's k-points
     let mut local_results: Vec<(usize, Array1<f64>, Vec<f64>)> = Vec::with_capacity(my_k_points.len());
-    let mut prev_eigvecs: Option<Array2<f64>> = None;
+    let mut prev_eigvecs: Option<Array2<c64>> = None;
 
     for (global_idx, k) in my_k_points.iter() {
         pp.update_k(k.clone());
 
-        let (eigvals, eigvecs) = diagonalize_pp_sing_ex(&pp, n_eig, prev_eigvecs.as_ref());
+        // Use warm start with only a small subset of previous eigenvectors
+        // IMPORTANT: Only pass 5 initial vectors to avoid over-constraining the solver
+        // Passing too many vectors can lead to noisy results
+        let initial_guess_subset = prev_eigvecs.as_ref().map(|vecs| {
+            let n_init = 5.min(vecs.ncols());
+            vecs.slice(s![.., 0..n_init]).to_owned()
+        });
+        let (eigvals, eigvecs) = diagonalize_pp_sing_ex(&pp, n_eig, initial_guess_subset.as_ref()); 
+
         
+        timed_println!("Calculating photonic character");
         let photonic_character: Vec<f64> = (0..n_eig)
             .map(|i| calculate_photonic_character(&pp, &eigvecs.column(i).to_owned()))
             .collect();

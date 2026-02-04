@@ -50,7 +50,6 @@ fn main() {
         9,   // n_rel_states
         16,  // n_bands
         true, // recalculate_bands
-        0,    // select_parity (0: both, 1: even, -1: odd)
     );
     
     // Plot band structure

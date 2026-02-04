@@ -326,21 +326,22 @@ impl Exciton2DGridSystem {
     
     /// Diagonalizes the full Hamiltonian including center-of-mass motion
     ///
+    /// The Hamiltonian is complex (with -i*sin matrix elements) but Hermitian, so
+    /// eigenvalues are real and eigenvectors are complex.
+    ///
     /// # Arguments
     /// * `n_rel_states` - Number of relative coordinate states to include
     /// * `k_eigvals` - Number of eigenvalues to compute
-    /// * `select_parity` - Parity selection (0: both, 1: even, -1: odd)
     ///
     /// # Returns
-    /// * Tuple containing eigenvalues, eigenvectors, relative eigenvalues,
-    ///   relative eigenvectors, and parity values
+    /// * Tuple containing eigenvalues (real), eigenvectors (complex), relative eigenvalues,
+    ///   relative eigenvectors, and parity values (of unperturbed states)
     pub fn diagonalize_full_hamiltonian(
         &self,
         n_rel_states: usize,
         k_eigvals: usize,
-        select_parity: i32,
-    ) -> (Array1<f64>, Vec<Array1<f64>>, Array1<f64>, Array2<f64>, Array1<i32>) {
-        self.full_ham.diagonalize_full_hamiltonian(n_rel_states, k_eigvals, select_parity)
+    ) -> (Array1<f64>, Vec<Array1<num_complex::Complex64>>, Array1<f64>, Array2<f64>, Array1<i32>) {
+        self.full_ham.diagonalize_full_hamiltonian(n_rel_states, k_eigvals)
     }
     
     /// Plots a relative coordinate eigenstate
@@ -364,22 +365,23 @@ impl Exciton2DGridSystem {
     
     /// Calculates the band structure along high-symmetry paths
     ///
+    /// Note: With sine matrix elements, parity is not conserved. All states are
+    /// included in the calculation.
+    ///
     /// # Arguments
     /// * `n_points` - Number of k-points along each path segment
     /// * `n_rel_states` - Number of relative coordinate states to include
     /// * `n_bands` - Number of bands to calculate
     /// * `recalculate_bands` - Whether to force recalculation
-    /// * `select_parity` - Parity selection (0: both, 1: even, -1: odd)
     ///
     /// # Returns
-    /// * Tuple containing k-points, eigenvalues, and parity values
+    /// * Tuple containing k-points, eigenvalues, and parity values (of unperturbed states)
     pub fn calculate_band_structure(
         &self,
         n_points: usize,
         n_rel_states: usize,
         n_bands: usize,
         recalculate_bands: bool,
-        select_parity: i32,
     ) -> (Vec<Vec<f64>>, Vec<Array1<f64>>, Vec<Array1<i32>>) {
         self.band_calc.calculate_band_structure(
             n_points,
@@ -387,7 +389,6 @@ impl Exciton2DGridSystem {
             n_bands,
             self.v0,
             recalculate_bands,
-            select_parity,
         )
     }
     
@@ -415,12 +416,14 @@ impl Exciton2DGridSystem {
     /// for each eigenstate. These expectation values indicate which relative coordinate
     /// state contributes most to each band, providing insight into the character of the bands.
     ///
+    /// Note: With sine matrix elements, parity is not conserved. All states are
+    /// included in the calculation.
+    ///
     /// # Arguments
     /// * `n_points` - Number of k-points along each path segment
     /// * `n_rel_states` - Number of relative coordinate states to include
     /// * `n_bands` - Number of bands to calculate
     /// * `recalculate_bands` - Whether to force recalculation
-    /// * `select_parity` - Parity selection (0: both, 1: even, -1: odd)
     ///
     /// # Returns
     /// * Tuple containing k-points, eigenvalues, and n-expectation values
@@ -430,7 +433,6 @@ impl Exciton2DGridSystem {
         n_rel_states: usize,
         n_bands: usize,
         recalculate_bands: bool,
-        select_parity: i32,
     ) -> (Vec<Vec<f64>>, Vec<Array1<f64>>, Vec<Vec<f64>>) {
         calculate_n_colored_band_structure(
             &self.full_ham,
@@ -439,7 +441,6 @@ impl Exciton2DGridSystem {
             n_bands,
             self.a0,
             self.v0,
-            select_parity,
             &self.save_dir,
             recalculate_bands,
         )

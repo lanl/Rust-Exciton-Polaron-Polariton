@@ -119,29 +119,41 @@ impl RelativeHamiltonian {
     /// # Returns
     /// * Tuple containing eigenvalues, eigenvectors, and parity values
     fn solve_analytical(&self, k_eigvals: usize) -> (Array1<f64>, Array2<f64>, Array1<i32>) {
-        if self.verbose {info!("Using analytical solutions for the 2D hydrogen atom...")};
+        if self.verbose {
+            info!("Using analytical solutions for the 2D hydrogen atom...");
+            info!("Note: Generating states without parity filtering (sine coupling mixes parities)");
+        }
         
         // For 2D hydrogen atom, the energy levels are:
         // E_n = -mu/(2*(n+1/2)^2)
         // where n = 0, 1, 2, ... is the principal quantum number
         
-        // Generate all states (n,m) and sort by energy
-        let mut states = Vec::new();
-        let mut n: i32 = 0;
-        while states.len() < k_eigvals {
+        // Generate states (n, m) level by level
+        // For each n, we have m = -n, -n+1, ..., n-1, n
+        let mut states: Vec<(i32, i32)> = Vec::new();
+        
+        for n in 0.. {
+            // For each n, we have m = -n, -n+1, ..., n-1, n
             for m in -n..=n {
-                if n >= m.abs() {  // Valid state condition
                     states.push((n, m));
+                if states.len() >= k_eigvals {
+                    break;
                 }
             }
-            n += 1;
+            if states.len() >= k_eigvals {
+                break;
+            }
         }
         
-        // Keep only the first k_eigvals states
+        // Truncate to exactly k_eigvals states
         states.truncate(k_eigvals);
         
-        // Calculate parity for each state
-        let parities = Array1::from_iter(states.iter().map(|(_, m)| if m.abs() % 2 == 0 { 1 } else { -1 }));
+        // Calculate parity for each state (based on unperturbed wavefunction)
+        // Note: This is the parity of the UNPERTURBED state, not the full eigenstate
+        // With sine coupling, the full eigenstates won't have definite parity
+        let parities = Array1::from_iter(
+            states.iter().map(|(_, m)| if m.abs() % 2 == 0 { 1 } else { -1 })
+        );
         
         // Calculate eigenvalues for each state
         let mut eigvals = Array1::zeros(k_eigvals);
@@ -163,7 +175,7 @@ impl RelativeHamiltonian {
             // Generate the eigenfunctions for each state in batches
             for batch_start in (0..k_eigvals).step_by(batch_size) {
                 let batch_end = std::cmp::min(batch_start + batch_size, k_eigvals);
-                let batch_states = &states[batch_start..batch_end];
+                let batch_states: &[(i32, i32)] = &states[batch_start..batch_end];
                 if self.verbose {
                     info!("Processing batch {}/{}: states {} to {}",
                         batch_start / batch_size + 1,
@@ -426,41 +438,23 @@ impl FullHamiltonian {
     ///
     /// This method constructs the Hamiltonian matrix that includes the relative coordinate
     /// energy and the periodic potential, but not the center-of-mass kinetic energy.
-    /// It filters the relative coordinate states by parity and computes the matrix
-    /// elements of the periodic potential between these states.
+    /// With -i*sin(κ·r) matrix elements, the Hamiltonian is complex but Hermitian.
     ///
     /// # Arguments
     /// * `n_rel_states` - Number of relative coordinate states to include
-    /// * `parity` - Parity selection (1: even, -1: odd)
     ///
     /// # Returns
-    /// * Tuple containing the Hamiltonian matrix, relative eigenvalues, and relative eigenvectors
-    pub fn build_hamiltonian_no_k(&self, n_rel_states: usize, parity: i32) -> (Array2<f64>, Array1<f64>, Array2<f64>) {
+    /// * Tuple containing the complex Hamiltonian matrix, relative eigenvalues, and relative eigenvectors
+    pub fn build_hamiltonian_no_k(&self, n_rel_states: usize) -> (Array2<Complex64>, Array1<f64>, Array2<f64>) {
         // Solve for relative coordinate eigenstates
-        let (rel_eigvals_np, rel_eigvecs_np, parities) = self.rel_ham.solve(n_rel_states);
-
-        let _temp = parities.to_vec();
+        let (rel_eigvals, rel_eigvecs, _parities) = self.rel_ham.solve(n_rel_states);
         
-        // Filter by parity
-        let mut rel_eigvals = Vec::new();
-        let mut rel_eigvecs_indices = Vec::new();
+        // With sine matrix elements, we cannot filter by parity as even and odd states couple
+        // Use all states
+        let n_rel_states_used = rel_eigvals.len();
         
-        for i in 0..parities.len() {
-            if parities[i] == parity {
-                rel_eigvals.push(rel_eigvals_np[i]);
-                rel_eigvecs_indices.push(i);
-            }
-        }
-        
-        let rel_eigvals = Array1::from_vec(rel_eigvals);
-        let n_rel_states_filtered = rel_eigvals.len();
-        
-        // Extract the eigenvectors with the correct parity
-        let mut rel_eigvecs: Array2<f64> = Array2::zeros((rel_eigvecs_np.nrows(), n_rel_states_filtered));
-        for (new_idx, &old_idx) in rel_eigvecs_indices.iter().enumerate() {
-            for i in 0..rel_eigvecs_np.nrows() {
-                rel_eigvecs[[i, new_idx]] = rel_eigvecs_np[[i, old_idx]];
-            }
+        if self.verbose {
+            info!("Using all {} relative coordinate states (sine coupling mixes parities)", n_rel_states_used);
         }
         
         // Set the cached eigenvectors for matrix element calculations
@@ -470,11 +464,11 @@ impl FullHamiltonian {
         let n_com_states = self.kappa_vectors.len();
         
         // Total dimension of the Hamiltonian
-        let dim = n_rel_states_filtered * n_com_states;
+        let dim = n_rel_states_used * n_com_states;
         
         if self.verbose {
             info!("Building full Hamiltonian with dimension {}x{}", dim, dim);
-            info!("Using {} relative states and {} COM states", n_rel_states_filtered, n_com_states);
+            info!("Using {} relative states and {} COM states", n_rel_states_used, n_com_states);
         }
         
         // Convert w_kappa to use tuple keys and filter out zero values
@@ -499,7 +493,7 @@ impl FullHamiltonian {
         }
         
         // Calculate or load matrix elements
-        let v_rel = self.matrix_elem_calc.calculate_matrix_elements(&w_kappa_tuples, n_rel_states_filtered);
+        let v_rel = self.matrix_elem_calc.calculate_matrix_elements(&w_kappa_tuples, n_rel_states_used);
         
         // Build the full Hamiltonian matrix
         if self.verbose {
@@ -508,16 +502,16 @@ impl FullHamiltonian {
         
         let start_time = Instant::now();
         
-        // Create a dense matrix for the Hamiltonian
+        // Create a dense complex matrix for the Hamiltonian
         let mut h_full = Array2::zeros((dim, dim));
         
         // Loop over all basis states
-        for i_rel in 0..n_rel_states_filtered {
+        for i_rel in 0..n_rel_states_used {
             for i_com in 0..n_com_states {
                 let i = i_rel * n_com_states + i_com;
                 
-                // Add diagonal term
-                h_full[[i, i]] = rel_eigvals[i_rel];
+                // Add diagonal term (real)
+                h_full[[i, i]] = Complex64::new(rel_eigvals[i_rel], 0.0);
                 
                 // Off-diagonal terms from the potential - only for non-zero w_kappa
                 for (&kappa_pot_tuple, &v0) in &w_kappa_tuples {
@@ -525,14 +519,15 @@ impl FullHamiltonian {
                     let key = (i_com, kappa_pot_tuple);
                     if let Some(&j_com) = self.vector_sum_to_index.get(&key) {
                         // Loop over relative states
-                        for j_rel in 0..n_rel_states_filtered {
+                        for j_rel in 0..n_rel_states_used {
                             let j = j_rel * n_com_states + j_com;
                             
                             // Get the potential matrix element if it exists
                             if let Some(&matrix_element) = v_rel.get(&(i_rel, j_rel, kappa_pot_tuple)) {
                                 // Add to matrix if non-zero
-                                if matrix_element > 1e-12 {
-                                    h_full[[i, j]] += v0 * matrix_element;
+                                // Matrix element is -i * sin(κ·r), so multiply by -i
+                                if matrix_element.abs() > 1e-12 {
+                                    h_full[[i, j]] += Complex64::new(0.0, -v0 * matrix_element);
                                 }
                             }
                         }
@@ -551,15 +546,15 @@ impl FullHamiltonian {
             for i in 0..dim {
                 for j in 0..dim {
                     if i == j {
-                        diag_sum += h_full[[i, j]].abs();
+                        diag_sum += h_full[[i, j]].norm();
                     } else {
-                        offdiag_sum += h_full[[i, j]].abs();
+                        offdiag_sum += h_full[[i, j]].norm();
                     }
                 }
             }
             
-            info!("Sum of diagonal elements: {}", diag_sum);
-            info!("Sum of off-diagonal elements: {}", offdiag_sum);
+            info!("Sum of diagonal elements (magnitude): {}", diag_sum);
+            info!("Sum of off-diagonal elements (magnitude): {}", offdiag_sum);
             if offdiag_sum < 1e-6 {
                 warn!("WARNING: Almost no coupling between states!");
             }
@@ -577,20 +572,19 @@ impl FullHamiltonian {
     ///
     /// # Arguments
     /// * `n_rel_states` - Number of relative coordinate states to include
-    /// * `parity` - Parity selection (1: even, -1: odd)
     ///
     /// # Returns
-    /// * Tuple containing the Hamiltonian matrix, relative eigenvalues, and relative eigenvectors
-    pub fn build_full_hamiltonian(&self, n_rel_states: usize, parity: i32) -> (Array2<f64>, Array1<f64>, Array2<f64>) {
+    /// * Tuple containing the complex Hamiltonian matrix, relative eigenvalues, and relative eigenvectors
+    pub fn build_full_hamiltonian(&self, n_rel_states: usize) -> (Array2<Complex64>, Array1<f64>, Array2<f64>) {
         // Build the Hamiltonian without center-of-mass kinetic energy
-        let (mut h_full, rel_eigvals, rel_eigvecs) = self.build_hamiltonian_no_k(n_rel_states, parity);
+        let (mut h_full, rel_eigvals, rel_eigvecs) = self.build_hamiltonian_no_k(n_rel_states);
         
         // Number of center-of-mass states
         let n_com_states = self.kappa_vectors.len();
-        let n_rel_states_filtered = rel_eigvals.len();
+        let n_rel_states_used = rel_eigvals.len();
         
         // Add center-of-mass kinetic energy to diagonal elements
-        for i_rel in 0..n_rel_states_filtered {
+        for i_rel in 0..n_rel_states_used {
             for i_com in 0..n_com_states {
                 let i = i_rel * n_com_states + i_com;
                 
@@ -602,7 +596,7 @@ impl FullHamiltonian {
                 }
                 
                 let e_com = (k_plus_k[0].powi(2) + k_plus_k[1].powi(2)) / (2.0 * self.m);
-                h_full[[i, i]] += e_com;
+                h_full[[i, i]] += Complex64::new(e_com, 0.0);
             }
         }
         
@@ -612,199 +606,80 @@ impl FullHamiltonian {
     /// Diagonalizes the full Hamiltonian
     ///
     /// This method diagonalizes the full Hamiltonian matrix to find the eigenvalues
-    /// and eigenvectors of the exciton in the periodic potential. It can handle both
-    /// even and odd parity states separately or together.
+    /// and eigenvectors of the exciton in the periodic potential.
     ///
-    /// When `select_parity` is 0, it builds and diagonalizes separate Hamiltonians for
-    /// even and odd parity states, then combines and sorts the results. When `select_parity`
-    /// is 1 or -1, it builds and diagonalizes a single Hamiltonian for the specified parity.
+    /// The Hamiltonian is complex (with -i*sin matrix elements) but Hermitian, so
+    /// eigenvalues are real and eigenvectors are complex.
     ///
     /// # Arguments
     /// * `n_rel_states` - Number of relative coordinate states to include
     /// * `k_eigvals` - Number of eigenvalues to compute
-    /// * `select_parity` - Parity selection (0: both, 1: even, -1: odd)
     ///
     /// # Returns
-    /// * Tuple containing eigenvalues, eigenvectors, relative eigenvalues,
-    ///   relative eigenvectors, and parity values
+    /// * Tuple containing eigenvalues (real), eigenvectors (complex), relative eigenvalues,
+    ///   relative eigenvectors, and parity values (of unperturbed states)
     pub fn diagonalize_full_hamiltonian(
         &self,
         n_rel_states: usize,
         k_eigvals: usize,
-        select_parity: i32,
-    ) -> (Array1<f64>, Vec<Array1<f64>>, Array1<f64>, Array2<f64>, Array1<i32>) {
-        if select_parity.abs() < 1 {
-            // Build the full Hamiltonian for both parities
-            let (h_full_even, rel_eigvals_even, rel_eigvecs_even) = self.build_full_hamiltonian(n_rel_states, 1);
-            let (h_full_odd, rel_eigvals_odd, rel_eigvecs_odd) = self.build_full_hamiltonian(n_rel_states, -1);
-            
-            // Store the Hamiltonians in a list
-            let h_list = vec![h_full_even, h_full_odd];
-            
-            // Combine relative eigvals and eigvecs
-            let mut rel_eigvals = Array1::zeros(rel_eigvals_even.len() + rel_eigvals_odd.len());
-            for i in 0..rel_eigvals_even.len() {
-                rel_eigvals[i] = rel_eigvals_even[i];
-            }
-            for i in 0..rel_eigvals_odd.len() {
-                rel_eigvals[i + rel_eigvals_even.len()] = rel_eigvals_odd[i];
-            }
-            
-            let mut rel_eigvecs = Array2::zeros((rel_eigvecs_even.nrows(), rel_eigvecs_even.ncols() + rel_eigvecs_odd.ncols()));
-            for i in 0..rel_eigvecs_even.nrows() {
-                for j in 0..rel_eigvecs_even.ncols() {
-                    rel_eigvecs[[i, j]] = rel_eigvecs_even[[i, j]];
-                }
-            }
-            for i in 0..rel_eigvecs_odd.nrows() {
-                for j in 0..rel_eigvecs_odd.ncols() {
-                    rel_eigvecs[[i, j + rel_eigvecs_even.ncols()]] = rel_eigvecs_odd[[i, j]];
-                }
-            }
-            
-            let mut eigvals_list = Vec::new();
-            let mut eigvecs_list = Vec::new();
-            let mut parities_list = Vec::new();
-            
-            // Process each Hamiltonian separately
-            for (i, h_full) in h_list.iter().enumerate() {
-                let parity_val = if i == 0 { 1 } else { -1 };
+    ) -> (Array1<f64>, Vec<Array1<Complex64>>, Array1<f64>, Array2<f64>, Array1<i32>) {
+        if self.verbose {
+            info!("Building complex Hermitian Hamiltonian with -i*sin matrix elements");
+        }
+        
+        // Build the full Hamiltonian with all states
+        let (h_full, rel_eigvals, rel_eigvecs) = self.build_full_hamiltonian(n_rel_states);
                 
-                let start_time = Instant::now();
+        let start_time = Instant::now();
+        if self.verbose {
+            info!("Diagonalizing full Hamiltonian with dimension {}x{}", h_full.nrows(), h_full.ncols());
+            info!("Computing {} lowest eigenvalues...", k_eigvals);
+        }
+        
+        // Compute eigenvalues and eigenvectors
+        match h_full.eigh(ndarray_linalg::UPLO::Lower) {
+            Ok((eigvals, eigvecs)) => {
+                // Take only the first k_eigvals
+                let n_eigvals = std::cmp::min(k_eigvals, eigvals.len());
+                let eigvals = eigvals.slice(ndarray::s![..n_eigvals]).to_owned();
+                
+                // Convert eigenvectors to Vec<Array1<Complex64>> for convenience
+                let mut eigvecs_list = Vec::new();
+                for i in 0..n_eigvals {
+                    eigvecs_list.push(eigvecs.slice(ndarray::s![.., i]).to_owned());
+                }
+                
+                // Parities are not meaningful for the full eigenstates with sine coupling
+                // We return zeros as placeholders
+                let parities = Array1::zeros(n_eigvals);
+                
                 if self.verbose {
-                    info!("Diagonalizing full Hamiltonian to find {} eigenvalues...", k_eigvals);
-                }
-
-                match h_full.eigh(ndarray_linalg::UPLO::Lower) {
-                    Ok((eigvals, eigvecs)) => {
-                        // Take only the first k_eigvals
-                        let eigvals_p: Array1<f64> = eigvals.slice(ndarray::s![..k_eigvals]).to_owned();
-                        
-                        // Take only the first k_eigvecs
-                        let eigvecs_p = eigvecs.slice(ndarray::s![.., ..k_eigvals]).to_owned();
-                        
-                        eigvals_list.push(eigvals_p);
-                        eigvecs_list.push(eigvecs_p);
-                        parities_list.push(Array1::from_elem(k_eigvals, parity_val));
-                        
-                        if self.verbose {
-                            info!("Diagonalization completed in {:.2} seconds.",
-                                start_time.elapsed().as_secs_f64());
-                        }
-                    },
-                    Err(e) => {
-                        // Log detailed error information
-                        warn!("Eigenvalue computation failed for k = {:?}", self.k);
-                        warn!("Hamiltonian shape = {:?}", h_full.shape());
-                        warn!("Error details: {:?}", e);
-                        
-                        // Return empty results to avoid crashing
-                        eigvals_list.push(Array1::zeros(k_eigvals));
-                        eigvecs_list.push(Array2::zeros((h_full.nrows(), k_eigvals)));
-                        parities_list.push(Array1::from_elem(k_eigvals, parity_val));
-                        
-                        if self.verbose {
-                            warn!("Using zeros as placeholder for failed diagonalization");
-                        }
-                    }
+                    info!("Diagonalization completed in {:.2} seconds.", start_time.elapsed().as_secs_f64());
+                    info!("First 5 eigenvalues: {:?}", eigvals.slice(ndarray::s![..std::cmp::min(5, n_eigvals)]));
                 }
                 
-                // // Compute eigenvalues and eigenvectors
-                // let (eigvals, eigvecs) = h_full.eigh(ndarray_linalg::UPLO::Lower).unwrap();
+                (eigvals, eigvecs_list, rel_eigvals, rel_eigvecs, parities)
+            },
+            Err(e) => {
+                // Log detailed error information
+                warn!("Eigenvalue computation failed for k = {:?}", self.k);
+                warn!("Hamiltonian shape = {:?}", h_full.shape());
+                warn!("Error details: {:?}", e);
                 
-                // // Take only the first k_eigvals
-                // let eigvals_p: Array1<f64> = eigvals.slice(ndarray::s![..k_eigvals]).to_owned();
-                
-                // // Take only the first k_eigvecs
-                // let eigvecs_p = eigvecs.slice(ndarray::s![.., ..k_eigvals]).to_owned();
-                
-                // eigvals_list.push(eigvals_p);
-                // eigvecs_list.push(eigvecs_p);
-                // parities_list.push(Array1::from_elem(k_eigvals, parity_val));
-                
-                // if self.verbose {
-                //     info!("Diagonalization completed in {:.2} seconds.",
-                //           start_time.elapsed().as_secs_f64());
-                // }
-            }
-            
-            // Combine results
-            let mut eigvals = Array1::zeros(eigvals_list[0].len() + eigvals_list[1].len());
-            let mut parities = Array1::zeros(parities_list[0].len() + parities_list[1].len());
-            
-            for i in 0..eigvals_list[0].len() {
-                eigvals[i] = eigvals_list[0][i];
-                parities[i] = parities_list[0][i];
-            }
-            
-            for i in 0..eigvals_list[1].len() {
-                eigvals[i + eigvals_list[0].len()] = eigvals_list[1][i];
-                parities[i + parities_list[0].len()] = parities_list[1][i];
-            }
-
-            let mut eigvecs: Vec<Array1<f64>> = Vec::new();
-            eigvecs_list.iter().for_each(|vec_array|{
-                for i in 0..vec_array.slice(ndarray::s![0,..]).len() {
-                    eigvecs.push(vec_array.slice(ndarray::s![..,i]).clone().to_owned());
+                // Return empty results to avoid crashing
+                let eigvals = Array1::zeros(k_eigvals);
+                let mut eigvecs_list = Vec::new();
+                for _ in 0..k_eigvals {
+                    eigvecs_list.push(Array1::from_elem(h_full.nrows(), Complex64::new(0.0, 0.0)));
                 }
-            });
-            
-            // Sort by energy
-            let mut indices = (0..eigvals.len()).collect::<Vec<_>>();
-            indices.sort_by(|&i, &j| eigvals[i].partial_cmp(&eigvals[j]).unwrap());
-            
-            let mut sorted_eigvals = Array1::zeros(eigvals.len());
-            let mut sorted_parities = Array1::zeros(parities.len());
-            let mut sorted_eigvecs: Vec<Array1<f64>> = Vec::with_capacity(eigvecs.len());
-            
-            for (new_idx, &old_idx) in indices.iter().enumerate() {
-                sorted_eigvals[new_idx] = eigvals[old_idx];
-                sorted_parities[new_idx] = parities[old_idx];
-                sorted_eigvecs.push(eigvecs[old_idx].clone());
+                let parities = Array1::zeros(k_eigvals);
+                
+                if self.verbose {
+                    warn!("Using zeros as placeholder for failed diagonalization");
+                }
+                
+                (eigvals, eigvecs_list, rel_eigvals, rel_eigvecs, parities)
             }
-            
-            // We can't concatenate eigvecs directly since they have different shapes
-            // Instead, we'll return them as a list
-            (sorted_eigvals, sorted_eigvecs, rel_eigvals, rel_eigvecs, sorted_parities.mapv(|x| x as i32))
-        } else {
-            if self.verbose {
-                info!("Parity of {} only!", select_parity);
-            }
-            
-            let (h_full_par, rel_eigvals, rel_eigvecs) = self.build_full_hamiltonian(n_rel_states, select_parity);
-            
-            let start_time = Instant::now();
-            if self.verbose {
-                info!("Diagonalizing full Hamiltonian to find {} eigenvalues...", k_eigvals);
-            }
-            
-            // Compute eigenvalues and eigenvectors
-            let (eigvals, eigvecs) = h_full_par.eigh(ndarray_linalg::UPLO::Lower).unwrap();
-            
-            // Take only the first k_eigvals
-            let eigvals = eigvals.slice(ndarray::s![..k_eigvals]).to_owned();
-                        
-            let parities = Array1::from_elem(k_eigvals, select_parity);
-            
-            if self.verbose {
-                info!("Diagonalization completed in {:.2} seconds.",
-                      start_time.elapsed().as_secs_f64());
-            }
-
-            let mut indices = (0..eigvals.len()).collect::<Vec<_>>();
-            indices.sort_by(|&i, &j| eigvals[i].partial_cmp(&eigvals[j]).unwrap());
-            
-            let mut sorted_eigvals = Array1::zeros(eigvals.len());
-            let mut sorted_parities = Array1::zeros(parities.len());
-            let mut sorted_eigvecs: Vec<Array1<f64>> = Vec::with_capacity(eigvals.len());
-            
-            for (new_idx, &old_idx) in indices.iter().enumerate() {
-                sorted_eigvals[new_idx] = eigvals[old_idx];
-                sorted_parities[new_idx] = parities[old_idx];
-                sorted_eigvecs.push(eigvecs.slice(ndarray::s![..,old_idx]).to_owned());
-            }
-            
-            (sorted_eigvals, sorted_eigvecs, rel_eigvals, rel_eigvecs, sorted_parities.mapv(|x| x as i32))
         }
     }
 }

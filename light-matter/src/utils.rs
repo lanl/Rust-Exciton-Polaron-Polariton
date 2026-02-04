@@ -9,7 +9,7 @@ use exciton_2d::ExcitonConfig;
 use num_complex::Complex;
 use ndarray::linalg::kron;
 use num_traits::{NumCast, One, Zero};
-use ndarray_linalg::{Eigh};
+use ndarray_linalg::{Eigh, c64};
 use crate::timed_println;
 use crate::slepc::diagonalize_slepc;
 
@@ -499,7 +499,9 @@ macro_rules! impl_matrix_ops_sparse {
             where
                 T: Clone + NumCast + Zero
             {
-                self * <Self::Scalar as NumCast>::from(scalar).unwrap()
+                // For sparse matrices, we need to scale element-wise
+                let scalar_converted = <Self::Scalar as NumCast>::from(scalar).unwrap();
+                self.map(|x| x * scalar_converted)
             }
             
             fn from_dense<T>(dense: &Array2<T>) -> Self 
@@ -529,7 +531,8 @@ macro_rules! impl_matrix_ops_sparse {
 
 impl_matrix_ops_dense!(f64);
 impl_matrix_ops_sparse!(f64);
-
+impl_matrix_ops_dense!(c64);
+impl_matrix_ops_sparse!(c64);
 
 pub trait ArrayOperator<T> {
     fn apply(&self, x: &Array1<T>) -> Vec<T>;
@@ -559,33 +562,33 @@ pub trait SolverOperator<T: Clone>: Send + Sync  {
     fn dimension(&self) -> usize;
 
     /// Diagonalize operator
-    fn diagonalize(&self, n_eig: Option<usize>, solve_type: Option<EPSType>, initial_guess: Option<&Array2<f64>>) -> (Array1<f64>, Array2<f64>);
+    fn diagonalize(&self, n_eig: Option<usize>, solve_type: Option<EPSType>, initial_guess: Option<&Array2<c64>>) -> (Array1<f64>, Array2<c64>);
 }
 
 #[derive(Clone)]
 pub struct CsMatOperator {
-    pub matrix: CsMat<f64>,
+    pub matrix: CsMat<c64>,
 }
 
 impl CsMatOperator {
-    pub fn new(matrix: CsMat<f64>) -> Self{
+    pub fn new(matrix: CsMat<c64>) -> Self{
         Self { matrix }
     }
 }
 
-impl SolverOperator<f64> for CsMatOperator {
-    fn apply(&self, x: &[f64], y: &mut [f64]) {
+impl SolverOperator<c64> for CsMatOperator {
+    fn apply(&self, x: &[c64], y: &mut [c64]) {
         // Apply matrix-vector product
         sprs::prod::mul_acc_mat_vec_csr(self.matrix.view(), x, y);
     }
 
-    fn apply_transpose(&self, x: &[f64], y: &mut [f64]) {
+    fn apply_transpose(&self, x: &[c64], y: &mut [c64]) {
         // Apply matrix-vector product
         sprs::prod::mul_acc_mat_vec_csr(self.matrix.transpose_view(), x, y);
     }
 
-    fn get_diagonal(&self) -> Vec<f64> {
-        let mut diags = vec![0.0; self.matrix.shape().0];
+    fn get_diagonal(&self) -> Vec<c64> {
+        let mut diags: Vec<c64> = vec![c64::zero(); self.matrix.shape().0];
 
         self.matrix.diag().iter().for_each(|(i, val)| {
             diags[i] = *val;
@@ -598,7 +601,7 @@ impl SolverOperator<f64> for CsMatOperator {
         self.matrix.shape().0
     }
 
-    fn diagonalize(&self, n_eig: Option<usize>, solve_type: Option<EPSType>, initial_guess: Option<&Array2<f64>>) -> (Array1<f64>, Array2<f64>) {
+    fn diagonalize(&self, n_eig: Option<usize>, solve_type: Option<EPSType>, initial_guess: Option<&Array2<c64>>) -> (Array1<f64>, Array2<c64>) {
         if let Some(n) = n_eig {                   
             diagonalize_slepc(self, n, 128, solve_type, initial_guess)
         }
@@ -611,17 +614,17 @@ impl SolverOperator<f64> for CsMatOperator {
 
 #[derive(Clone)]
 pub struct DenseOperator {
-    pub matrix: Array2<f64>,
+    pub matrix: Array2<c64>,
 }
 
 impl DenseOperator {
-    pub fn new(matrix: Array2<f64>) -> Self{
+    pub fn new(matrix: Array2<c64>) -> Self{
         Self { matrix }
     }
 }
 
-impl SolverOperator<f64> for DenseOperator {
-    fn apply(&self, x: &[f64], y: &mut [f64]) {
+impl SolverOperator<c64> for DenseOperator {
+    fn apply(&self, x: &[c64], y: &mut [c64]) {
         // Apply matrix-vector product
         let x_arr = Array1::from_iter(x.iter().map(|a| *a));
         let result = self.matrix.dot(&x_arr);
@@ -630,7 +633,7 @@ impl SolverOperator<f64> for DenseOperator {
         });
     }
     
-    fn apply_transpose(&self, x: &[f64], y: &mut [f64]) {
+    fn apply_transpose(&self, x: &[c64], y: &mut [c64]) {
         // Apply matrix-vector product
         let x_arr = Array1::from_iter(x.iter().map(|a| *a));
         let result = self.matrix.t().dot(&x_arr);
@@ -639,7 +642,7 @@ impl SolverOperator<f64> for DenseOperator {
         });
     }
 
-    fn get_diagonal(&self) -> Vec<f64> {
+    fn get_diagonal(&self) -> Vec<c64> {
         self.matrix.diag().to_vec()
     }
 
@@ -647,8 +650,8 @@ impl SolverOperator<f64> for DenseOperator {
         self.matrix.shape()[0]
     }
 
-    fn diagonalize(&self, _: Option<usize>, _: Option<EPSType>, _: Option<&Array2<f64>>) 
-        -> (Array1<f64>, Array2<f64>) {
+    fn diagonalize(&self, _: Option<usize>, _: Option<EPSType>, _: Option<&Array2<c64>>) 
+        -> (Array1<f64>, Array2<c64>) {
         
         self.matrix.eigh(ndarray_linalg::UPLO::Upper).unwrap()
     }
@@ -1015,16 +1018,16 @@ impl<T: Clone + num_traits::Zero + std::ops::Add<Output = T> + std::ops::Mul<Out
 }
 
 // Implement SolverOperator for ComposedOperator
-impl SolverOperator<f64> for ComposedOperator<f64> {
-    fn apply(&self, x: &[f64], y: &mut [f64]) {
+impl SolverOperator<c64> for ComposedOperator<c64> {
+    fn apply(&self, x: &[c64], y: &mut [c64]) {
         ComposedOperator::apply(self, x, y)
     }
 
-    fn apply_transpose(&self, x: &[f64], y: &mut [f64]) {
+    fn apply_transpose(&self, x: &[c64], y: &mut [c64]) {
         ComposedOperator::apply_transpose(self, x, y)
     }
     
-    fn get_diagonal(&self) -> Vec<f64> {
+    fn get_diagonal(&self) -> Vec<c64> {
         ComposedOperator::get_diagonal(self)
     }
     
@@ -1032,7 +1035,7 @@ impl SolverOperator<f64> for ComposedOperator<f64> {
         ComposedOperator::dimension(self)
     }
 
-    fn diagonalize(&self, n_eig: Option<usize>, solve_type: Option<EPSType>, initial_guess: Option<&Array2<f64>>) -> (Array1<f64>, Array2<f64>) {
+    fn diagonalize(&self, n_eig: Option<usize>, solve_type: Option<EPSType>, initial_guess: Option<&Array2<c64>>) -> (Array1<f64>, Array2<c64>) {
         if let Some(n) = n_eig {                   
             diagonalize_slepc(self, n, 128, solve_type, initial_guess)
         }
@@ -1124,4 +1127,4 @@ macro_rules! impl_matrix_ops_lin_op {
     };
 }
 
-impl_matrix_ops_lin_op!(f64);
+impl_matrix_ops_lin_op!(c64);

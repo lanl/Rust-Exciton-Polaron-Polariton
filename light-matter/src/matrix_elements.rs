@@ -1,4 +1,5 @@
 use ndarray_linalg::{Norm, c64};
+use num_traits::Zero;
 use scilib::math::basic::factorial;
 use std::{collections::HashMap, f64::consts::PI};
 use rayon::prelude::*;
@@ -10,16 +11,16 @@ use crate::timed_println;
 
 #[derive(Clone)]
 pub struct LMMatrixElementArray {
-    pub p_cos_mat: HashMap<Vec<i32>, Array2<f64>>, // Momentum Cosine matrix elements
-    pub cos_mat: HashMap<Vec<i32>, Array2<f64>>, // Cosine matrix elements
-    pub sin_mat: HashMap<Vec<i32>, Array2<f64>>, // Sine matrix elements
+    pub p_cos_mat: HashMap<Vec<i32>, Array2<c64>>, // Momentum Cosine matrix elements
+    pub cos_mat: HashMap<Vec<i32>, Array2<c64>>, // Cosine matrix elements
+    pub sin_mat: HashMap<Vec<i32>, Array2<c64>>, // Sine matrix elements
 }
 
 impl LMMatrixElementArray {
     pub fn new() -> Self {
-        let   cos_mat: HashMap<Vec<i32>, Array2<f64>> = HashMap::new();
-        let p_cos_mat: HashMap<Vec<i32>, Array2<f64>> = HashMap::new();
-        let   sin_mat: HashMap<Vec<i32>, Array2<f64>> = HashMap::new();
+        let   cos_mat: HashMap<Vec<i32>, Array2<c64>> = HashMap::new();
+        let p_cos_mat: HashMap<Vec<i32>, Array2<c64>> = HashMap::new();
+        let   sin_mat: HashMap<Vec<i32>, Array2<c64>> = HashMap::new();
 
         Self {
             cos_mat: cos_mat,
@@ -35,16 +36,14 @@ impl LMMatrixElementArray {
     pub fn populate_tay_mat_elements(
         &self,
         all_q_ind: &Vec<Vec<i32>>,
-        e_vecs: &Vec<Array1<f64>>,
-        parities: &Array1<i32>,
+        e_vecs: &Vec<Array1<c64>>,
         modes: &Vec<BosonMode>,
         n_com: usize,
         mu: f64,
     ) -> Self {
         
-        // Sort parities
-        let (n_rel_par, n_eigs, parity_indices) = self.sort_parities(e_vecs, parities, n_com);
-        let [n_rel_even, n_rel_odd] = n_rel_par;
+        let n_eigs = e_vecs.len();
+        let n_rel = e_vecs[0].len() / n_com;
 
         // Use capacity hints for HashMaps
         let mut cos_mat = HashMap::with_capacity(all_q_ind.len() - modes.len());
@@ -52,11 +51,11 @@ impl LMMatrixElementArray {
         let mut p_cos_mat = HashMap::with_capacity(modes.len());
 
         // Get Laguerre coefficients for radial integrals
-        let (lag_coeffs, states) = &self.get_laguerre_coeffs(n_rel_even + n_rel_odd);
+        let (lag_coeffs, states) = &self.get_laguerre_coeffs(n_rel);
         // let dr_coeffs = &self.get_dr_radial_poly(states);
 
         // Use parallel map to compute matrices for each q_inds value
-        let results: Vec<(Vec<i32>, Array2<f64>, Array2<f64>)> = all_q_ind.par_iter().enumerate().map(|(q_idx, q_inds)| {
+        let results: Vec<(Vec<i32>, Array2<c64>, Array2<c64>)> = all_q_ind.par_iter().enumerate().map(|(q_idx, q_inds)| {
             let mut matrix_1 = Array2::zeros((n_eigs, n_eigs));
             let mut matrix_2 = Array2::zeros((n_eigs, n_eigs));
 
@@ -66,17 +65,10 @@ impl LMMatrixElementArray {
                     let vec1 = &e_vecs[idx1];
                     let vec2 = &e_vecs[idx2];
 
-                    let idx1_par = parity_indices[idx1];
-                    let idx2_par = parity_indices[idx2];
-
                     // Calculate the matrix elements using iterators
-                    let (element_1, element_2) = (0..n_rel_par[idx1_par])
-                        .flat_map(|rel_ind1| {
-                            let r_ind1 = rel_ind1 + idx1_par * n_rel_even;
-                            
-                            (0..n_rel_par[idx2_par]).flat_map(move |rel_ind2| {
-                                let r_ind2 = rel_ind2 + idx2_par * n_rel_even;
-
+                    let (element_1, element_2) = (0..n_rel)
+                        .flat_map(|r_ind1| {                            
+                            (0..n_rel).flat_map(move |r_ind2| {
                                 let (mat_element1, mat_element2): (f64,f64);
 
                                 // Get matrix elements
@@ -100,8 +92,8 @@ impl LMMatrixElementArray {
                                 }
 
                                 (0..n_com).map(move |com_ind| {
-                                    let i1 = n_com * rel_ind1 + com_ind;
-                                    let i2 = n_com * rel_ind2 + com_ind;
+                                    let i1 = n_com * r_ind1 + com_ind;
+                                    let i2 = n_com * r_ind2 + com_ind;
                                     let a1 = vec1[i1];
                                     let a2 = vec2[i2];
 
@@ -109,7 +101,7 @@ impl LMMatrixElementArray {
                                 })
                             })
                         })
-                        .fold((0.0, 0.0), |acc, val| (acc.0 + val.0, acc.1 + val.1));
+                        .fold((c64::zero(), c64::zero()), |acc, val| (acc.0 + val.0, acc.1 + val.1));
 
                     matrix_1[[idx1, idx2]] = element_1;
                     matrix_2[[idx1, idx2]] = element_2;
@@ -151,54 +143,20 @@ impl LMMatrixElementArray {
         Self { cos_mat, sin_mat, p_cos_mat }
     }
 
-    fn sort_parities(
-        &self,
-        e_vecs: &Vec<Array1<f64>>,
-        parities: &Array1<i32>,
-        n_com: usize,
-    ) -> ([usize; 2], usize, Vec<usize>) {
-        // Find the number of even and odd parity states more efficiently
-        let mut n_rel_even = 0;
-        let mut n_rel_odd = 0;
-
-        for (idx, &parity) in parities.iter().enumerate() {
-            if parity == 1 && n_rel_even == 0 {
-                n_rel_even = e_vecs[idx].len() / n_com;
-            } else if parity == -1 && n_rel_odd == 0 {
-                n_rel_odd = e_vecs[idx].len() / n_com;
-            }
-
-            // Break early if we've found both
-            if n_rel_even > 0 && n_rel_odd > 0 {
-                break;
-            }
-        }
-
-        let n_rel_par = [n_rel_even, n_rel_odd];
-        let n_eigs = e_vecs.len();
-
-        // Pre-calculate parity indices for all eigenvectors
-        let parity_indices: Vec<usize> = parities.iter().map(|&p| (p == -1) as usize).collect();
-
-        (n_rel_par, n_eigs, parity_indices)
-    }
-
-    // Only returns the cosine term for phonon modes
+    // Only returns the sine term for phonon modes
     pub fn phonon_mat_elements(
         &self,
-        e_vecs: &Vec<Array1<f64>>,
-        parities: &Array1<i32>,
+        e_vecs: &Vec<Array1<c64>>,
         modes: &Vec<BosonMode>,
         mu: f64,
         n_com: usize,
-    ) -> Vec<Array2<f64>>{
+    ) -> Vec<Array2<c64>>{
 
-        // Sort parities
-        let (n_rel_par, n_eigs, parity_indices) = self.sort_parities(e_vecs, parities, n_com);
-        let [n_rel_even, n_rel_odd] = n_rel_par;
+        let n_eigs = e_vecs.len();
+        let n_rel = e_vecs[0].len() / n_com;
 
         // Get Laguerre coefficients for radial integrals
-        let (lag_coeffs, states) = &self.get_laguerre_coeffs(n_rel_even + n_rel_odd);
+        let (lag_coeffs, states) = &self.get_laguerre_coeffs(n_rel);
 
         // Use parallel map to compute matrices for each q_inds value
         modes.par_iter().map(|mode| {
@@ -210,23 +168,16 @@ impl LMMatrixElementArray {
                     let vec1 = &e_vecs[idx1];
                     let vec2 = &e_vecs[idx2];
 
-                    let idx1_par = parity_indices[idx1];
-                    let idx2_par = parity_indices[idx2];
-
                     // Calculate the matrix elements using iterators
-                    let element = (0..n_rel_par[idx1_par])
-                        .flat_map(|rel_ind1| {
-                            let r_ind1 = rel_ind1 + idx1_par * n_rel_even;
-                            
-                            (0..n_rel_par[idx2_par]).flat_map(move |rel_ind2| {
-                                let r_ind2 = rel_ind2 + idx2_par * n_rel_even;
-
+                    let element = (0..n_rel)
+                        .flat_map(|r_ind1| {                            
+                            (0..n_rel).flat_map(move |r_ind2| {
                                 let q = &mode.q;
-                                let mat_element = self.get_cos_tayl(&states[r_ind1], &states[r_ind2], q,  mu, &lag_coeffs);
+                                let mat_element = self.get_sin_tayl(&states[r_ind1], &states[r_ind2], q,  mu, &lag_coeffs);
 
                                 (0..n_com).map(move |com_ind| {
-                                    let i1 = n_com * rel_ind1 + com_ind;
-                                    let i2 = n_com * rel_ind2 + com_ind;
+                                    let i1 = n_com * r_ind1 + com_ind;
+                                    let i2 = n_com * r_ind2 + com_ind;
                                     let a1 = vec1[i1];
                                     let a2 = vec2[i2];
 

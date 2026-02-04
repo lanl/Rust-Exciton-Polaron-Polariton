@@ -1,5 +1,6 @@
 use exciton_2d::{Exciton2DGridSystem, FullHamiltonian};
 use ndarray::{arr1, Array1, Array2, s};
+use num_traits::{One, Zero};
 use std::f64::consts::PI;
 use std::sync::Arc;
 use ndarray_linalg::c64;
@@ -55,16 +56,15 @@ pub struct ExcitonicHamiltonian {
     pub exciton_ham: FullHamiltonian,
     pub n_ex_eig: usize,
     pub n_rel: usize,
-    pub parity: i32,
     pub e_vals: Option<Array1<f64>>,
-    pub e_vecs: Option<Vec<Array1<f64>>>,
+    pub e_vecs: Option<Vec<Array1<num_complex::Complex64>>>,
     pub r_vecs: Option<Array2<f64>>,
     pub parities: Option<Array1<i32>>,
 }
 
 impl ExcitonicHamiltonian {
-    pub fn new(exciton_ham: FullHamiltonian, n_ex_eig: usize, n_rel: usize, parity: i32) -> Self {
-        Self { exciton_ham, n_ex_eig, n_rel, parity, e_vals: None, e_vecs: None, r_vecs: None, parities: None}
+    pub fn new(exciton_ham: FullHamiltonian, n_ex_eig: usize, n_rel: usize) -> Self {
+        Self { exciton_ham, n_ex_eig, n_rel, e_vals: None, e_vecs: None, r_vecs: None, parities: None}
     }
 
     pub fn is_empty(&self) -> bool{
@@ -73,7 +73,7 @@ impl ExcitonicHamiltonian {
 
     pub fn compute_eigenstates(&mut self) {
         let (exciton_energies, e_vecs, _, r_vecs, parities) 
-            = self.exciton_ham.diagonalize_full_hamiltonian(self.n_rel, self.n_ex_eig, self.parity);
+            = self.exciton_ham.diagonalize_full_hamiltonian(self.n_rel, self.n_ex_eig);
         
         self.e_vals = Some(exciton_energies.slice(s![..self.n_ex_eig]).to_owned());
         // timed_println!("Exciton energies: {:?}", self.e_vals);
@@ -84,9 +84,10 @@ impl ExcitonicHamiltonian {
     }
 
     /// Calculates the center-of-mass momentum matrix element P·field_vec
-    pub fn get_p_com(&self, field_vec: &Array1<f64>, diag: bool) -> Array2<f64> {
+    /// 
+    /// Note: Eigenvectors are complex, so we compute <ψ_i|P|ψ_j> = Σ ψ_i* P ψ_j
+    pub fn get_p_com(&self, field_vec: &Array1<f64>, diag: bool) -> Array2<c64> {
         let e_vecs = self.e_vecs.as_ref().expect("Eigenvectors not computed. Call compute_eigenstates() first.");
-        let parities = self.parities.as_ref().expect("Parities not computed. Call compute_eigenstates() first.");
         let kappas= &self.exciton_ham.kappa_vectors;
         let k = &self.exciton_ham.k;
 
@@ -111,14 +112,14 @@ impl ExcitonicHamiltonian {
                 let n_rel = vec1.len() / n_com;
 
                 // Compute P_ii using iterator operations
-                // This is a purely diagonal operator
+                // For complex eigenvectors: <ψ|P|ψ> = Σ |ψ|² P
                 (0 .. n_com).flat_map(|com_ind| {
                     let p = p_dot_unit_cache[com_ind];
                     
                     (0 .. n_rel).map(move |rel_ind| {
                         let i = n_com * rel_ind + com_ind;
                         let a1 = vec1[i];
-                        a1 * a1 * p
+                        a1.conj()* a1 * p  // |ψ|² for complex numbers
                     })
                 }).sum()
             })
@@ -130,14 +131,10 @@ impl ExcitonicHamiltonian {
                 let vec1 = &e_vecs[idx1];
                 let vec2 = &e_vecs[idx2];
 
-                if parities[idx1] != parities[idx2]  {
-                    return 0.0;
-                }
-                
                 let n_rel = vec1.len() / n_com;
 
                 // Compute P_ij using iterator operations
-                // This is a purely diagonal operator
+                // For complex eigenvectors: <ψ_i|P|ψ_j> = Σ ψ_i* P ψ_j
                 (0 .. n_com).flat_map(|com_ind| {
                     let p = p_dot_unit_cache[com_ind];
                     
@@ -145,7 +142,7 @@ impl ExcitonicHamiltonian {
                         let i = n_com * rel_ind + com_ind;
                         let a1 = vec1[i];
                         let a2 = vec2[i];
-                        a1 * a2 * p
+                        (a1.conj() * a2) * p  
                     })
                 }).sum()
             })
@@ -184,7 +181,7 @@ pub struct PPDiagHamiltonian {
     pub photon: Arc<PhotonicHamiltonian>,
     pub phonon: Option<Arc<PhononHamiltonian>>,
     pub k: Vec<f64>,
-    pub int_array: Option<Array1<f64>>,
+    pub int_array: Option<Array1<c64>>,
     pub lm_coupling: f64
 }
 
@@ -216,7 +213,7 @@ impl PPDiagHamiltonian{
             let ex_ind = i / (n_ph + 1);
 
             if ph_ind == 0 {
-                0.0  // No photons, no interaction terms
+                c64::zero()  // No photons, no interaction terms
             } else {
                 // P·q (a† a) / 2 M term (diagonal terms only)
                 let q = &self.photon.photon_modes[ph_ind - 1].q;
@@ -229,15 +226,15 @@ impl PPDiagHamiltonian{
                 // q^2 (a† a)^2 term
                 + q.dot(q) / 2.0 / self.exciton.exciton_ham.m   // (a† a)^2 = 1 for single photon states
             }
-        }).collect::<Array1<f64>>();
+        }).collect::<Array1<c64>>();
 
         self.int_array = Some(int_array);
     }
     
 }
 
-impl ArrayOperator<f64> for PPDiagHamiltonian {
-    fn apply(&self, x: &Array1<f64>) -> Vec<f64> {
+impl ArrayOperator<c64> for PPDiagHamiltonian {
+    fn apply(&self, x: &Array1<c64>) -> Vec<c64> {
         assert!(self.int_array.is_some(), "Interaction array not computed. Call calculate_interaction_array() first.");
         let int_array = self.int_array.as_ref().unwrap();
 
@@ -298,8 +295,8 @@ pub struct PPOffHamiltonian {
     pub lm_coupling: f64,
     pub pn_coupling: f64,
     pub matrix_element_arrays: Option<LMMatrixElementArray>,
-    pub p_c_sin: Option<Vec<Array2<f64>>>,
-    pub p_q: Option<Vec<Array2<f64>>>,
+    pub p_c_sin: Option<Vec<Array2<c64>>>,
+    pub p_q: Option<Vec<Array2<c64>>>,
 }
 
 impl PPOffHamiltonian {
@@ -332,8 +329,8 @@ impl PPOffHamiltonian {
         // let test = cos_mat.clone().into_keys().collect::<Vec<Vec<i32>>>();
         // timed_println!("{:?}",test);
         
-        let mut p_c_sin: Vec<Array2<f64>> = Vec::new();
-        let mut p_q: Vec<Array2<f64>> = Vec::new();
+        let mut p_c_sin: Vec<Array2<c64>> = Vec::new();
+        let mut p_q: Vec<Array2<c64>> = Vec::new();
         (0 .. n_ph-1).for_each(|i| {
             let eps = &self.photon.photon_modes[i].eps;
             let q = &self.photon.photon_modes[i].q;
@@ -396,7 +393,6 @@ impl PPOffHamiltonian {
             matrix_element_arrays = matrix_element_arrays.populate_tay_mat_elements(
                 &all_q_ind, 
                 self.exciton.e_vecs.as_ref().unwrap(), 
-                self.exciton.parities.as_ref().unwrap(),
                 &bosonic_modes, 
                 self.exciton.exciton_ham.kappa_vectors.len(),
                 self.exciton.exciton_ham.rel_ham.mu
@@ -407,8 +403,8 @@ impl PPOffHamiltonian {
 
 }
 
-impl Operator<f64> for PPOffHamiltonian {
-    fn apply(&self, x: &[f64], y: &mut [f64]) {
+impl Operator<c64> for PPOffHamiltonian {
+    fn apply(&self, x: &[c64], y: &mut [c64]) {
         
         assert!(self.matrix_element_arrays.is_some(), "Matrix element arrays not computed. Call calc_matrix_element_arrays() first.");
         assert!(self.p_c_sin.is_some(), "P sin(x) element arrays not computed. Call calc_p_cos_matrix() first.");
@@ -433,16 +429,16 @@ impl Operator<f64> for PPOffHamiltonian {
         let one_over_2m = 1.0 / (2.0 * self.exciton.exciton_ham.m);
 
         // Implement all a and a† terms
-        let y_ph_list: Vec<(usize, f64)> = self.photon.photon_modes.par_iter().enumerate().flat_map(|(mode_i, photon_mode_i)| {
+        let y_ph_list: Vec<(usize, c64)> = self.photon.photon_modes.par_iter().enumerate().flat_map(|(mode_i, photon_mode_i)| {
             let p_c_sin = &p_c_sin_ref[mode_i];
             let p_cos = matrix_element_arrays_ref.p_cos_mat.get(&vec![mode_i as i32]).unwrap();
             let p_q = &p_q_ref[mode_i];
 
-            let mut a_term: Array1<f64>;
-            let mut a_dag_term: Array1<f64>;
-            let mut aa_term: Array1<f64>;
+            let mut a_term: Array1<c64>;
+            let mut a_dag_term: Array1<c64>;
+            let mut aa_term: Array1<c64>;
 
-            let mut local_y: Vec<(usize, f64)> = Vec::new();
+            let mut local_y: Vec<(usize, c64)> = Vec::new();
 
             // Sum over all phonon states
             for pn_ind in 0..n_pn {
@@ -465,7 +461,7 @@ impl Operator<f64> for PPOffHamiltonian {
                     
 
                     let indices: Vec<usize> = (0..n_ex).map(|ex_ind| pn_ind + (mode_i + 1) * n_pn + ex_ind * stride).collect();
-                    let values: Vec<f64> = (a_dag_term + &aa_term).to_vec();
+                    let values: Vec<c64> = (a_dag_term + &aa_term).to_vec();
                     local_y.extend(indices.into_iter().zip(values.into_iter()));
                 }
                     
@@ -477,7 +473,7 @@ impl Operator<f64> for PPOffHamiltonian {
                     
                     // Add to y at photon ground state and phonon in pn_ind
                     let indices: Vec<usize> = (0..n_ex).map(|ex_ind| pn_ind + ex_ind * stride).collect();
-                    let values: Vec<f64> = (a_term).to_vec();
+                    let values: Vec<c64> = (a_term).to_vec();
                     local_y.extend(indices.into_iter().zip(values.into_iter()));
                 }
             }
@@ -511,7 +507,7 @@ impl Operator<f64> for PPOffHamiltonian {
 
                         // Add to y at photon mode_i and phonon in pn_ind
                         let indices: Vec<usize> = (0..n_ex).map(|ex_ind| pn_ind + (mode_i + 1) * n_pn + ex_ind * stride).collect();
-                        let values: Vec<f64> = (aa_term).to_vec();
+                        let values: Vec<c64> = (aa_term).to_vec();
                         local_y.extend(indices.into_iter().zip(values.into_iter()));
                     }
                 }
@@ -524,7 +520,7 @@ impl Operator<f64> for PPOffHamiltonian {
         }).collect();
 
         // Implement all phonon b and b† terms if n_pn > 1
-        let y_pn_list: Vec<(usize, f64)>;
+        let y_pn_list: Vec<(usize, c64)>;
 
         if self.phonon.is_some() && self.pn_coupling.abs() > 1e-12 {
             let phonon_mode_ind: i32 = self.photon.photon_modes.len() as i32;
@@ -538,10 +534,10 @@ impl Operator<f64> for PPOffHamiltonian {
             // println!("{}", disp_mat);
 
             y_pn_list = (0..n_pn-1).into_par_iter().flat_map(|pn_ind| {
-                let sqrt_pn_plus_1 = ((pn_ind + 1) as f64).sqrt();
+                let sqrt_pn_plus_1 = (c64::one() * (pn_ind + 1) as f64).sqrt();
                 let pn_coupling_factor = self.pn_coupling * sqrt_pn_plus_1;
 
-                let mut local_y: Vec<(usize, f64)> = Vec::new();
+                let mut local_y: Vec<(usize, c64)> = Vec::new();
 
                 for ph_ind in 0..n_ph {
                     let pn_dex_start = ph_ind * n_pn + pn_ind;
@@ -557,7 +553,7 @@ impl Operator<f64> for PPOffHamiltonian {
                         
                         // Add to y at phonon pn_ind+1 and photon in ph_ind
                         let indices: Vec<usize> = (0..n_ex).map(|ex_ind| (pn_ind + 1) + ph_ind * n_pn + ex_ind * stride).collect();
-                        let values: Vec<f64> = (b_dag_term).to_vec();
+                        let values: Vec<c64> = (b_dag_term).to_vec();
                         local_y.extend(indices.into_iter().zip(values.into_iter()));
                     }
                     
@@ -571,7 +567,7 @@ impl Operator<f64> for PPOffHamiltonian {
                         
                         // Add to y at phonon pn_ind and photon in ph_ind
                         let indices: Vec<usize> = (0..n_ex).map(|ex_ind| pn_ind + ph_ind * n_pn + ex_ind * stride).collect();
-                        let values: Vec<f64> = (b_term).to_vec();
+                        let values: Vec<c64> = (b_term).to_vec();
                         local_y.extend(indices.into_iter().zip(values.into_iter()));
                     }
                 }
@@ -580,7 +576,7 @@ impl Operator<f64> for PPOffHamiltonian {
             }).collect();
         }
         else {
-            y_pn_list = vec![(0,0.0)]; // No phonon contributions
+            y_pn_list = vec![(0,c64::zero())]; // No phonon contributions
         }
 
         // Combine results from photon and phonon contributions
@@ -647,8 +643,7 @@ impl PolaronPolariton {
         let mut new_exciton = ExcitonicHamiltonian::new(
             ex_ham, 
             self.exciton.n_ex_eig, 
-            self.exciton.n_rel, 
-            self.exciton.parity
+            self.exciton.n_rel
         );
         new_exciton.compute_eigenstates();
         
@@ -668,8 +663,8 @@ impl PolaronPolariton {
 }
 
 
-impl SolverOperator<f64> for PolaronPolariton {
-    fn apply(&self, x: &[f64], y: &mut [f64]) {
+impl SolverOperator<c64> for PolaronPolariton {
+    fn apply(&self, x: &[c64], y: &mut [c64]) {
         // Avoid unnecessary allocation and copying
         let x_arr = Array1::from_shape_fn(x.len(), |i| x[i]);
 
@@ -686,12 +681,12 @@ impl SolverOperator<f64> for PolaronPolariton {
         self.pp_off_ham.apply(x, y);
     }
 
-    fn apply_transpose(&self, x: &[f64], y: &mut [f64]) {
+    fn apply_transpose(&self, x: &[c64], y: &mut [c64]) {
         // Since Hamiltonians are hermitian
         self.apply(x, y)
     }
     
-    fn get_diagonal(&self) -> Vec<f64> {
+    fn get_diagonal(&self) -> Vec<c64> {
         // Get the diagonal elements for preconditioning
         let exciton_diag = self.exciton.form_diagonal();
         let photon_diag = self.pp_diag_ham.photon.form_diagonal();
@@ -744,7 +739,7 @@ impl SolverOperator<f64> for PolaronPolariton {
         }
     }
 
-    fn diagonalize(&self, n_eig: Option<usize>, solve_type: Option<rust_slepc_bindings::EPSType>, initial_guess: Option<&Array2<f64>>) -> (Array1<f64>, Array2<f64>) {
+    fn diagonalize(&self, n_eig: Option<usize>, solve_type: Option<rust_slepc_bindings::EPSType>, initial_guess: Option<&Array2<c64>>) -> (Array1<f64>, Array2<c64>) {
         
         let block_size = 128;
         
@@ -780,7 +775,7 @@ impl SingExWrapper {
         // Initialize Exciton System
         let ex_system = Exciton2DGridSystem::from_config(config.e_config.clone());
         let mut exciton = ExcitonicHamiltonian::new(ex_system.full_ham, 
-            config.n_ex_eig, config.n_rel, 0);
+            config.n_ex_eig, config.n_rel);
         
         exciton.compute_eigenstates();
 
@@ -1078,7 +1073,8 @@ fn compute_dielectric_cache(
                         let a1 = vec1[i1];
                         let a2 = vec2[i2];
 
-                        a1 * a2 * x_rel[[r_ind1,r_ind2]]
+                        // For complex eigenvectors: <ψ_1|x|ψ_2> = Σ ψ_1* x ψ_2
+                        (a1.conj() * a2).re * x_rel[[r_ind1,r_ind2]]
                     })
                 })
             })
@@ -1135,7 +1131,7 @@ fn compute_dielectric_cache(
                     vec0[pp_ind1] * vec1[pp_ind2] * x_element
                 })
             })
-        }).fold(0.0, |acc, val| acc + val)
+        }).fold(c64::zero(), |acc, val| acc + val).norm()
     });
 
     (pp_vals, x_pp)
@@ -1169,8 +1165,8 @@ pub fn get_lm_band_structure_filename(
 pub fn diagonalize_pp_sing_ex(
     pp: &PolaronPolariton, 
     n_eig: usize,
-    initial_vec: Option<&Array2<f64>>
-) -> (Array1<f64>, Array2<f64>) {
+    initial_vec: Option<&Array2<c64>>
+) -> (Array1<f64>, Array2<c64>) {
     
     let block_size = 128;
     
@@ -1219,7 +1215,7 @@ pub fn calculate_band_structure_sing_ex(
     let pp_arc = Arc::new(pp.clone());
     
     // Calculate eigenvalues at each k-point in parallel
-    let eigvals_list: Vec<(usize, Array1<f64>, Array2<f64>)> = k_points.par_iter().enumerate().map(|(idx, k)| {
+    let eigvals_list: Vec<(usize, Array1<f64>, Array2<c64>)> = k_points.par_iter().enumerate().map(|(idx, k)| {
         if k.iter().sum::<f64>().is_nan() {
             panic!("Too few k-points must be at least 2x number of high symmetry points");
         }
