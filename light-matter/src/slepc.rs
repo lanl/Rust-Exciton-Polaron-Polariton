@@ -104,7 +104,6 @@ pub fn diagonalize_slepc<T: SolverOperator<c64>>(
     let n = op.dimension() as c_int;
     
     timed_println!("Creating shell matrix of dimension {} (complex Hermitian)", n);
-    timed_println!("NOTE: PETSc/SLEPc must be compiled with --with-scalar-type=complex");
     
     unsafe {
         // Create shell matrix

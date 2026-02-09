@@ -28,7 +28,7 @@ pub mod band_structure;
 use crate::utils::PPConfig;
 
 pub mod sing_ex;
-pub mod sing_ex_new;
+pub mod lin_op;
 
 pub mod dense_methods;
 
@@ -65,13 +65,13 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     let total_coupling = 0.015 ;  // Coupling strength
     timed_println!("total_coupling = {}", total_coupling);
     let omega_0 = 0.15;    // Photon frequency
-    let n_modes = 8;
+    let n_modes = 23;
     let coupling = total_coupling / (n_modes as f64);
 
     // Define photon modes
     // let qx_values = vec![0.0]; // Photon wavevectors along x
-    let qx_values = Array1::linspace(-0.001, 0.001, n_modes); // Photon wavevectors along x
-    let qy_values = Array1::linspace(-0.001, 0.001, n_modes);
+    let qx_values = Array1::linspace(-0.0015, 0.0015, n_modes); // Photon wavevectors along x
+    let qy_values = Array1::linspace(-0.0015, 0.0015, n_modes);
     let qz = omega_0 / C;
     let n_fock = 2;      // Dimension of Fock space
 
@@ -85,7 +85,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     
 
     // Define phonon parameters
-    let pn_coupling = 0.00005;
+    let pn_coupling = 0.0;
     let pn_omega = 0.0075; // 1500 cm^-1
     let pn_k = arr1(&[0.,0.05]); // 1 nm^1
     let pn_n_fock = 0;
@@ -174,7 +174,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
 
         Method::SingEx => {
             timed_println!("Using Mat-Vec methods for light-matter coupling in single photon limit.");
-            let n_eig = 128;
+            let n_eig = 128+512;
 
             let calculate = true;
                 
@@ -243,13 +243,13 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
     let total_coupling_values = Array1::from_vec(vec![0.0, 0.01, 0.0175]);
 
     let omega_0 = 0.15;    // Photon frequency
-    let n_modes = 23;
+    let n_modes = 16;
     let coupling_values = total_coupling_values /( (n_modes) as f64);
     let qz = omega_0 / C;
 
     // Define photon modes
-    let qx_values = Array1::linspace(-0.0011, 0.0011, n_modes); // Photon wavevectors along x
-    let qy_values = Array1::linspace(-0.0011, 0.0011, n_modes);
+    let qx_values = Array1::linspace(-0.0015, 0.0015, n_modes); // Photon wavevectors along x
+    let qy_values = Array1::linspace(-0.0015, 0.0015, n_modes);
 
     let q_values: Vec<Vector3D> = qx_values.iter().flat_map(|qx| {
         qy_values.iter().map(|qy| {
@@ -265,16 +265,16 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
     
     // Define phonon parameters
     // let pn_coupling = 0.01; // 114 cm^-1
-    // let pn_coupling = 0.004385964912; // 50 cm^-1
+    let pn_coupling = 0.004385964912; // 50 cm^-1
     // let pn_coupling = 0.008771929825; // 100 cm^-1
-    let pn_coupling = 0.0;
+    // let pn_coupling = 0.0;
     let pn_omega = 0.0025; // 500 cm^-1
     // let pn_coupling = 0.0; // 10 cm^-1
     let pn_k = arr1(&[0.,0.05]); // 1 nm^1
-    let pn_n_fock = 1;
+    let pn_n_fock = 4;
 
     // Parameters for dielectric function calculation
-    let n_eig = 512+128;  // Number of eigenstates to use
+    let n_eig = 1024;  // Number of eigenstates to use
     let omegas = Array1::linspace(0.1, 0.25, 100000);  // Frequency range
     let gamma = 5e-5;  // Broadening parameter
 
@@ -534,7 +534,7 @@ fn main() {
     // davidson::davidson_test();
 
     // Choose which function to run
-    let run_mode = "bandstructure"; // Options: "bandstructure", "dielectric_scan"
+    let run_mode = "dielectric_scan"; // Options: "bandstructure", "dielectric_scan"
 
     initialize().expect("Failed to initialize SLEPc");
     

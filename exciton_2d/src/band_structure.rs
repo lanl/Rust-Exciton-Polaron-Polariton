@@ -300,7 +300,7 @@ pub fn calculate_n_colored_band_structure(
         full_ham_local.k = k_point.clone();
         
         // Diagonalize the Hamiltonian
-        let (eigvals, eigvecs, _,_, _parities) = 
+        let (eigvals, eigvecs, _,_) = 
             full_ham_local.diagonalize_full_hamiltonian(n_rel_states, n_bands);
         
         // Calculate n-expectation for each eigenstate
@@ -430,7 +430,7 @@ impl BandStructureCalculator {
         k_point: &[f64],
         n_rel_states: usize,
         n_bands: usize,
-    ) -> (Array1<f64>, Vec<Array1<num_complex::Complex64>>, Array1<i32>) {
+    ) -> (Array1<f64>, Vec<Array1<num_complex::Complex64>>) {
         // Store original K value
         let original_k = self.full_ham.k.clone();
         
@@ -439,7 +439,7 @@ impl BandStructureCalculator {
         full_ham.k = k_point.to_vec();
         
         // Diagonalize the Hamiltonian
-        let (eigvals, eigvecs, _, _, parities) = full_ham.diagonalize_full_hamiltonian(
+        let (eigvals, eigvecs, _, _) = full_ham.diagonalize_full_hamiltonian(
             n_rel_states,
             n_bands,
         );
@@ -448,7 +448,7 @@ impl BandStructureCalculator {
         let mut full_ham = self.full_ham.clone();
         full_ham.k = original_k;
         
-        (eigvals, eigvecs, parities)
+        (eigvals, eigvecs)
     }
     
     /// Calculates the band structure along high-symmetry paths
@@ -475,7 +475,7 @@ impl BandStructureCalculator {
         n_bands: usize,
         v0: f64,
         recalculate_bands: bool,
-    ) -> (Vec<Vec<f64>>, Vec<Array1<f64>>, Vec<Array1<i32>>) {
+    ) -> (Vec<Vec<f64>>, Vec<Array1<f64>>) {
         // Check if we should try to load from file
         let filename = self.get_band_structure_filename(n_points, n_rel_states, n_bands, v0);
         
@@ -595,15 +595,15 @@ impl BandStructureCalculator {
         
         // let _limiter = ThreadLimiter::new("OPENBLAS_NUM_THREADS", "1");
 
-        let (unique_eigvals, unique_parities): (Vec<_>, Vec<_>) = pool.install(|| {
+        let unique_eigvals: Vec<_> = pool.install(|| {
             // Parallelize the computation
             unique_k_points.par_iter()
                 .map(|k_point| {
-                    let (evals, _, pars) = self.calculate_at_k_point(k_point, n_rel_states, n_bands);
+                    let (evals, _) = self.calculate_at_k_point(k_point, n_rel_states, n_bands);
                     progress_bar.inc(1); // Increment the progress bar
-                    (evals, pars)
+                    evals
                 })
-                .unzip()
+                .collect()
         });
 
         // Mark the progress bar as finished
@@ -621,13 +621,11 @@ impl BandStructureCalculator {
         
         // Reconstruct full band structure using symmetry
         let mut eigvals_list = Vec::new();
-        let mut parities_list = Vec::new();
         
         for i in 0..k_points.len() {
             let (unique_idx, _) = k_point_to_unique[&i];
             // For energy eigenvalues, symmetry operations don't change the values
             eigvals_list.push(unique_eigvals[unique_idx].clone());
-            parities_list.push(unique_parities[unique_idx].clone());
         }
         
         // Save the results to file
@@ -637,6 +635,6 @@ impl BandStructureCalculator {
         
         // In a real implementation, we'd serialize to JSON
         
-        (k_points, eigvals_list, parities_list)
+        (k_points, eigvals_list)
     }
 }

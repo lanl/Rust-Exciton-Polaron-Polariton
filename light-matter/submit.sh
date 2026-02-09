@@ -6,11 +6,11 @@
 #SBATCH --partition=general
 #
 #SBATCH --time=8:00:00
-#SBATCH --ntasks=8
-#SBATCH --nodes=1  
+#SBATCH --nodes=4  
 #SBATCH --ntasks-per-node=8
 #SBATCH --cpus-per-task=8           # 8 cores per rank
-#SBATCH --mem=0G
+#SBATCH --mem-per-cpu=3G 
+##SBATCH --qos=long
 
 ulimit -c 0  # Disable core dumps
 

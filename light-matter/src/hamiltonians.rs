@@ -1,7 +1,7 @@
 use std::iter::Sum;
 
 use crate::{utils::{BosonMode, MatrixOps, Sqrt}};
-use num_traits::NumCast;
+use num_traits::{NumCast, One};
 use exciton_2d::FullHamiltonian;
 use ndarray::{Array1, Array2, arr1, s};
 use sprs::TriMat;
@@ -96,6 +96,84 @@ impl<M: MatrixOps> BosonicHamiltonian<M> {
     }
 }
 
+pub struct BosonicHamiltonianSingEx<M: MatrixOps> {
+    pub bosonic_modes: Vec<BosonMode>,
+    _phantom: std::marker::PhantomData<M>,
+}
+
+impl<M: MatrixOps> BosonicHamiltonianSingEx<M> {
+    pub fn new(bosonic_modes: Vec<BosonMode>) -> Self {
+        Self { 
+            bosonic_modes,
+            _phantom: std::marker::PhantomData,
+        }
+    }
+
+    pub fn get_a(&self, mode_i: usize) -> M
+    where 
+        M::Scalar: Sqrt + NumCast + One,
+    {
+        let dim = self.dimension();
+        let mut trimat = TriMat::new((dim, dim));
+        trimat.add_triplet(0, mode_i+1, <M::Scalar>::one());
+        
+        M::from_trimat(&trimat)
+    }
+
+    pub fn get_all_q_ind(&self) -> Vec<Vec<i32>> {
+        let mut all_q_ind: Vec<Vec<i32>> = Vec::new();
+        let n_ph = self.bosonic_modes.len();
+
+        // Single photon modes
+        for i in 0..n_ph {
+            all_q_ind.push(vec![i as i32]);
+        }
+
+        // Pairs of bosonic_modes modes for A^2 terms
+        for i in 0..n_ph {
+            for j in i..n_ph {
+                if i != j {
+                    all_q_ind.push(vec![i as i32, j as i32]);
+                }
+            }
+        }
+
+        all_q_ind
+    }
+
+    pub fn get_adag_a(&self, mode_i: usize) -> M 
+    where 
+        M::Scalar: Sqrt + NumCast,
+    {
+        let a = self.get_a(mode_i);
+        a.transpose().dot(&a)
+    }
+
+    /// Gets the complete photonic Hamiltonian
+    pub fn get_h(&self) -> M 
+    where 
+        M::Scalar: Sqrt + NumCast,
+    {
+        let bosonic_modes = &self.bosonic_modes;
+
+        // Handle empty vector case
+        if bosonic_modes.is_empty() {
+            return M::eye(1);
+        }
+
+        // Sum Hamiltonians for each mode
+        bosonic_modes.iter().enumerate().map(|(mode_i, mode)| {
+            self.get_adag_a(mode_i).scale(<M::Scalar as NumCast>::from(mode.omega).unwrap())
+            })
+            .reduce(|acc, h_ph_sing| acc.add(&h_ph_sing))
+            .unwrap()
+    }
+
+    pub fn dimension (&self) -> usize {
+        self.bosonic_modes.len() + 1
+    }
+}
+
 pub struct ExcitonicHamiltonian <M: MatrixOps> {
     pub exciton_ham: FullHamiltonian,
     pub n_ex_eig: usize,
@@ -103,7 +181,6 @@ pub struct ExcitonicHamiltonian <M: MatrixOps> {
     pub e_vals: Option<Array1<f64>>,
     pub e_vecs: Option<Vec<Array1<num_complex::Complex64>>>,
     pub r_vecs: Option<Array2<f64>>,
-    pub parities: Option<Array1<i32>>,
     _phantom: std::marker::PhantomData<M>,
 }
 
@@ -115,17 +192,16 @@ impl<M: MatrixOps> ExcitonicHamiltonian<M> {
             e_vals: None, 
             e_vecs: None, 
             r_vecs: None, 
-            parities: None,
             _phantom: std::marker::PhantomData,
         }
     }
 
     pub fn is_empty(&self) -> bool{
-        self.e_vals.is_none() || self.e_vals.is_none() || self.r_vecs.is_none() || self.parities.is_none()
+        self.e_vals.is_none() || self.e_vals.is_none() || self.r_vecs.is_none()
     }
 
     pub fn compute_eigenstates(&mut self) {
-        let (exciton_energies, e_vecs, _, r_vecs, parities) 
+        let (exciton_energies, e_vecs, _, r_vecs) 
             = self.exciton_ham.diagonalize_full_hamiltonian(self.n_rel, self.n_ex_eig);
         
         self.e_vals = Some(exciton_energies.slice(s![..self.n_ex_eig]).to_owned());
@@ -133,7 +209,6 @@ impl<M: MatrixOps> ExcitonicHamiltonian<M> {
 
         self.e_vecs = Some(e_vecs[0..self.n_ex_eig].to_vec());
         self.r_vecs = Some(r_vecs);
-        self.parities = Some(parities.slice(s![..self.n_ex_eig]).to_owned());
     }
 
     pub fn get_p_com(&self, field_vec: &Array1<f64>, diag: bool) -> M
@@ -141,7 +216,6 @@ impl<M: MatrixOps> ExcitonicHamiltonian<M> {
         M::Scalar: NumCast + Sum,
     {
         let e_vecs = self.e_vecs.as_ref().expect("Eigenvectors not computed. Call compute_eigenstates() first.");
-        let parities = self.parities.as_ref().expect("Parities not computed. Call compute_eigenstates() first.");
         let kappas= &self.exciton_ham.kappa_vectors;
         let k = &self.exciton_ham.k;
 
@@ -184,10 +258,6 @@ impl<M: MatrixOps> ExcitonicHamiltonian<M> {
                 // For each pair of eigenvectors
                 let vec1 = &e_vecs[idx1];
                 let vec2 = &e_vecs[idx2];
-
-                if parities[idx1] != parities[idx2]  {
-                    return 0.0;
-                }
                 
                 let n_rel = vec1.len() / n_com;
 

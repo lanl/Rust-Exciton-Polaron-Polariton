@@ -126,7 +126,6 @@ pub fn plot_spectrum(eigvals: &Array1<f64>, k: &[f64], save_path: Option<&str>) 
 pub fn plot_band_structure(
     k_points: &[Vec<f64>],
     eigvals_list: &[Array1<f64>],
-    parities_list: &[Array1<i32>],
     a0: f64,
     save_path: Option<&str>,
     _show: bool,
@@ -204,8 +203,7 @@ pub fn plot_band_structure(
         for band_idx in 0..eigvals_list[0].len() {
             for k_idx in 0..x.len() - 1 {
                 // Get parity value for this segment
-                let parity_val = (parities_list[k_idx][band_idx] + parities_list[k_idx+1][band_idx]) / 2;
-                let color = if parity_val > 0 { BLUE } else { RED };
+                let color = BLACK;
                 
                 // Plot the segment with the appropriate color
                 chart.draw_series(LineSeries::new(

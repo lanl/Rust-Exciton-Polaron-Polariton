@@ -340,7 +340,7 @@ impl Exciton2DGridSystem {
         &self,
         n_rel_states: usize,
         k_eigvals: usize,
-    ) -> (Array1<f64>, Vec<Array1<num_complex::Complex64>>, Array1<f64>, Array2<f64>, Array1<i32>) {
+    ) -> (Array1<f64>, Vec<Array1<num_complex::Complex64>>, Array1<f64>, Array2<f64>) {
         self.full_ham.diagonalize_full_hamiltonian(n_rel_states, k_eigvals)
     }
     
@@ -382,7 +382,7 @@ impl Exciton2DGridSystem {
         n_rel_states: usize,
         n_bands: usize,
         recalculate_bands: bool,
-    ) -> (Vec<Vec<f64>>, Vec<Array1<f64>>, Vec<Array1<i32>>) {
+    ) -> (Vec<Vec<f64>>, Vec<Array1<f64>>) {
         self.band_calc.calculate_band_structure(
             n_points,
             n_rel_states,
@@ -403,10 +403,9 @@ impl Exciton2DGridSystem {
         &self,
         k_points: &[Vec<f64>],
         eigvals_list: &[Array1<f64>],
-        parities_list: &[Array1<i32>],
         save_path: Option<&str>,
     ) {
-        plot_band_structure(k_points, eigvals_list, parities_list, self.a0, save_path, false);
+        plot_band_structure(k_points, eigvals_list, self.a0, save_path, false);
     }
 
     /// Calculates the band structure with n-expectation values

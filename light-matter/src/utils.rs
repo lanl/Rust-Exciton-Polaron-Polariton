@@ -1128,3 +1128,36 @@ macro_rules! impl_matrix_ops_lin_op {
 }
 
 impl_matrix_ops_lin_op!(c64);
+
+// Implement std::ops::Add for ComposedOperator to enable + syntax
+impl std::ops::Add for ComposedOperator<c64> {
+    type Output = Self;
+    
+    fn add(self, other: Self) -> Self::Output {
+        MatrixOps::add(&self, &other)
+    }
+}
+
+impl std::ops::Add<&ComposedOperator<c64>> for ComposedOperator<c64> {
+    type Output = Self;
+    
+    fn add(self, other: &ComposedOperator<c64>) -> Self::Output {
+        MatrixOps::add(&self, other)
+    }
+}
+
+impl std::ops::Add<ComposedOperator<c64>> for &ComposedOperator<c64> {
+    type Output = ComposedOperator<c64>;
+    
+    fn add(self, other: ComposedOperator<c64>) -> Self::Output {
+        MatrixOps::add(self, &other)
+    }
+}
+
+impl std::ops::Add for &ComposedOperator<c64> {
+    type Output = ComposedOperator<c64>;
+    
+    fn add(self, other: &ComposedOperator<c64>) -> Self::Output {
+        MatrixOps::add(self, other)
+    }
+}

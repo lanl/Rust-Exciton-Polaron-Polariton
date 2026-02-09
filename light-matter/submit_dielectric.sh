@@ -5,14 +5,14 @@
 #SBATCH --error myjob_%j.err
 #SBATCH --partition=general
 #
-###SBATCH --time=2-00:00:00
-#SBATCH --time=8:00:00
+#SBATCH --time=2-00:00:00
+###SBATCH --time=8:00:00
 #SBATCH --ntasks=3
 #SBATCH --nodes=3  
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=64           # 64 cores per rank
 #SBATCH --mem-per-cpu=3G             # 3GB per CPU (192GB total per node)
-###SBATCH --qos=long
+#SBATCH --qos=long
 
 ulimit -c 0  # Disable core dumps
 

@@ -59,20 +59,19 @@ pub struct ExcitonicHamiltonian {
     pub e_vals: Option<Array1<f64>>,
     pub e_vecs: Option<Vec<Array1<num_complex::Complex64>>>,
     pub r_vecs: Option<Array2<f64>>,
-    pub parities: Option<Array1<i32>>,
 }
 
 impl ExcitonicHamiltonian {
     pub fn new(exciton_ham: FullHamiltonian, n_ex_eig: usize, n_rel: usize) -> Self {
-        Self { exciton_ham, n_ex_eig, n_rel, e_vals: None, e_vecs: None, r_vecs: None, parities: None}
+        Self { exciton_ham, n_ex_eig, n_rel, e_vals: None, e_vecs: None, r_vecs: None}
     }
 
     pub fn is_empty(&self) -> bool{
-        self.e_vals.is_none() || self.e_vals.is_none() || self.r_vecs.is_none() || self.parities.is_none()
+        self.e_vals.is_none() || self.e_vals.is_none() || self.r_vecs.is_none()
     }
 
     pub fn compute_eigenstates(&mut self) {
-        let (exciton_energies, e_vecs, _, r_vecs, parities) 
+        let (exciton_energies, e_vecs, _, r_vecs) 
             = self.exciton_ham.diagonalize_full_hamiltonian(self.n_rel, self.n_ex_eig);
         
         self.e_vals = Some(exciton_energies.slice(s![..self.n_ex_eig]).to_owned());
@@ -80,7 +79,6 @@ impl ExcitonicHamiltonian {
 
         self.e_vecs = Some(e_vecs[0..self.n_ex_eig].to_vec());
         self.r_vecs = Some(r_vecs);
-        self.parities = Some(parities.slice(s![..self.n_ex_eig]).to_owned());
     }
 
     /// Calculates the center-of-mass momentum matrix element P·field_vec
@@ -982,30 +980,10 @@ fn compute_dielectric_cache(
     // Get <0|x|n> matrix elements in the exciton basis
     
     // Calculate the matrix elements using iterators
-    let parities = pp.exciton.parities.as_ref().unwrap();
     let e_vecs = pp.exciton.e_vecs.as_ref().unwrap();
     let n_com = pp.exciton.exciton_ham.kappa_vectors.len();
     let n_rel = pp_config.n_rel;
     let n_ex_eig = pp_config.n_ex_eig;
-
-    let mut n_rel_even = 0;
-    let mut n_rel_odd = 0;
-    for (idx, &parity) in parities.iter().enumerate() {
-        if parity == 1 && n_rel_even == 0 {
-            n_rel_even = e_vecs[idx].len() / n_com;
-        } else if parity == -1 && n_rel_odd == 0 {
-            n_rel_odd = e_vecs[idx].len() / n_com;
-        }
-
-        // Break early if we've found both
-        if n_rel_even > 0 && n_rel_odd > 0 {
-            break;
-        }
-    }
-    let n_rel_par = [n_rel_even, n_rel_odd];
-
-    // Pre-calculate parity indices for all eigenvectors -> Odd = 1, Even = 0
-    let parity_indices: Vec<usize> = parities.iter().map(|&p| (p == -1) as usize).collect();
 
     let x_rel = &Array2::from_shape_fn((n_rel,n_rel), |(r_ind1, r_ind2)| {
         pp.pp_off_ham.matrix_element_arrays.as_ref().unwrap().get_x(&states[r_ind1], &states[r_ind2], mu, &lag_coeffs)
@@ -1014,58 +992,15 @@ fn compute_dielectric_cache(
     timed_println!("<x> for Relative Coordinate:");
     println!("{}", PrettyArray2(&x_rel, 4));
 
-    // Get n, m for even and odd states
-    let mut odd_par_states = Vec::new();
-    let mut even_par_states = Vec::new();
-
-    states.iter().for_each(|(n,m)| { 
-        if m.abs() % 2 == 1 {
-            odd_par_states.push((*n, *m));
-        }
-        else if m.abs() % 2 == 0 {
-            even_par_states.push((*n, *m));
-        }
-     });
-
-     println!("odd_par_states = {:?}", odd_par_states);
-     println!("even_par_states = {:?}", even_par_states);
-
-
-
-    let rel_idx_converter = |(rel_par_idx, par): (usize,usize)| {
-
-        if par == 1 {
-            let state = odd_par_states[rel_par_idx];
-
-            let r_idx = states.iter().position(|&s| s == state).unwrap();
-            return r_idx
-        }
-        else {
-            let state = even_par_states[rel_par_idx];
-
-            let r_idx = states.iter().position(|&s| s == state).unwrap();
-            return r_idx
-        }
-    };
-
     // Get <x> in the Exciton basis
     let x_exc = &Array2::from_shape_fn((n_ex_eig,n_ex_eig) , |(idx1, idx2)| {
             let vec1 = &e_vecs[idx1];
             let vec2 = &e_vecs[idx2];
 
-            let idx1_par = parity_indices[idx1];
-            let idx2_par = parity_indices[idx2];
-
-            // if idx1_par == idx2_par {
-            //     return 0.0
-            // }
-
             // Calculate the matrix elements using iterators
-            (0..n_rel_par[idx1_par]).flat_map(|rel_ind1| {
-                let r_ind1 = rel_idx_converter((rel_ind1,idx1_par));
+            (0..n_rel).flat_map(|rel_ind1| {
                 
-                (0..n_rel_par[idx2_par]).flat_map(move |rel_ind2| {
-                    let r_ind2 = rel_idx_converter((rel_ind2,idx2_par));
+                (0..n_rel).flat_map(move |rel_ind2| {
 
                     (0..n_com).map(move |com_ind| {
                         let i1 = n_com * rel_ind1 + com_ind;
@@ -1074,7 +1009,7 @@ fn compute_dielectric_cache(
                         let a2 = vec2[i2];
 
                         // For complex eigenvectors: <ψ_1|x|ψ_2> = Σ ψ_1* x ψ_2
-                        (a1.conj() * a2).re * x_rel[[r_ind1,r_ind2]]
+                        (a1.conj() * a2).re * x_rel[[rel_ind1,rel_ind2]]
                     })
                 })
             })

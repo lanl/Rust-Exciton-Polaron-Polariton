@@ -147,7 +147,7 @@ fn scan_parameters(args: &Args) {
             }
             
             // Diagonalize the full Hamiltonian
-            let (eigvals, _, _, _, _) = system.diagonalize_full_hamiltonian(
+            let (eigvals, _, _, _) = system.diagonalize_full_hamiltonian(
                 args.n_rel_states,
                 args.n_bands
             );
@@ -159,7 +159,7 @@ fn scan_parameters(args: &Args) {
             
             let start_time = Instant::now();
             // Calculate and plot band structure
-            let (k_points, eigvals_list, parities_list) = system.calculate_band_structure(
+            let (k_points, eigvals_list) = system.calculate_band_structure(
                 args.n_k,
                 args.n_rel_states,
                 args.n_bands,
@@ -171,7 +171,7 @@ fn scan_parameters(args: &Args) {
             println!("Band structure calculation completed in {:.2?}", elapsed);
             
             let band_path = format!("{}/band_structure_a0{}_v0{}.png", args.output_dir, a0, v0);
-            system.plot_band_structure(&k_points, &eigvals_list, &parities_list, Some(&band_path));
+            system.plot_band_structure(&k_points, &eigvals_list, Some(&band_path));
         }
     }
 }

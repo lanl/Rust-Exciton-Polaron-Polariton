@@ -45,7 +45,7 @@ fn main() {
     );
     
     // Calculate band structure
-    let (k_points, eigvals_list, parities_list) = system.calculate_band_structure(
+    let (k_points, eigvals_list) = system.calculate_band_structure(
         30,  // n_points
         9,   // n_rel_states
         16,  // n_bands
@@ -56,7 +56,6 @@ fn main() {
     system.plot_band_structure(
         &k_points,
         &eigvals_list,
-        &parities_list,
         Some("output_figures/band_structure.png")
     );
     

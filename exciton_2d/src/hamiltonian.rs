@@ -622,7 +622,7 @@ impl FullHamiltonian {
         &self,
         n_rel_states: usize,
         k_eigvals: usize,
-    ) -> (Array1<f64>, Vec<Array1<Complex64>>, Array1<f64>, Array2<f64>, Array1<i32>) {
+    ) -> (Array1<f64>, Vec<Array1<Complex64>>, Array1<f64>, Array2<f64>) {
         if self.verbose {
             info!("Building complex Hermitian Hamiltonian with -i*sin matrix elements");
         }
@@ -649,16 +649,12 @@ impl FullHamiltonian {
                     eigvecs_list.push(eigvecs.slice(ndarray::s![.., i]).to_owned());
                 }
                 
-                // Parities are not meaningful for the full eigenstates with sine coupling
-                // We return zeros as placeholders
-                let parities = Array1::zeros(n_eigvals);
-                
                 if self.verbose {
                     info!("Diagonalization completed in {:.2} seconds.", start_time.elapsed().as_secs_f64());
                     info!("First 5 eigenvalues: {:?}", eigvals.slice(ndarray::s![..std::cmp::min(5, n_eigvals)]));
                 }
                 
-                (eigvals, eigvecs_list, rel_eigvals, rel_eigvecs, parities)
+                (eigvals, eigvecs_list, rel_eigvals, rel_eigvecs)
             },
             Err(e) => {
                 // Log detailed error information
@@ -672,13 +668,12 @@ impl FullHamiltonian {
                 for _ in 0..k_eigvals {
                     eigvecs_list.push(Array1::from_elem(h_full.nrows(), Complex64::new(0.0, 0.0)));
                 }
-                let parities = Array1::zeros(k_eigvals);
                 
                 if self.verbose {
                     warn!("Using zeros as placeholder for failed diagonalization");
                 }
                 
-                (eigvals, eigvecs_list, rel_eigvals, rel_eigvecs, parities)
+                (eigvals, eigvecs_list, rel_eigvals, rel_eigvecs)
             }
         }
     }

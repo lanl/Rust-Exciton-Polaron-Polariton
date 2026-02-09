@@ -405,14 +405,15 @@ pub fn calculate_color_band_structure_mpi_simple(
     for (global_idx, k) in my_k_points.iter() {
         pp.update_k(k.clone());
 
-        // Use warm start with only a small subset of previous eigenvectors
-        // IMPORTANT: Only pass 5 initial vectors to avoid over-constraining the solver
-        // Passing too many vectors can lead to noisy results
-        let initial_guess_subset = prev_eigvecs.as_ref().map(|vecs| {
-            let n_init = 5.min(vecs.ncols());
-            vecs.slice(s![.., 0..n_init]).to_owned()
-        });
-        let (eigvals, eigvecs) = diagonalize_pp_sing_ex(&pp, n_eig, initial_guess_subset.as_ref()); 
+        // // Use warm start with only a small subset of previous eigenvectors
+        // // IMPORTANT: Only pass 5 initial vectors to avoid over-constraining the solver
+        // // Passing too many vectors can lead to noisy results
+        // let initial_guess_subset = prev_eigvecs.as_ref().map(|vecs| {
+        //     let n_init = 5.min(vecs.ncols());
+        //     vecs.slice(s![.., 0..n_init]).to_owned()
+        // });
+        // let (eigvals, eigvecs) = diagonalize_pp_sing_ex(&pp, n_eig, initial_guess_subset.as_ref()); 
+        let (eigvals, eigvecs) = diagonalize_pp_sing_ex(&pp, n_eig, None); 
 
         
         timed_println!("Calculating photonic character");

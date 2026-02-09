@@ -1,0 +1,268 @@
+use ndarray::{Array1, Array2, s};
+use num_traits::Zero;
+use std::f64::consts::PI;
+use ndarray_linalg::c64;
+use crate::timed_println;
+use std::iter::Sum;
+
+use crate::utils::{MatrixOps, PPConfig, PrettyArray2, SolverOperator, Sqrt};
+use crate::hamiltonians::{PPHamiltonian};
+
+/// Generates a filename for the cached diagonalization data (pp_vals and x_pp)
+pub fn get_dielectric_cache_filename<M>(
+    pp: &PPHamiltonian<M>,
+    pp_config: &PPConfig,
+    save_dir: &str,
+    n_eig: usize
+) -> String 
+where M: MatrixOps
+{
+    format!(
+        "{}/dielectric_cache_a0{}_V0{}_nrel{}_lmcoup{}_nmodes{}_pncoup{}_npn{}_neig{}.bin",
+        save_dir,
+        pp_config.e_config.a0,
+        pp_config.e_config.v0,
+        pp_config.n_rel,
+        pp_config.lm_coupling,
+        pp.polariton.photon.bosonic_modes.len(),
+        pp_config.pn_coupling,
+        pp_config.pn_n_fock,
+        n_eig
+    )
+}
+
+/// Generates a filename for the dielectric function data
+pub fn get_dielectric_function_filename<M>(
+    pp: &PPHamiltonian<M>,
+    pp_config: &PPConfig,
+    save_dir: &str,
+    n_eig: usize,
+    gamma: f64
+) -> String 
+where M: MatrixOps
+{
+    format!(
+        "{}/dielectric_a0{}_V0{}_nrel{}_lmcoup{}_nmodes{}_pncoup{}_npn{}_neig{}_gamma{:.1e}.dat",
+        save_dir,
+        pp_config.e_config.a0,
+        pp_config.e_config.v0,
+        pp_config.n_rel,
+        pp_config.lm_coupling,
+        pp.polariton.photon.bosonic_modes.len(),
+        pp_config.pn_coupling,
+        pp_config.pn_n_fock,
+        n_eig,
+        gamma
+    )
+}
+
+/// Save the cached diagonalization data (pp_vals and x_pp)
+pub fn save_dielectric_cache(
+    filename: &str,
+    pp_vals: &Array1<f64>,
+    x_pp: &Array1<f64>
+) -> std::io::Result<()> {
+    use std::fs::File;
+    use std::io::Write;
+    
+    let mut file = File::create(filename)?;
+    
+    // Write dimensions
+    let n_eig = pp_vals.len();
+    file.write_all(&(n_eig as u64).to_le_bytes())?;
+    
+    // Write pp_vals
+    for &val in pp_vals.iter() {
+        file.write_all(&val.to_le_bytes())?;
+    }
+    
+    // Write x_pp
+    for &val in x_pp.iter() {
+        file.write_all(&val.to_le_bytes())?;
+    }
+    
+    Ok(())
+}
+
+/// Load the cached diagonalization data (pp_vals and x_pp)
+pub fn load_dielectric_cache(
+    filename: &str
+) -> std::io::Result<(Array1<f64>, Array1<f64>)> {
+    use std::fs::File;
+    use std::io::Read;
+    
+    let mut file = File::open(filename)?;
+    
+    // Read dimensions
+    let mut buf = [0u8; 8];
+    file.read_exact(&mut buf)?;
+    let n_eig = u64::from_le_bytes(buf) as usize;
+    
+    // Read pp_vals
+    let mut pp_vals = Array1::<f64>::zeros(n_eig);
+    for i in 0..n_eig {
+        file.read_exact(&mut buf)?;
+        pp_vals[i] = f64::from_le_bytes(buf);
+    }
+    
+    // Read x_pp
+    let mut x_pp = Array1::<f64>::zeros(n_eig);
+    for i in 0..n_eig {
+        file.read_exact(&mut buf)?;
+        x_pp[i] = f64::from_le_bytes(buf);
+    }
+    
+    Ok((pp_vals, x_pp))
+}
+
+/// Calculate the dielectric function from cached or newly computed pp_vals and x_pp
+pub fn get_dielectric_function<M>(
+    pp_config: &PPConfig, 
+    pp: &mut PPHamiltonian<M>, 
+    n_eig: usize, 
+    omegas: Array1<f64>, 
+    gamma: f64, 
+    save_dir: &str,
+    use_cached: bool
+) -> (Array1<f64>, Array1<f64>) 
+where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum
+{
+    timed_println!("Calculating dielectric function with {} eigenstates, gamma={:.1e}", n_eig, gamma);
+
+    let cache_filename = get_dielectric_cache_filename(pp, pp_config, save_dir, n_eig);
+    
+    // Try to load cached data if requested
+    let (pp_vals, x_pp) = if use_cached && std::path::Path::new(&cache_filename).exists() {
+        timed_println!("Loading cached diagonalization data from {}", cache_filename);
+        match load_dielectric_cache(&cache_filename) {
+            Ok((vals, x)) => {
+                timed_println!("Successfully loaded cached data");
+                (vals, x)
+            },
+            Err(e) => {
+                timed_println!("Failed to load cache ({}), recalculating...", e);
+                let (vals, x) = compute_dielectric_cache(pp_config, pp, n_eig);
+                // Save the newly computed cache
+                if let Err(e) = save_dielectric_cache(&cache_filename, &vals, &x) {
+                    timed_println!("Warning: Failed to save cache: {}", e);
+                }
+                (vals, x)
+            }
+        }
+    } else {
+        timed_println!("Computing diagonalization data...");
+        let (vals, x) = compute_dielectric_cache(pp_config, pp, n_eig);
+        // Save the cache
+        timed_println!("Saving diagonalization cache to {}", cache_filename);
+        if let Err(e) = save_dielectric_cache(&cache_filename, &vals, &x) {
+            timed_println!("Warning: Failed to save cache: {}", e);
+        }
+        (vals, x)
+    };
+
+    timed_println!("Relative energies = {:?}", pp_vals.slice(s![0..50.min(pp_vals.len())]).to_owned() - pp_vals[0]);
+
+    // Compute dielectric function from cached data
+    let dielectric_function: Array1<c64> = Array1::from_shape_fn(omegas.len(), |idx| {
+        let omega = omegas[idx];
+
+        let result: c64 = x_pp.iter().enumerate().map(|(pp_ind, x_pp_val)| {
+            x_pp_val * x_pp_val / (omega - (pp_vals[pp_ind] - pp_vals[0]) + c64::i() * gamma)
+        }).sum();
+
+        1.0 + 4.0 * PI * result
+    });
+
+    (dielectric_function.map(|&x| x.re), dielectric_function.map(|&x| x.im))
+}
+
+/// Helper function to compute the expensive diagonalization and matrix elements
+fn compute_dielectric_cache<M>(
+    pp_config: &PPConfig,
+    pp: &mut PPHamiltonian<M>,
+    n_eig: usize,
+) -> (Array1<f64>, Array1<f64>) 
+where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum
+{
+
+    // Build Hamiltonian
+    let h_pp: M = pp.build_pp_hamiltonian(None);
+
+    // Lag Coeffs for Relative coordinates
+    let (lag_coeffs, states) = &pp.polariton.matrix_elements.get_laguerre_coeffs(pp.polariton.exciton.n_rel);
+    let mu = pp.polariton.exciton.exciton_ham.rel_ham.mu;
+
+    // Get <0|x|n> matrix elements in the exciton basis
+    
+    // Calculate the matrix elements using iterators
+    let e_vecs = pp.polariton.exciton.e_vecs.as_ref().unwrap();
+    let n_com = pp.polariton.exciton.exciton_ham.kappa_vectors.len();
+    let n_rel = pp_config.n_rel;
+    let n_ex_eig = pp_config.n_ex_eig;
+
+    let x_rel = &Array2::from_shape_fn((n_rel,n_rel), |(r_ind1, r_ind2)| {
+        pp.polariton.matrix_elements.get_x(&states[r_ind1], &states[r_ind2], mu, &lag_coeffs)
+    });
+
+    timed_println!("<x> for Relative Coordinate:");
+    println!("{}", PrettyArray2(&x_rel, 4));
+
+    // Get <x> in the Exciton basis
+    let x_exc = &Array2::from_shape_fn((n_ex_eig,n_ex_eig) , |(idx1, idx2)| {
+            let vec1 = &e_vecs[idx1];
+            let vec2 = &e_vecs[idx2];
+
+            // Calculate the matrix elements using iterators
+            (0..n_rel).flat_map(|rel_ind1| {
+                
+                (0..n_rel).flat_map(move |rel_ind2| {
+
+                    (0..n_com).map(move |com_ind| {
+                        let i1 = n_com * rel_ind1 + com_ind;
+                        let i2 = n_com * rel_ind2 + com_ind;
+                        let a1 = vec1[i1];
+                        let a2 = vec2[i2];
+
+                        a1 * a2 * x_rel[[rel_ind1,rel_ind2]]
+                    })
+                })
+            })
+            .fold(c64::zero(), |acc, val| acc + val)
+    });
+
+    timed_println!("|<x>| for exciton:");
+    let x_exc_mag: Array2<f64> = x_exc.mapv(|val| val.norm());
+    println!("{}", PrettyArray2(&x_exc_mag, 4));
+
+    timed_println!("Exciton eigenvalues transitions");
+    let e_vals_transition = pp.polariton.exciton.e_vals.as_ref().unwrap() - pp.polariton.exciton.e_vals.as_ref().unwrap()[0];
+    println!("{}", e_vals_transition);
+    
+
+    // Diagonalize at the Gamma point
+    let (pp_vals, pp_vecs) = h_pp.diagonalize(Some(n_eig), None, None);
+
+    // get <Psi|x|Psi_0> in the PP basis
+    let n_ph = pp_config.q_values.len() + 1;
+    let n_pn = pp_config.pn_n_fock;
+
+    let vec0 = pp_vecs.column(0);
+
+    let x_pp = Array1::from_shape_fn(n_eig, |idx| {
+        let vec1 = pp_vecs.column(idx);
+
+        (0.. n_ex_eig).flat_map(|ex_ind1| {
+            (0 .. n_ex_eig).flat_map(move |ex_ind2|{
+                let x_element = x_exc[[ex_ind1,ex_ind2]];
+                (0 .. n_ph*n_pn).map(move | bos_ind | {
+                    let pp_ind1 = ex_ind1 * n_ph*n_pn + bos_ind;
+                    let pp_ind2 = ex_ind2 * n_ph*n_pn + bos_ind;
+
+                    vec0[pp_ind1] * vec1[pp_ind2] * x_element
+                })
+            })
+        }).fold(c64::zero(), |acc, val| acc + val).norm()
+    });
+
+    (pp_vals, x_pp)
+}
