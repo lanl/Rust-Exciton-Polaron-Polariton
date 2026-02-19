@@ -4,16 +4,16 @@ use ndarray::{Array1, Array2};
 use std::path::Path;
 use indicatif::{ProgressBar, ProgressStyle};
 use ndarray_linalg::c64;
-use crate::hamiltonians::{LMHamiltonian, PPHamiltonian};
+use crate::hamiltonians::{Boson, LMHamiltonian, PPHamiltonian};
 
-pub fn diagonalize_lm_ham_dense(light_matter: &mut LMHamiltonian<Array2<c64>>) 
+pub fn diagonalize_lm_ham_dense<B: Boson<Array2<c64>>>(light_matter: &mut LMHamiltonian<Array2<c64>, B>) 
     -> (Array1<f64> , Array2<c64>){
     let h_lm = light_matter.build_lm_hamiltonian(None);
 
     h_lm.eigh(ndarray_linalg::UPLO::Upper).unwrap()
 }
 
-pub fn diagonalize_pp_ham_dense(polaron_polariton: &mut PPHamiltonian<Array2<c64>>)
+pub fn diagonalize_pp_ham_dense<B: Boson<Array2<c64>>>(polaron_polariton: &mut PPHamiltonian<Array2<c64>, B>)
     -> (Array1<f64> , Array2<c64>){
     let h_pp = polaron_polariton.build_pp_hamiltonian(None);
 
@@ -22,17 +22,17 @@ pub fn diagonalize_pp_ham_dense(polaron_polariton: &mut PPHamiltonian<Array2<c64
 
 
 /// Calculator for band structure of light-matter coupled systems
-pub struct BandStructureCalculatorLM {
-    pub light_matter: LMHamiltonian<Array2<c64>>,      // Light-matter system
+pub struct BandStructureCalculatorLM<B: Boson<Array2<c64>>> {
+    pub light_matter: LMHamiltonian<Array2<c64>, B>,      // Light-matter system
     pub a0: f64,                        // Lattice constant
     pub v0: f64,                        // Potential strength
     pub save_dir: String,               // Directory to save results
     pub sym_points: Vec<Vec<f64>>       // High-symmetry points in k-space
 }
 
-impl BandStructureCalculatorLM {
+impl <B: Boson<Array2<c64>>> BandStructureCalculatorLM<B> {
     /// Creates a new band structure calculator
-    pub fn new(light_matter: LMHamiltonian<Array2<c64>>, a0: f64, v0: f64, save_dir: String, sym_points: Vec<Vec<f64>>) -> Self {
+    pub fn new(light_matter: LMHamiltonian<Array2<c64>, B>, a0: f64, v0: f64, save_dir: String, sym_points: Vec<Vec<f64>>) -> Self {
         Self { light_matter: light_matter, a0: a0, v0: v0, save_dir: save_dir, sym_points: sym_points}
     }
 
@@ -61,7 +61,7 @@ impl BandStructureCalculatorLM {
             self.light_matter.exciton.exciton_ham.kappa_vectors.len(),
             n_points,
             self.light_matter.coupling,
-            self.light_matter.photon.bosonic_modes.len(),
+            self.light_matter.photon.boson.get_modes().len(),
         )
     }
     

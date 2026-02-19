@@ -6,16 +6,16 @@ use crate::timed_println;
 use std::iter::Sum;
 
 use crate::utils::{MatrixOps, PPConfig, PrettyArray2, SolverOperator, Sqrt};
-use crate::hamiltonians::{PPHamiltonian};
+use crate::hamiltonians::{PPHamiltonian, Boson};
 
 /// Generates a filename for the cached diagonalization data (pp_vals and x_pp)
-pub fn get_dielectric_cache_filename<M>(
-    pp: &PPHamiltonian<M>,
+pub fn get_dielectric_cache_filename<M,B>(
+    pp: &PPHamiltonian<M,B>,
     pp_config: &PPConfig,
     save_dir: &str,
     n_eig: usize
 ) -> String 
-where M: MatrixOps
+where M: MatrixOps, B: Boson<M>
 {
     format!(
         "{}/dielectric_cache_a0{}_V0{}_nrel{}_lmcoup{}_nmodes{}_pncoup{}_npn{}_neig{}.bin",
@@ -24,7 +24,7 @@ where M: MatrixOps
         pp_config.e_config.v0,
         pp_config.n_rel,
         pp_config.lm_coupling,
-        pp.polariton.photon.bosonic_modes.len(),
+        pp.polariton.photon.boson.get_modes().len(),
         pp_config.pn_coupling,
         pp_config.pn_n_fock,
         n_eig
@@ -32,14 +32,14 @@ where M: MatrixOps
 }
 
 /// Generates a filename for the dielectric function data
-pub fn get_dielectric_function_filename<M>(
-    pp: &PPHamiltonian<M>,
+pub fn get_dielectric_function_filename<M,B>(
+    pp: &PPHamiltonian<M,B>,
     pp_config: &PPConfig,
     save_dir: &str,
     n_eig: usize,
     gamma: f64
 ) -> String 
-where M: MatrixOps
+where M: MatrixOps, B: Boson<M>
 {
     format!(
         "{}/dielectric_a0{}_V0{}_nrel{}_lmcoup{}_nmodes{}_pncoup{}_npn{}_neig{}_gamma{:.1e}.dat",
@@ -48,7 +48,7 @@ where M: MatrixOps
         pp_config.e_config.v0,
         pp_config.n_rel,
         pp_config.lm_coupling,
-        pp.polariton.photon.bosonic_modes.len(),
+        pp.polariton.photon.boson.get_modes().len(),
         pp_config.pn_coupling,
         pp_config.pn_n_fock,
         n_eig,
@@ -116,16 +116,16 @@ pub fn load_dielectric_cache(
 }
 
 /// Calculate the dielectric function from cached or newly computed pp_vals and x_pp
-pub fn get_dielectric_function<M>(
+pub fn get_dielectric_function<M,B>(
     pp_config: &PPConfig, 
-    pp: &mut PPHamiltonian<M>, 
+    pp: &mut PPHamiltonian<M,B>, 
     n_eig: usize, 
     omegas: Array1<f64>, 
     gamma: f64, 
     save_dir: &str,
     use_cached: bool
 ) -> (Array1<f64>, Array1<f64>) 
-where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum
+where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum, B: Boson<M>
 {
     timed_println!("Calculating dielectric function with {} eigenstates, gamma={:.1e}", n_eig, gamma);
 
@@ -177,12 +177,12 @@ where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum
 }
 
 /// Helper function to compute the expensive diagonalization and matrix elements
-fn compute_dielectric_cache<M>(
+fn compute_dielectric_cache<M,B>(
     pp_config: &PPConfig,
-    pp: &mut PPHamiltonian<M>,
+    pp: &mut PPHamiltonian<M,B>,
     n_eig: usize,
 ) -> (Array1<f64>, Array1<f64>) 
-where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum
+where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum, B: Boson<M>
 {
 
     // Build Hamiltonian

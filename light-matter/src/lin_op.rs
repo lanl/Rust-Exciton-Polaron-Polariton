@@ -1,12 +1,12 @@
 // Import statements for the various libraries used in this code
 use ndarray::{Array1, Array2};
-use crate::hamiltonians::{LMHamiltonian, PPHamiltonian};
+use crate::hamiltonians::{Boson, LMHamiltonian, PPHamiltonian};
 use crate::utils::{ComposedOperator, SolverOperator};
 use rust_slepc_bindings::EPSType;
 use ndarray_linalg::c64;
 
-pub fn diagonalize_lm_ham_linop(
-    light_matter: &mut LMHamiltonian<ComposedOperator<c64>>, 
+pub fn diagonalize_lm_ham_linop<B: Boson<ComposedOperator<c64>>>(
+    light_matter: &mut LMHamiltonian<ComposedOperator<c64>, B>, 
     n_eig: Option<usize>, 
     solve_type: Option<EPSType>, 
     initial_guess: Option<&Array2<c64>>) 
@@ -16,8 +16,8 @@ pub fn diagonalize_lm_ham_linop(
     h_lm.diagonalize(n_eig, solve_type, initial_guess)
 }
 
-pub fn diagonalize_pp_ham_linop(
-    polaron_polariton: &mut PPHamiltonian<ComposedOperator<c64>>, 
+pub fn diagonalize_pp_ham_linop<B: Boson<ComposedOperator<c64>>>(
+    polaron_polariton: &mut PPHamiltonian<ComposedOperator<c64>, B>, 
     n_eig: Option<usize>, 
     solve_type: Option<EPSType>, 
     initial_guess: Option<&Array2<c64>>)

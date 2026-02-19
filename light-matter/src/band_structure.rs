@@ -15,18 +15,18 @@ use ndarray_linalg::c64;
 use crate::timed_println;
 
 use crate::utils::{MatrixOps, PPConfig, SolverOperator, Sqrt};
-use crate::hamiltonians::{PPHamiltonian};
+use crate::hamiltonians::{PPHamiltonian, Boson};
 
 /// Calculate the photonic character of an eigenstate
 /// Returns a value between 0 (purely excitonic) and 1 (purely photonic)
-pub fn calculate_photonic_character<M>(
-    pp: &PPHamiltonian<M>,
+pub fn calculate_photonic_character<M, B>(
+    pp: &PPHamiltonian<M,B>,
     eigenvector: &Array1<c64>
 ) -> f64  
-where M: MatrixOps
+where M: MatrixOps, B: Boson<M>
 {
     let n_ex = pp.polariton.exciton.n_ex_eig;
-    let n_ph = pp.polariton.photon.bosonic_modes.len() + 1; // +1 for ground state
+    let n_ph = pp.polariton.photon.dimension(); // +1 for ground state
     let n_pn = pp.phonon.dimension();
     
     // Calculate the total probability in photonic states (excluding ground state)
@@ -105,8 +105,8 @@ impl ColorBandData {
     }
 }
 
-pub fn load_color_band_structure<M>(
-    pp: &PPHamiltonian<M>,
+pub fn load_color_band_structure<M, B: Boson<M>>(
+    pp: &PPHamiltonian<M, B>,
     n_k_points: usize,
     n_eig: usize,
     pp_config: &PPConfig,
@@ -127,7 +127,7 @@ where M: MatrixOps
         pp_config.n_bands,
         n_k_points,
         pp_config.lm_coupling,
-        pp.polariton.photon.bosonic_modes.len(),
+        pp.polariton.photon.boson.get_modes().len(),
         pp_config.pn_coupling,
         pp_config.pn_n_fock,
         n_eig
@@ -148,8 +148,8 @@ where M: MatrixOps
 /// MPI might already be initialized by other libraries (like PETSc/SLEPc).
 /// 
 /// It falls back to environment variables if the mpi crate has issues.
-pub fn calculate_color_band_structure_mpi_simple<M>(
-    pp: &mut PPHamiltonian<M>,
+pub fn calculate_color_band_structure_mpi_simple<M,B>(
+    pp: &mut PPHamiltonian<M,B>,
     n_k_points: usize,
     n_eig: usize,
     sym_points: &Vec<Vec<f64>>,
@@ -157,7 +157,7 @@ pub fn calculate_color_band_structure_mpi_simple<M>(
     use_cached: bool,
     zoomed: bool
 ) -> (Vec<Vec<f64>>, Vec<Array1<f64>>, Vec<Vec<f64>>) 
-where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum
+where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum, B: Boson<M>
 {
     use std::env;
 
@@ -222,7 +222,7 @@ where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum
         pp_config.n_bands,
         n_k_points,
         pp_config.lm_coupling,
-        pp.polariton.photon.bosonic_modes.len(),
+        pp.polariton.photon.boson.get_modes().len(),
         pp_config.pn_coupling,
         pp_config.pn_n_fock,
         n_eig

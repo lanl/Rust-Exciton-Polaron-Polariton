@@ -1009,35 +1009,19 @@ fn compute_dielectric_cache(
                         let a2 = vec2[i2];
 
                         // For complex eigenvectors: <ψ_1|x|ψ_2> = Σ ψ_1* x ψ_2
-                        (a1.conj() * a2).re * x_rel[[rel_ind1,rel_ind2]]
+                        (a1.conj() * a2) * x_rel[[rel_ind1,rel_ind2]]
                     })
                 })
             })
-            .fold(0.0, |acc, val| acc + val)
+            .fold(c64::zero(), |acc, val| acc + val)
     });
 
-
-    // // Debug: Get the Relative Coordinate EV distribution in Exciton EV
-
-    // let e_vecs_rel = &Array2::from_shape_fn( (n_rel, n_ex_eig), |(rel_idx, ex_idx)| {
-
-    //     let e_vec = &e_vecs[ex_idx];
-    //     let vec_par = parity_indices[ex_idx];
-
-    //     let r_ind = rel_idx + vec_par * n_rel_odd;
-
-    //     (0..n_com).map(|com_idx| {
-    //         let idx = n_com * r_ind + com_idx;
-
-    //         e_vec[idx]
-    //     }).sum::<f64>()
-    // });
-    // timed_println!("Relative Coordinate EV distribution in Exciton EV:");
-    // println!("{}", PrettyArray2(&e_vecs_rel, 4));
-
+    let x_exc_norm = &Array2::from_shape_fn((n_ex_eig,n_ex_eig), |(idx1, idx2)| {
+        x_exc[[idx1,idx2]].norm()
+    });
 
     timed_println!("<x> for exciton:");
-    println!("{}", PrettyArray2(&x_exc, 4));
+    println!("{}", PrettyArray2(x_exc_norm, 4));
 
     timed_println!("Exciton eigenvalues transitions");
     let e_vals_transition = pp.exciton.e_vals.as_ref().unwrap() - pp.exciton.e_vals.as_ref().unwrap()[0];
@@ -1068,6 +1052,9 @@ fn compute_dielectric_cache(
             })
         }).fold(c64::zero(), |acc, val| acc + val).norm()
     });
+
+    // timed_println!("PP |<x>|");
+    // println!("{}", &x_pp);
 
     (pp_vals, x_pp)
 }

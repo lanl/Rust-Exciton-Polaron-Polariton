@@ -155,13 +155,32 @@ pub fn diagonalize_slepc<T: SolverOperator<c64>>(
         unsafe extern "C" {
             fn EPSSetFromOptions(eps: rust_slepc_bindings::EPS) -> c_int;
             fn EPSSetUp(eps: rust_slepc_bindings::EPS) -> c_int;
+            fn MatAssemblyBegin(mat: Mat, type_: c_int) -> c_int;
+            fn MatAssemblyEnd(mat: Mat, type_: c_int) -> c_int;
+        }
+        
+        // Assemble the shell matrix before using it
+        const MAT_FINAL_ASSEMBLY: c_int = 0;
+        let assembly_result = MatAssemblyBegin(a, MAT_FINAL_ASSEMBLY);
+        if assembly_result != 0 {
+            timed_println!("Warning: MatAssemblyBegin returned error code {}", assembly_result);
+        }
+        let assembly_result = MatAssemblyEnd(a, MAT_FINAL_ASSEMBLY);
+        if assembly_result != 0 {
+            timed_println!("Warning: MatAssemblyEnd returned error code {}", assembly_result);
         }
         
         // Apply options and set up the solver
         // Note: This may print error messages about missing optional features (BV types, etc.)
         // but these are non-fatal and SLEPc will fall back to available alternatives
-        EPSSetFromOptions(solver.eps);
-        EPSSetUp(solver.eps);
+        let opts_result = EPSSetFromOptions(solver.eps);
+        if opts_result != 0 {
+            timed_println!("Warning: EPSSetFromOptions returned error code {}", opts_result);
+        }
+        let setup_result = EPSSetUp(solver.eps);
+        if setup_result != 0 {
+            timed_println!("Warning: EPSSetUp returned error code {}", setup_result);
+        }
     }
     
     // Set initial guess if provided

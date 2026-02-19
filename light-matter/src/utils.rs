@@ -13,6 +13,47 @@ use ndarray_linalg::{Eigh, c64};
 use crate::timed_println;
 use crate::slepc::diagonalize_slepc;
 
+/// Helper trait for converting values, with special handling for complex numbers
+pub trait ConvertFrom<T> {
+    fn convert_from(val: T) -> Option<Self> where Self: Sized;
+}
+
+// Implement for f64 using NumCast
+impl<T: NumCast> ConvertFrom<T> for f64 {
+    fn convert_from(val: T) -> Option<Self> {
+        NumCast::from(val)
+    }
+}
+
+// Implement for c64 - identity conversion
+impl ConvertFrom<c64> for c64 {
+    fn convert_from(val: c64) -> Option<Self> {
+        Some(val) // Identity conversion
+    }
+}
+
+// Implement for c64 from f64
+impl ConvertFrom<f64> for c64 {
+    fn convert_from(val: f64) -> Option<Self> {
+        Some(c64::new(val, 0.0))
+    }
+}
+
+// Implement for c64 from other numeric types via f64
+macro_rules! impl_convert_from_for_c64 {
+    ($($t:ty),*) => {
+        $(
+            impl ConvertFrom<$t> for c64 {
+                fn convert_from(val: $t) -> Option<Self> {
+                    Some(c64::new(val as f64, 0.0))
+                }
+            }
+        )*
+    };
+}
+
+impl_convert_from_for_c64!(i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize, f32);
+
 
 // Speed of light in atomic units
 const C: f64 = 137.036;
@@ -317,7 +358,9 @@ pub trait MatrixOps: Clone {
         + One 
         + NumCast
         + std::ops::Add<Output = Self::Scalar>
-        + std::ops::Mul<Output = Self::Scalar>;
+        + std::ops::Mul<Output = Self::Scalar>
+        + ConvertFrom<Self::Scalar>
+        + ConvertFrom<f64>;
 
     /// Create an identity matrix
     fn eye(n: usize) -> Self;
@@ -337,7 +380,8 @@ pub trait MatrixOps: Clone {
     /// Get from diagonal values
     fn from_diag<T>(diags: &[T]) -> Self 
         where
-            T: Clone + NumCast + Zero + Copy;
+            T: Clone + NumCast + Zero + Copy,
+            Self::Scalar: ConvertFrom<T>;
 
     /// Matrix Multiplication
     fn dot(&self, other:&Self) -> Self;
@@ -350,10 +394,23 @@ pub trait MatrixOps: Clone {
 
     fn scale<T>(&self, scalar: T) -> Self 
         where
-            T: Clone + NumCast + Zero;
+            T: Clone + NumCast + Zero,
+            Self::Scalar: ConvertFrom<T>;
 
     fn from_dense<T>(dense: &Array2<T>) -> Self
         where T: Clone + NumCast + Zero,;
+    
+    /// Sum multiple matrices efficiently
+    /// Default implementation uses pairwise addition, but can be overridden
+    fn sum(matrices: Vec<Self>) -> Self 
+    where 
+        Self: Sized,
+    {
+        if matrices.is_empty() {
+            panic!("Cannot sum empty list of matrices");
+        }
+        matrices.into_iter().reduce(|acc, m| acc.add(&m)).unwrap()
+    }
 
 }
 
@@ -385,17 +442,17 @@ macro_rules! impl_matrix_ops_dense {
             }
 
             fn dot(&self, other:&Self) -> Self {
-                self.dot(other)
+                ndarray::linalg::Dot::dot(self,other)
             }
 
             fn from_diag<T>(diags: &[T]) -> Self 
             where
                 T: Clone + NumCast + Zero + Copy,
-                Self::Scalar: NumCast + Zero 
+                Self::Scalar: ConvertFrom<T>
             {
                 Array2::from_diag(
                     &diags.into_iter().map(|val| {
-                        <Self::Scalar as NumCast>::from(*val).unwrap()
+                        <Self::Scalar as ConvertFrom<T>>::convert_from(*val).unwrap()
                     }).collect::<Array1<Self::Scalar>>()
                 )
             }
@@ -422,8 +479,9 @@ macro_rules! impl_matrix_ops_dense {
             fn scale<T>(&self, scalar: T) -> Self 
             where
                 T: Clone + NumCast + Zero,
+                Self::Scalar: ConvertFrom<T>
             {
-                self * <Self::Scalar as NumCast>::from(scalar).unwrap()
+                self * <Self::Scalar as ConvertFrom<T>>::convert_from(scalar).unwrap()
             }
 
             fn from_dense<T>(dense: &Array2<T>) -> Self 
@@ -471,14 +529,15 @@ macro_rules! impl_matrix_ops_sparse {
 
             fn from_diag<T>(diags: &[T]) -> Self 
             where
-                T: Clone + NumCast + Zero + Copy
+                T: Clone + NumCast + Zero + Copy,
+                Self::Scalar: ConvertFrom<T>
             {
                 let n = diags.len();
                 let mut tri_mat = TriMat::new((n, n));
                 
                 diags.iter().enumerate().for_each(|(i, &val)|{
                     if !val.is_zero() {
-                        tri_mat.add_triplet(i, i, <Self::Scalar as NumCast>::from(val).unwrap());
+                        tri_mat.add_triplet(i, i, <Self::Scalar as ConvertFrom<T>>::convert_from(val).unwrap());
                     }
                 });
 
@@ -497,10 +556,12 @@ macro_rules! impl_matrix_ops_sparse {
 
             fn scale<T>(&self, scalar: T) -> Self 
             where
-                T: Clone + NumCast + Zero
+                T: Clone + NumCast + Zero,
+                Self::Scalar: ConvertFrom<T>
+
             {
                 // For sparse matrices, we need to scale element-wise
-                let scalar_converted = <Self::Scalar as NumCast>::from(scalar).unwrap();
+                let scalar_converted = <Self::Scalar as ConvertFrom<T>>::convert_from(scalar).unwrap();
                 self.map(|x| x * scalar_converted)
             }
             
@@ -583,8 +644,9 @@ impl SolverOperator<c64> for CsMatOperator {
     }
 
     fn apply_transpose(&self, x: &[c64], y: &mut [c64]) {
-        // Apply matrix-vector product
-        sprs::prod::mul_acc_mat_vec_csr(self.matrix.transpose_view(), x, y);
+        // transpose_view() returns CSC format, but mul_acc_mat_vec_csr expects CSR
+        // Use the CSC-specific function instead
+        sprs::prod::mul_acc_mat_vec_csc(self.matrix.transpose_view(), x, y);
     }
 
     fn get_diagonal(&self) -> Vec<c64> {
@@ -626,8 +688,8 @@ impl DenseOperator {
 impl SolverOperator<c64> for DenseOperator {
     fn apply(&self, x: &[c64], y: &mut [c64]) {
         // Apply matrix-vector product
-        let x_arr = Array1::from_iter(x.iter().map(|a| *a));
-        let result = self.matrix.dot(&x_arr);
+        let x_arr = Array1::from_iter(x.iter().copied());
+        let result = ndarray::linalg::Dot::dot(&self.matrix, &x_arr);
         y.iter_mut().zip(result.iter()).for_each(|(y_i, r_i)| {
             *y_i = *r_i
         });
@@ -635,8 +697,8 @@ impl SolverOperator<c64> for DenseOperator {
     
     fn apply_transpose(&self, x: &[c64], y: &mut [c64]) {
         // Apply matrix-vector product
-        let x_arr = Array1::from_iter(x.iter().map(|a| *a));
-        let result = self.matrix.t().dot(&x_arr);
+        let x_arr = Array1::from_iter(x.iter().copied());
+        let result = ndarray::linalg::Dot::dot(&self.matrix.t(), &x_arr);
         y.iter_mut().zip(result.iter()).for_each(|(y_i, r_i)| {
             *y_i = *r_i
         });
@@ -667,6 +729,10 @@ pub enum ComposedOperator<T: Clone> {
     
     /// Sum of two operators: (A + B)x = Ax + Bx
     Add(Box<ComposedOperator<T>>, Box<ComposedOperator<T>>),
+    
+    /// Sum of multiple operators: (A + B + C + ...)x = Ax + Bx + Cx + ...
+    /// This avoids creating a deep tree of binary Add nodes
+    Sum(Vec<Box<ComposedOperator<T>>>),
 
     /// Matrix multiplication of two operators: ABx = A(Bx)
     Dot(Box<ComposedOperator<T>>, Box<ComposedOperator<T>>),
@@ -696,11 +762,25 @@ impl<T: Clone + num_traits::Zero + std::ops::Add<Output = T> + std::ops::Mul<Out
         ComposedOperator::Base(Arc::new(op))
     }
     
+    /// Create a sum of multiple operators
+    /// This is more efficient than chaining binary Add operations
+    pub fn sum(ops: Vec<ComposedOperator<T>>) -> Self {
+        if ops.is_empty() {
+            // Return a zero operator - need to know dimension
+            panic!("Cannot create sum of empty operator list");
+        } else if ops.len() == 1 {
+            ops.into_iter().next().unwrap()
+        } else {
+            ComposedOperator::Sum(ops.into_iter().map(Box::new).collect())
+        }
+    }
+    
     /// Get the dimension of the operator
     pub fn dimension(&self) -> usize {
         match self {
             ComposedOperator::Base(op) => op.dimension(),
             ComposedOperator::Add(a, _) => a.dimension(),
+            ComposedOperator::Sum(ops) => ops.first().map(|op| op.dimension()).unwrap_or(0),
             ComposedOperator::Dot(a, _) => a.dimension(),
             ComposedOperator::ScalarMul(_, a) => a.dimension(),
             ComposedOperator::Kron(a, b) => a.dimension() * b.dimension(),
@@ -731,6 +811,27 @@ impl<T: Clone + num_traits::Zero + std::ops::Add<Output = T> + std::ops::Mul<Out
                 b.apply_transpose(x, &mut temp);
                 for i in 0..y.len() {
                     y[i] = y[i] + temp[i];
+                }
+            }
+            
+            ComposedOperator::Sum(ops) => {
+                // y = A₁ᵀx + A₂ᵀx + ... + Aₙᵀx
+                if ops.is_empty() {
+                    y.fill(T::zero());
+                    return;
+                }
+                
+                ops[0].apply_transpose(x, y);
+                
+                if ops.len() > 1 {
+                    let mut temp = vec![T::zero(); y.len()];
+                    for op in &ops[1..] {
+                        temp.fill(T::zero());
+                        op.apply_transpose(x, &mut temp);
+                        for i in 0..y.len() {
+                            y[i] = y[i] + temp[i];
+                        }
+                    }
                 }
             }
             
@@ -850,6 +951,28 @@ impl<T: Clone + num_traits::Zero + std::ops::Add<Output = T> + std::ops::Mul<Out
                 }
             }
             
+            ComposedOperator::Sum(ops) => {
+                // y = A₁x + A₂x + ... + Aₙx
+                // Apply first operator directly to y, then accumulate the rest
+                if ops.is_empty() {
+                    y.fill(T::zero());
+                    return;
+                }
+                
+                ops[0].apply(x, y);
+                
+                if ops.len() > 1 {
+                    let mut temp = vec![T::zero(); y.len()];
+                    for op in &ops[1..] {
+                        temp.fill(T::zero());
+                        op.apply(x, &mut temp);
+                        for i in 0..y.len() {
+                            y[i] = y[i] + temp[i];
+                        }
+                    }
+                }
+            }
+            
             ComposedOperator::Dot(a, b) => {
                 // y = ABx
                 let mut temp = vec![T::zero(); y.len()];
@@ -955,6 +1078,21 @@ impl<T: Clone + num_traits::Zero + std::ops::Add<Output = T> + std::ops::Mul<Out
                 diag_a.iter().zip(diag_b.iter())
                     .map(|(&a, &b)| a + b)
                     .collect()
+            }
+            
+            ComposedOperator::Sum(ops) => {
+                if ops.is_empty() {
+                    return vec![];
+                }
+                
+                let mut diag = ops[0].get_diagonal();
+                for op in &ops[1..] {
+                    let op_diag = op.get_diagonal();
+                    for (i, &val) in op_diag.iter().enumerate() {
+                        diag[i] = diag[i] + val;
+                    }
+                }
+                diag
             }
 
             ComposedOperator::Dot(a, b) => {
@@ -1070,10 +1208,11 @@ macro_rules! impl_matrix_ops_lin_op {
             }
             
             fn scale<T>(&self, scalar: T) -> Self 
-                    where
-                        T: Clone + NumCast + Zero
+            where
+                T: Clone + NumCast + Zero,
+                Self::Scalar: ConvertFrom<T>
             {
-                ComposedOperator::ScalarMul(<Self::Scalar as NumCast>::from(scalar).unwrap(), Box::new(self.clone()))
+                ComposedOperator::ScalarMul(<Self::Scalar as ConvertFrom<T>>::convert_from(scalar).unwrap(), Box::new(self.clone()))
             }
             
             fn shape(&self) -> (usize, usize) {
@@ -1083,10 +1222,12 @@ macro_rules! impl_matrix_ops_lin_op {
             
             fn from_diag<T>(diags: &[T]) -> Self 
             where
-                T: Clone + NumCast + Zero + Copy
+                T: Clone + NumCast + Zero + Copy,
+                Self::Scalar: ConvertFrom<T>
             {
                 ComposedOperator::Diagonal(diags.iter().map(|val| {
-                    <Self::Scalar as NumCast>::from(*val).unwrap()
+                    <Self::Scalar as ConvertFrom<T>>::convert_from(*val)
+                        .expect("Failed to convert diagonal value")
                 }).collect::<Vec<Self::Scalar>>())
             }
             
@@ -1122,6 +1263,10 @@ macro_rules! impl_matrix_ops_lin_op {
                 // Matrix-matrix product as composition
                 // (AB)x = A(Bx)
                 ComposedOperator::Dot(Box::new(self.clone()), Box::new(other.clone()))
+            }
+            
+            fn sum(matrices: Vec<Self>) -> Self {
+                ComposedOperator::sum(matrices)
             }
         }
     };

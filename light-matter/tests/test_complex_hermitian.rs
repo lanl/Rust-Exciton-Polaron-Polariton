@@ -93,7 +93,6 @@ impl light_matter::utils::SolverOperator<c64> for PauliXOperator {
 }
 
 #[test]
-#[ignore] // Only run when PETSc is compiled with complex support
 fn test_diagonal_hermitian() {
     use light_matter::slepc::diagonalize_slepc;
     use rust_slepc_bindings::EPSType;
@@ -128,7 +127,6 @@ fn test_diagonal_hermitian() {
 }
 
 #[test]
-#[ignore] // Only run when PETSc is compiled with complex support
 fn test_pauli_x() {
     use light_matter::slepc::diagonalize_slepc;
     use rust_slepc_bindings::EPSType;
@@ -161,7 +159,6 @@ fn test_pauli_x() {
 }
 
 #[test]
-#[ignore] // Only run when PETSc is compiled with complex support
 fn test_hermiticity_check() {
     use light_matter::slepc::verify_hermitian;
     use light_matter::utils::SolverOperator;

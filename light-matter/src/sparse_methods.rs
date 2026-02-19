@@ -5,7 +5,7 @@ use ndarray_linalg::c64;
 
 use sprs::CsMat;
 
-use crate::{hamiltonians::{LMHamiltonian, PPHamiltonian}, utils::{CsMatOperator}};
+use crate::{hamiltonians::{Boson, LMHamiltonian, PPHamiltonian}, utils::CsMatOperator};
 
 use rust_slepc_bindings::EPSType;
 
@@ -24,8 +24,8 @@ pub fn diagonalize_sparse(
     diagonalize_slepc(&op, n_eig, block_size, solve_type, initial_guess)
 }
 
-pub fn diagonalize_lm_ham_sparse(
-    light_matter: &mut LMHamiltonian<CsMat<c64>>, 
+pub fn diagonalize_lm_ham_sparse<B: Boson<CsMat<c64>>>(
+    light_matter: &mut LMHamiltonian<CsMat<c64>, B>, 
     n_eigenvalues: usize,
     initial_guess: Option<&Array2<c64>>) 
     -> (Array1<f64> , Array2<c64>){
@@ -35,8 +35,8 @@ pub fn diagonalize_lm_ham_sparse(
     diagonalize_sparse(h_lm, n_eigenvalues, 128, None, initial_guess) 
 }
 
-pub fn diagonalize_pp_ham_sparse(
-    polaron_polariton: &mut PPHamiltonian<CsMat<c64>>, 
+pub fn diagonalize_pp_ham_sparse<B: Boson<CsMat<c64>>>(
+    polaron_polariton: &mut PPHamiltonian<CsMat<c64>, B>, 
     n_eigenvalues: usize,
     initial_guess: Option<&Array2<c64>>) 
     -> (Array1<f64> , Array2<c64>){
@@ -46,17 +46,17 @@ pub fn diagonalize_pp_ham_sparse(
 }
 
 /// Calculator for band structure of light-matter coupled systems
-pub struct BandStructureCalculatorLM {
-    pub light_matter: LMHamiltonian<CsMat<c64>>,      // Light-matter system
+pub struct BandStructureCalculatorLM<B: Boson<CsMat<c64>>> {
+    pub light_matter: LMHamiltonian<CsMat<c64>, B>,      // Light-matter system
     pub a0: f64,                        // Lattice constant
     pub v0: f64,                        // Potential strength
     pub save_dir: String,               // Directory to save results
     pub sym_points: Vec<Vec<f64>>       // High-symmetry points in k-space
 }
 
-impl BandStructureCalculatorLM {
+impl<B: Boson<CsMat<c64>>> BandStructureCalculatorLM<B> {
     /// Creates a new band structure calculator
-    pub fn new(light_matter: LMHamiltonian<CsMat<c64>>, a0: f64, v0: f64, save_dir: String, sym_points: Vec<Vec<f64>>) -> Self {
+    pub fn new(light_matter: LMHamiltonian<CsMat<c64>, B>, a0: f64, v0: f64, save_dir: String, sym_points: Vec<Vec<f64>>) -> Self {
         Self { light_matter: light_matter, a0: a0, v0: v0, save_dir: save_dir, sym_points: sym_points}
     }
 
@@ -85,7 +85,7 @@ impl BandStructureCalculatorLM {
             self.light_matter.exciton.exciton_ham.kappa_vectors.len(),
             n_points,
             self.light_matter.coupling,
-            self.light_matter.photon.bosonic_modes.len(),
+            self.light_matter.photon.boson.get_modes().len(),
         )
     }
     

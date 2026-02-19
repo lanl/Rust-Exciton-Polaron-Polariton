@@ -400,7 +400,7 @@ pub fn calculate_color_band_structure_mpi_simple(
     
     // Calculate eigenvalues and photonic character for this rank's k-points
     let mut local_results: Vec<(usize, Array1<f64>, Vec<f64>)> = Vec::with_capacity(my_k_points.len());
-    let mut prev_eigvecs: Option<Array2<c64>> = None;
+    // let mut prev_eigvecs: Option<Array2<c64>> = None;
 
     for (global_idx, k) in my_k_points.iter() {
         pp.update_k(k.clone());
@@ -421,7 +421,7 @@ pub fn calculate_color_band_structure_mpi_simple(
             .map(|i| calculate_photonic_character(&pp, &eigvecs.column(i).to_owned()))
             .collect();
         
-        prev_eigvecs = Some(eigvecs);
+        // prev_eigvecs = Some(eigvecs);
         local_results.push((*global_idx, eigvals, photonic_character));
 
         // Calculate ETA on rank 0
