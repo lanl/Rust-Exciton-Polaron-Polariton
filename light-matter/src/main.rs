@@ -47,7 +47,8 @@ const C: f64 = 137.036;
 pub enum Method {
     Sparse,
     Dense,
-    SingEx,
+    LinOp,
+    SingExLegacy,
 }
 
 fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
@@ -64,7 +65,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     // Light-matter coupling parameters
     let total_coupling = 0.015 ;  // Coupling strength
     timed_println!("total_coupling = {}", total_coupling);
-    let omega_0 = 0.15;    // Photon frequency
+    let omega_0 = 0.24;    // Photon frequency
     let n_modes = 11;
     let coupling = total_coupling / (n_modes as f64);
 
@@ -172,18 +173,9 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
                 Some("disp_plot.png"), false, v0, coupling);
         },
 
-        Method::SingEx => {
-            timed_println!("Using Mat-Vec methods for light-matter coupling in single photon limit.");
+        Method::LinOp => {
             let n_eig = 64;
-
-            // let calculate = true;
-                
-            // let zoomed = false;
-
-            // let (k_points_color, eigvals_list_color, photonic_character_list);
-
             let start_time = Instant::now();
-
 
             // Diagonalization test:
             timed_println!("Creating PPHamiltonian from config...");
@@ -232,42 +224,57 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
             //      band_structure::calculate_color_band_structure_mpi_simple(&mut pp, n_k_points, n_eig, &sym_points, &pp_config, false, zoomed);
             // timed_println!("Calculated Band Structure in {:?}", Instant::now().duration_since(time1));
 
-            // let mut pp_wrapper = sing_ex::SingExWrapper::new(pp_config.clone());
-            // pp_wrapper.generate_pp();
-            // let mut pp = pp_wrapper.polaron_polariton.unwrap();
+        }
 
-            // if calculate {
-            //     timed_println!("Calculating {} eigenstates", n_eig);
+        Method::SingExLegacy => {
+            timed_println!("Using Mat-Vec methods for light-matter coupling in single photon limit.");
+            let n_eig = 64;
 
-            //     let time1 = Instant::now();
-            //     let gen_time = time1.duration_since(start_time);
-            //     timed_println!("Precomputed matrix elements in {:?}", gen_time);
-                            
-            //     // Calculate and plot color-coded band structure
-            //     timed_println!("Calculating color-coded band structure...");
-            //     (k_points_color, eigvals_list_color, photonic_character_list) = 
-            //         color_band_plot::calculate_color_band_structure_mpi_simple(
-            //             &mut pp, n_k_points, n_eig, &sym_points, &pp_config, false, zoomed);
+            let start_time = Instant::now();
 
-            //     timed_println!("Calculated Band Structure in {:?}", Instant::now().duration_since(time1));
-            // }
-            // else {
-            //     (k_points_color, eigvals_list_color, photonic_character_list) = 
-            //         color_band_plot::load_color_band_structure(
-            //         &mut pp, n_k_points, n_eig, &pp_config, zoomed);
-            // }
+            let calculate = true;
                 
-            // // Plot using gnuplot (only on rank 0 which has the data)
-            // let mut save_path = format!("sing_ex_color_disp_plot_{}_n{}",total_coupling, n_modes);
-            // save_path += if zoomed {"_zoomed.pdf"} else {".pdf"};
+            let zoomed = false;
 
-            // if !k_points_color.is_empty() {
-            //     if let Err(e) = color_band_plot::plot_color_band_structure(
-            //         &k_points_color, &sym_points, &sym_labels, &eigvals_list_color,
-            //         &photonic_character_list, n_eig, a0, &save_path, v0, coupling, zoomed) {
-            //         timed_println!("Error plotting color-coded band structure: {}", e);
-            //     }
-            // }
+            let (k_points_color, eigvals_list_color, photonic_character_list);
+
+            
+            let mut pp_wrapper = sing_ex::SingExWrapper::new(pp_config.clone());
+            pp_wrapper.generate_pp();
+            let mut pp = pp_wrapper.polaron_polariton.unwrap();
+
+            if calculate {
+                timed_println!("Calculating {} eigenstates", n_eig);
+
+                let time1 = Instant::now();
+                let gen_time = time1.duration_since(start_time);
+                timed_println!("Precomputed matrix elements in {:?}", gen_time);
+                            
+                // Calculate and plot color-coded band structure
+                timed_println!("Calculating color-coded band structure...");
+                (k_points_color, eigvals_list_color, photonic_character_list) = 
+                    color_band_plot::calculate_color_band_structure_mpi_simple(
+                        &mut pp, n_k_points, n_eig, &sym_points, &pp_config, false, zoomed);
+
+                timed_println!("Calculated Band Structure in {:?}", Instant::now().duration_since(time1));
+            }
+            else {
+                (k_points_color, eigvals_list_color, photonic_character_list) = 
+                    color_band_plot::load_color_band_structure(
+                    &mut pp, n_k_points, n_eig, &pp_config, zoomed);
+            }
+                
+            // Plot using gnuplot (only on rank 0 which has the data)
+            let mut save_path = format!("sing_ex_color_disp_plot_{}_n{}",total_coupling, n_modes);
+            save_path += if zoomed {"_zoomed.pdf"} else {".pdf"};
+
+            if !k_points_color.is_empty() {
+                if let Err(e) = color_band_plot::plot_color_band_structure(
+                    &k_points_color, &sym_points, &sym_labels, &eigvals_list_color,
+                    &photonic_character_list, n_eig, a0, &save_path, v0, coupling, zoomed) {
+                    timed_println!("Error plotting color-coded band structure: {}", e);
+                }
+            }
         } 
     }
 }
@@ -277,12 +284,12 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
 fn run_dielectric_scan(e_config: ExcitonConfig) {
     // Check if we should calculate or just plot
     let calculate = true; // Set to false to skip calculation and just plot
-    let use_cached = false; // Set to true to use cached diagonalization results (allows testing different gamma values)
+    let use_cached = true; // Set to true to use cached diagonalization results (allows testing different gamma values)
 
     let zoomed = false;
 
     // Parameters for diagonalization
-    let n_rel = 9;      // Number of relative coordinate states
+    let n_rel = 25;      // Number of relative coordinate states
     let n_ex_eig = 16;  // Number of exciton eigenstates
     
     // Light-matter coupling parameters
@@ -290,14 +297,14 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
     // let total_coupling_values = Array1::from_vec(vec![0.0, 0.00725, 0.015]);
     let total_coupling_values = Array1::from_vec(vec![0.0, 0.01, 0.0175]);
 
-    let omega_0 = 0.15;    // Photon frequency
-    let n_modes = 16;
+    let omega_0 = 0.24;    // Photon frequency
+    let n_modes = 32;
     let coupling_values = total_coupling_values /( (n_modes) as f64);
     let qz = omega_0 / C;
 
     // Define photon modes
-    let qx_values = Array1::linspace(-0.0015, 0.0015, n_modes); // Photon wavevectors along x
-    let qy_values = Array1::linspace(-0.0015, 0.0015, n_modes);
+    let qx_values = Array1::linspace(-0.002, 0.002, n_modes); // Photon wavevectors along x
+    let qy_values = Array1::linspace(-0.002, 0.002, n_modes);
 
     let q_values: Vec<Vector3D> = qx_values.iter().flat_map(|qx| {
         qy_values.iter().map(|qy| {
@@ -322,13 +329,13 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
     let pn_n_fock = 1;
 
     // Parameters for dielectric function calculation
-    let n_eig = 256;  // Number of eigenstates to use
+    let n_eig = 1024;  // Number of eigenstates to use
     let omegas = Array1::linspace(0.1, 0.5, 100000);  // Frequency range
-    let gamma = 5e-5;  // Broadening parameter
+    let gamma = 1e-4;  // Broadening parameter
 
     let omega_range;
     if !zoomed {
-        omega_range = Some((0.22,0.35));
+        omega_range = Some((0.22,0.40));
     }
     else{
         omega_range = Some((0.168,0.18));
@@ -446,19 +453,30 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
             e_config: e_config.clone(), n_rel, n_ex_eig, lm_coupling: coupling, omega_0, q_values: q_values.clone(),
             pn_coupling, pn_omega, pn_k: pn_k.clone(), pn_n_fock, n_k_points: 1, n_bands: 1
         };
-        
-        // Generate the PP system
-        let mut pp_wrapper = sing_ex::SingExWrapper::new(pp_config.clone());
-        pp_wrapper.generate_pp();
-        let pp = pp_wrapper.polaron_polariton.as_ref().unwrap();
-        
-        // Calculate dielectric function (will use cached diagonalization if available)
-        let (re_eps, im_eps) = sing_ex::get_dielectric_function(
-            &pp_config, pp, n_eig, omegas.clone(), gamma, save_dir, use_cached
+
+
+        // New Method
+        timed_println!("Using new CsMat method");
+
+        let mut pp: PPHamiltonian<CsMat<c64>, SingExBosons<CsMat<c64>>> = PPHamiltonian::from_config(&pp_config);
+        let (re_eps, im_eps) = dielectric_function::get_dielectric_function(
+            &pp_config, &mut pp, n_eig, omegas.clone(), gamma, save_dir, use_cached
         );
+
+        let filename = dielectric_function::get_dielectric_function_filename(&pp, &pp_config, save_dir, n_eig, gamma);
         
-        // Save the final dielectric function results
-        let filename = sing_ex::get_dielectric_function_filename(pp, &pp_config, save_dir, n_eig, gamma);
+        // // Generate the PP system
+        // let mut pp_wrapper = sing_ex::SingExWrapper::new(pp_config.clone());
+        // pp_wrapper.generate_pp();
+        // let pp = pp_wrapper.polaron_polariton.as_ref().unwrap();
+        
+        // // Calculate dielectric function (will use cached diagonalization if available)
+        // let (re_eps, im_eps) = sing_ex::get_dielectric_function(
+        //     &pp_config, pp, n_eig, omegas.clone(), gamma, save_dir, use_cached
+        // );
+        
+        // // Save the final dielectric function results
+        // let filename = sing_ex::get_dielectric_function_filename(pp, &pp_config, save_dir, n_eig, gamma);
         timed_println!("Saving dielectric function data to {}", filename);
         let mut file = File::create(&filename).unwrap();
     
@@ -588,7 +606,7 @@ fn main() {
     
     match run_mode {
         "bandstructure" => {
-            run_bandstructure(Method::SingEx, e_config.clone());
+            run_bandstructure(Method::LinOp, e_config.clone());
             // run_bandstructure(Method::Sparse, e_config.clone());
             // run_bandstructure(Method::Dense, e_config.clone());
         },

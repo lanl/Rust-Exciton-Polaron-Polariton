@@ -5,7 +5,7 @@ use ndarray_linalg::c64;
 use crate::timed_println;
 use std::iter::Sum;
 
-use crate::utils::{MatrixOps, PPConfig, PrettyArray2, SolverOperator, Sqrt};
+use crate::utils::{MatrixOps, PPConfig, PrettyArray2, SolverOperator, Sqrt, ConvertFrom};
 use crate::hamiltonians::{PPHamiltonian, Boson};
 
 /// Generates a filename for the cached diagonalization data (pp_vals and x_pp)
@@ -125,7 +125,7 @@ pub fn get_dielectric_function<M,B>(
     save_dir: &str,
     use_cached: bool
 ) -> (Array1<f64>, Array1<f64>) 
-where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum, B: Boson<M>
+where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum + ConvertFrom<f64> + ConvertFrom<c64> , B: Boson<M>
 {
     timed_println!("Calculating dielectric function with {} eigenstates, gamma={:.1e}", n_eig, gamma);
 
@@ -182,7 +182,7 @@ fn compute_dielectric_cache<M,B>(
     pp: &mut PPHamiltonian<M,B>,
     n_eig: usize,
 ) -> (Array1<f64>, Array1<f64>) 
-where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum, B: Boson<M>
+where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum + ConvertFrom<f64> + ConvertFrom<c64> , B: Boson<M>
 {
 
     // Build Hamiltonian

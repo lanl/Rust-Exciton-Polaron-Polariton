@@ -210,8 +210,13 @@ impl PPDiagHamiltonian{
             let ph_ind = i % (n_ph + 1);    
             let ex_ind = i / (n_ph + 1);
 
+            // Diamagnetic A² contribution: g²/(2μ) for all states (including ground state)
+            // This comes from the constant term in (a + a†)² = a² + 2a†a + 1 + a†²
+            let a2_ground_shift = (n_ph as f64) * self.lm_coupling * self.lm_coupling / 2.0 / self.exciton.exciton_ham.rel_ham.mu;
+            
             if ph_ind == 0 {
-                c64::zero()  // No photons, no interaction terms
+                // Ground state gets contribution from all N_modes identity terms
+                c64::new(a2_ground_shift,0.0)
             } else {
                 // P·q (a† a) / 2 M term (diagonal terms only)
                 let q = &self.photon.photon_modes[ph_ind - 1].q;
@@ -423,7 +428,7 @@ impl Operator<c64> for PPOffHamiltonian {
         
         // Pre-compute some constants to avoid repeated calculations
         let lm_coupling_2_over_m = self.lm_coupling * 2.0 / self.exciton.exciton_ham.m;
-        let lm_coupling_2_over_mu = self.lm_coupling / self.exciton.exciton_ham.rel_ham.mu;
+        let lm_coupling_over_mu = self.lm_coupling / self.exciton.exciton_ham.rel_ham.mu;
         let one_over_2m = 1.0 / (2.0 * self.exciton.exciton_ham.m);
 
         // Implement all a and a† terms
@@ -454,7 +459,7 @@ impl Operator<c64> for PPOffHamiltonian {
                     // Calculate terms using BLAS-powered dot products
                     // ( P sin(q•x/2) + i p cos(q•x/2) ) â† 
                     a_dag_term = &(&p_c_sin.dot(&x_ph_ground) * lm_coupling_2_over_m) + 
-                                 &(&p_cos.dot(&x_ph_ground) * lm_coupling_2_over_mu);
+                                 &(&p_cos.dot(&x_ph_ground) * lm_coupling_over_mu);
                     aa_term = &p_q.dot(&x_ph_mode_i) * one_over_2m;
                     
 
@@ -467,7 +472,7 @@ impl Operator<c64> for PPOffHamiltonian {
                 {                    
                     // ( P sin(q•x/2) - i p cos(q•x/2) ) â† 
                     a_term = &(&p_c_sin.dot(&x_ph_mode_i) * lm_coupling_2_over_m) - 
-                             &(&p_cos.dot(&x_ph_mode_i) * lm_coupling_2_over_mu);
+                             &(&p_cos.dot(&x_ph_mode_i) * lm_coupling_over_mu);
                     
                     // Add to y at photon ground state and phonon in pn_ind
                     let indices: Vec<usize> = (0..n_ex).map(|ex_ind| pn_ind + ex_ind * stride).collect();
@@ -681,7 +686,12 @@ impl SolverOperator<c64> for PolaronPolariton {
 
     fn apply_transpose(&self, x: &[c64], y: &mut [c64]) {
         // Since Hamiltonians are hermitian
-        self.apply(x, y)
+        self.apply(x, y);
+
+        // Take complex conjugate
+        for i in 0 .. y.len() {
+            y[i] = y[i].conj();
+        }
     }
     
     fn get_diagonal(&self) -> Vec<c64> {

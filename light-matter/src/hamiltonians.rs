@@ -2,12 +2,13 @@ use std::iter::Sum;
 use exciton_2d::{Exciton2DGridSystem};
 use log::warn;
 use crate::timed_println;
-use crate::utils::{BosonMode, MatrixOps, PPConfig, Polarization, Sqrt, Vector3D};
+use crate::utils::{BosonMode, ConvertFrom, MatrixOps, PPConfig, Polarization, Sqrt, Vector3D};
 use num_traits::{NumCast, One};
 use exciton_2d::FullHamiltonian;
 use ndarray::{Array1, Array2, arr1, s};
 use sprs::{TriMat};
 use crate::matrix_elements::LMMatrixElementArray;
+use ndarray_linalg::c64;
 
 pub trait Boson<M:MatrixOps> {
     fn new(modes: Vec<BosonMode>) -> Self;
@@ -215,7 +216,7 @@ impl<M: MatrixOps> ExcitonicHamiltonian<M> {
 
     pub fn get_p_com(&self, field_vec: &Array1<f64>, diag: bool) -> M
     where 
-        M::Scalar: NumCast + Sum,
+        M::Scalar: NumCast + Sum + ConvertFrom<c64> + ConvertFrom<f64>,
     {
         let e_vecs = self.e_vecs.as_ref().expect("Eigenvectors not computed. Call compute_eigenstates() first.");
         let kappas= &self.exciton_ham.kappa_vectors;
@@ -272,9 +273,9 @@ impl<M: MatrixOps> ExcitonicHamiltonian<M> {
                         let i = n_com * rel_ind + com_ind;
                         let a1 = vec1[i];
                         let a2 = vec2[i];
-                        (a1.conj() * a2).re * p  // Real part of ψ_i* ψ_j
+                        (a1.conj() * a2) * p  // p * ψ_i* ψ_j
                     })
-                }).sum::<f64>()
+                }).sum::<c64>()
             }))
         }
     }
@@ -303,8 +304,8 @@ pub struct LMHamiltonian <M: MatrixOps, B: Boson<M>> {
     pub photon: BosonicHamiltonian<M, B>,
     pub matrix_elements: LMMatrixElementArray,
     pub coupling: f64,
-    p_c_sin: Option<Vec<M>>,
-    p_q: Option<Vec<M>>,
+    pub p_c_sin: Option<Vec<M>>,
+    pub p_q: Option<Vec<M>>,
     is_initialized: bool,
     cached_a_ops: Option<Vec<M>>,  // Cache annihilation operators
     cached_adag_a_ops: Option<Vec<M>>,  // Cache number operators
@@ -321,9 +322,9 @@ impl<M: MatrixOps, B: Boson<M>>  LMHamiltonian<M,B> {
         Self { exciton, photon, matrix_elements, coupling, p_c_sin: None, p_q: None, is_initialized: false, cached_a_ops: None, cached_adag_a_ops: None}
     }
 
-    fn initialize(&mut self, k: Option<Vec<f64>>)  
+    pub fn initialize(&mut self, k: Option<Vec<f64>>)  
     where 
-        M::Scalar: NumCast + Sqrt + Sum, 
+        M::Scalar: NumCast + Sqrt + Sum + ConvertFrom<c64> + ConvertFrom<f64>, 
     {
         use std::time::Instant;
         
@@ -387,7 +388,7 @@ impl<M: MatrixOps, B: Boson<M>>  LMHamiltonian<M,B> {
 
     fn calc_p_c_sin_matrix(&mut self) 
     where 
-        M::Scalar: NumCast + Sqrt + Sum, 
+        M::Scalar: NumCast + Sqrt + Sum + ConvertFrom<c64> + ConvertFrom<f64>, 
     {
         
         let n_ph = self.photon.boson.get_modes().len() + 1; // +1 for ground state
@@ -419,9 +420,9 @@ impl<M: MatrixOps, B: Boson<M>>  LMHamiltonian<M,B> {
         self.p_q = Some(p_q);
     }
 
-    fn get_interaction_hamiltonian(&self, ham: &mut M) 
+    fn get_interaction_hamiltonian_as_operator(&self) -> M 
     where 
-        M::Scalar: NumCast + Sqrt,  
+        M::Scalar: NumCast + Sqrt + ConvertFrom<c64> + ConvertFrom<f64>,  
     {
         use std::time::Instant;
         
@@ -432,9 +433,85 @@ impl<M: MatrixOps, B: Boson<M>>  LMHamiltonian<M,B> {
         let total_pairs = n_modes * n_modes;
         timed_println!("        Building interaction for {} modes ({} pairs)", n_modes, total_pairs);
         
-        let start_time = Instant::now();
-        let mut last_print = Instant::now();
-        let mut pairs_processed = 0;
+        let mut terms: Vec<M> = Vec::new();
+        
+        let n_ex = self.exciton.e_vals.as_ref().unwrap().len();
+        let ex_eye:M = M::eye(n_ex);
+        
+        // Iterate over photon mode to build interaction terms
+        self.photon.boson.get_modes().iter().enumerate().for_each(|(i_ph, mode_i)| {
+
+            // p.A terms
+            let a_i = &cached_a[i_ph];
+            let p_c_sin = &self.p_c_sin.as_ref().unwrap()[i_ph].scale( 2.0 / self.exciton.exciton_ham.m * self.coupling);
+            let p_q = &self.p_q.as_ref().unwrap()[i_ph].scale(1.0 / 2.0 / self.exciton.exciton_ham.m);
+
+            let p_cos = &M::from_dense(&(self.matrix_elements.p_cos_mat.get(&vec![i_ph as i32]).unwrap() * (self.coupling / self.exciton.exciton_ham.rel_ham.mu)));
+            
+            // P•A sin(x) term
+            terms.push(M::kron(p_c_sin, a_i));
+            terms.push(M::kron(p_c_sin, &a_i.transpose()));
+
+            // p•A cos(x) term
+            terms.push(M::kron(p_cos, &(a_i.scale(-1.0))));
+            terms.push(M::kron(p_cos, &a_i.transpose()));
+
+            // P•q a†a term
+            terms.push(M::kron(p_q, &cached_adag_a[i_ph]));
+            
+            // A² terms
+            self.photon.boson.get_modes().iter().enumerate().for_each(|(j_ph, mode_j)| {
+                
+                let q_ind1 = (i_ph as i32).max(j_ph as i32);
+                let q_ind2 = (i_ph as i32).min(j_ph as i32);
+                let q_diff_key = vec![q_ind1, -q_ind2];
+
+                let a_j = &cached_a[j_ph];
+
+                let coupling_2 = self.coupling * self.coupling * mode_i.eps.dot(&mode_j.eps) / 2. / self.exciton.exciton_ham.rel_ham.mu;
+
+                let eye = Array2::eye(n_ex);
+                let cos_diff = &M::from_dense(self.matrix_elements.cos_mat.get(&q_diff_key).unwrap_or_else(|| {
+                    warn!("No cos mat found for q_diff_key = {:?}, returning identity", q_diff_key);
+                    &eye
+                }));
+
+                let a_diff = &( a_i.dot(&a_j.transpose()).add(&a_i.transpose().dot(a_j)) );
+
+                // cos(q - q') term
+                terms.push(M::kron(cos_diff, a_diff).scale(coupling_2));
+
+                // (q a†a)^2 term
+                let q_q = mode_i.q.dot(&mode_j.q) / 2.0 / self.exciton.exciton_ham.m;
+                terms.push(M::kron(&ex_eye, &(cached_adag_a[i_ph].dot(&cached_adag_a[j_ph])) ).scale(q_q));
+            });
+        });
+        
+        // Sum all terms at once using the efficient Sum operator
+        timed_println!("        Summing {} interaction terms...", terms.len());
+        let sum_time = Instant::now();
+        let interaction = M::sum(terms);
+        timed_println!("        Summed terms in {:?}", sum_time.elapsed());
+        
+        interaction
+    }
+    
+    fn _get_interaction_hamiltonian(&self, ham: &mut M) 
+    where 
+        M::Scalar: NumCast + Sqrt + ConvertFrom<c64> + ConvertFrom<f64>,  
+    {
+        use std::time::Instant;
+        
+        let cached_a = self.cached_a_ops.as_ref().expect("Photon operators not cached");
+        let cached_adag_a = self.cached_adag_a_ops.as_ref().expect("Number operators not cached");
+        
+        let n_modes = self.photon.boson.get_modes().len();
+        let total_pairs = n_modes * n_modes;
+        timed_println!("        Building interaction for {} modes ({} pairs)", n_modes, total_pairs);
+        
+        // let start_time = Instant::now();
+        // let mut last_print = Instant::now();
+        // let mut pairs_processed = 0;
         
         // IMPORTANT: Collect all terms first, then sum at the end
         // This avoids the O(n²) tree growth problem where each ham.add() clones
@@ -453,33 +530,35 @@ impl<M: MatrixOps, B: Boson<M>>  LMHamiltonian<M,B> {
             let p_c_sin = &self.p_c_sin.as_ref().unwrap()[i_ph].scale( 2.0 / self.exciton.exciton_ham.m * self.coupling);
             let p_q = &self.p_q.as_ref().unwrap()[i_ph].scale(1.0 / 2.0 / self.exciton.exciton_ham.m);
 
-            let p_cos = &M::from_dense(&(self.matrix_elements.p_cos_mat.get(&vec![i_ph as i32]).unwrap() * self.coupling));
+            let p_cos = &M::from_dense(&(self.matrix_elements.p_cos_mat.get(&vec![i_ph as i32]).unwrap() * (self.coupling / self.exciton.exciton_ham.rel_ham.mu)));
             
             // P•A sin(x) term
-            terms.push(M::kron(p_c_sin, &(a_i.add(&a_i.transpose()))));
+            terms.push(M::kron(p_c_sin, a_i));
+            terms.push(M::kron(p_c_sin, &a_i.transpose()));
 
             // p•A cos(x) term
-            terms.push(M::kron(p_cos, &(a_i.scale(-1.0).add(&a_i.transpose()))));
+            terms.push(M::kron(p_cos, &(a_i.scale(-1.0))));
+            terms.push(M::kron(p_cos, &a_i.transpose()));
 
             // P•q a†a term
             terms.push(M::kron(p_q, &cached_adag_a[i_ph]));
-
+            
             // A² terms
             self.photon.boson.get_modes().iter().enumerate().for_each(|(j_ph, mode_j)| {
                 
-                pairs_processed += 1;
+                // pairs_processed += 1;
                 
-                // Print progress every 5 seconds
-                if last_print.elapsed().as_secs() >= 5 {
-                    let elapsed = start_time.elapsed().as_secs_f64();
-                    let rate = pairs_processed as f64 / elapsed;
-                    let remaining = (total_pairs - pairs_processed) as f64 / rate;
-                    timed_println!("        Progress: {}/{} pairs ({:.1}%), ETA: {:.0}s", 
-                        pairs_processed, total_pairs, 
-                        100.0 * pairs_processed as f64 / total_pairs as f64,
-                        remaining);
-                    last_print = Instant::now();
-                }
+                // // Print progress every 5 seconds
+                // if last_print.elapsed().as_secs() >= 5 {
+                //     let elapsed = start_time.elapsed().as_secs_f64();
+                //     let rate = pairs_processed as f64 / elapsed;
+                //     let remaining = (total_pairs - pairs_processed) as f64 / rate;
+                //     timed_println!("        Progress: {}/{} pairs ({:.1}%), ETA: {:.0}s", 
+                //         pairs_processed, total_pairs, 
+                //         100.0 * pairs_processed as f64 / total_pairs as f64,
+                //         remaining);
+                //     last_print = Instant::now();
+                // }
                 
                 let q_ind1 = (i_ph as i32).max(j_ph as i32);
                 let q_ind2 = (i_ph as i32).min(j_ph as i32);
@@ -510,7 +589,7 @@ impl<M: MatrixOps, B: Boson<M>>  LMHamiltonian<M,B> {
                 terms.push(M::kron(cos_sum, a_sum).scale(-coupling_2));
 
                 // (q a†a)^2 term
-                let q_q = mode_i.q.dot(&mode_j.q);
+                let q_q = mode_i.q.dot(&mode_j.q) / 2.0 / self.exciton.exciton_ham.m;
                 terms.push(M::kron(&ex_eye, &(cached_adag_a[i_ph].dot(&cached_adag_a[j_ph])) ).scale(q_q));
             });
         });
@@ -528,7 +607,7 @@ impl<M: MatrixOps, B: Boson<M>>  LMHamiltonian<M,B> {
 
     pub fn build_lm_hamiltonian(&mut self, k: Option<Vec<f64>>) -> M 
     where 
-        M::Scalar: NumCast + Sqrt + Sum,  
+        M::Scalar: NumCast + Sqrt + Sum + ConvertFrom<c64> + ConvertFrom<f64>,  
     {
         use std::time::Instant;
         
@@ -539,29 +618,35 @@ impl<M: MatrixOps, B: Boson<M>>  LMHamiltonian<M,B> {
         let n_ex = self.exciton.e_vals.as_ref().unwrap().len();
         let n_ph: usize = self.photon.boson.dimension();
         
-        let time_zeros = Instant::now();
-        let mut ham: M = M::zeros((n_ex*n_ph, n_ex*n_ph));
-        timed_println!("      LM zeros matrix: {:?}", time_zeros.elapsed());
-        
         let time_eye = Instant::now();
         let ex_eye: M = M::eye(n_ex);
         let ph_eye: M = M::eye(n_ph);
         timed_println!("      LM identity matrices: {:?}", time_eye.elapsed());
 
+        // Collect all Hamiltonian terms
+        let mut ham_terms: Vec<M> = Vec::new();
+
         // Exciton Hamiltonian
         let time_ex = Instant::now();
-        ham = ham.add(&M::kron(&self.exciton.get_h(), &ph_eye));
+        ham_terms.push(M::kron(&self.exciton.get_h(), &ph_eye));
         timed_println!("      LM exciton kron: {:?}", time_ex.elapsed());
 
         // Photonic Hamiltonian
         let time_ph = Instant::now();
-        ham = ham.add(&M::kron(&ex_eye, &self.photon.get_h()));
+        ham_terms.push(M::kron(&ex_eye, &self.photon.get_h()));
         timed_println!("      LM photon kron: {:?}", time_ph.elapsed());
 
         // Interaction Hamiltonian
         let time_int = Instant::now();
-        self.get_interaction_hamiltonian(&mut ham);
+        ham_terms.push(self.get_interaction_hamiltonian_as_operator());
         timed_println!("      LM interaction: {:?}", time_int.elapsed());
+
+        // Build the final Hamiltonian by adding terms
+        // Don't use M::sum() here because it would try to optimize the diagonal terms
+        let time_sum = Instant::now();
+        let ham = ham_terms.into_iter().reduce(|acc, term| acc.add(&term)).unwrap();
+        // let ham = M::sum(ham_terms);
+        timed_println!("      LM sum all terms: {:?}", time_sum.elapsed());
 
         ham
     }
@@ -614,7 +699,7 @@ impl<M: MatrixOps, B: Boson<M>>  PPHamiltonian<M,B> {
 
     pub fn update_k(&mut self, k: Vec<f64>) 
     where 
-        M::Scalar: NumCast + Sqrt + Sum, 
+        M::Scalar: NumCast + Sqrt + Sum + ConvertFrom<c64> + ConvertFrom<f64>, 
     {
         self.polariton.exciton.exciton_ham.k = k.clone();
         self.polariton.initialize(Some(k));
@@ -622,7 +707,7 @@ impl<M: MatrixOps, B: Boson<M>>  PPHamiltonian<M,B> {
 
     pub fn initialize(&mut self)  
     where 
-        M::Scalar: NumCast + Sqrt + Sum, 
+        M::Scalar: NumCast + Sqrt + Sum + ConvertFrom<c64> + ConvertFrom<f64>, 
     {
         use std::time::Instant;
         
@@ -673,7 +758,7 @@ impl<M: MatrixOps, B: Boson<M>>  PPHamiltonian<M,B> {
 
     pub fn build_pp_hamiltonian(&mut self, k: Option<Vec<f64>>) -> M
     where 
-        M::Scalar: NumCast + Sqrt + Sum, 
+        M::Scalar: NumCast + Sqrt + Sum + ConvertFrom<c64> + ConvertFrom<f64>, 
     {
         use std::time::Instant;
         

@@ -5,7 +5,7 @@ use ndarray_linalg::c64;
 
 use sprs::CsMat;
 
-use crate::{hamiltonians::{Boson, LMHamiltonian, PPHamiltonian}, utils::CsMatOperator};
+use crate::{hamiltonians::{Boson, LMHamiltonian, PPHamiltonian}};
 
 use rust_slepc_bindings::EPSType;
 
@@ -18,10 +18,8 @@ pub fn diagonalize_sparse(
     -> (Array1<f64> , Array2<c64>){
 
     use crate::slepc::diagonalize_slepc;
-
-    let op = CsMatOperator{matrix: matrix};
     
-    diagonalize_slepc(&op, n_eig, block_size, solve_type, initial_guess)
+    diagonalize_slepc(&matrix, n_eig, block_size, solve_type, initial_guess)
 }
 
 pub fn diagonalize_lm_ham_sparse<B: Boson<CsMat<c64>>>(

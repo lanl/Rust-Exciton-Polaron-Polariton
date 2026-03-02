@@ -14,7 +14,7 @@ use ndarray_linalg::c64;
 
 use crate::timed_println;
 
-use crate::utils::{MatrixOps, PPConfig, SolverOperator, Sqrt};
+use crate::utils::{ConvertFrom, MatrixOps, PPConfig, SolverOperator, Sqrt};
 use crate::hamiltonians::{PPHamiltonian, Boson};
 
 /// Calculate the photonic character of an eigenstate
@@ -157,7 +157,7 @@ pub fn calculate_color_band_structure_mpi_simple<M,B>(
     use_cached: bool,
     zoomed: bool
 ) -> (Vec<Vec<f64>>, Vec<Array1<f64>>, Vec<Vec<f64>>) 
-where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum, B: Boson<M>
+where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum + ConvertFrom<f64> + ConvertFrom<c64> , B: Boson<M>
 {
     use std::env;
 

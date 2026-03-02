@@ -69,7 +69,7 @@ impl LMMatrixElementArray {
                     let (element_1, element_2) = (0..n_rel)
                         .flat_map(|r_ind1| {                            
                             (0..n_rel).flat_map(move |r_ind2| {
-                                let (mat_element1, mat_element2): (f64,f64);
+                                let (mat_element1, mat_element2): (c64,c64);
 
                                 // Get matrix elements
                                 if q_inds.len() == 1 {
@@ -97,7 +97,7 @@ impl LMMatrixElementArray {
                                     let a1 = vec1[i1];
                                     let a2 = vec2[i2];
 
-                                    (a1 * a2 * mat_element1, a1 * a2 * mat_element2)
+                                    (a1.conj() * a2 * mat_element1, a1.conj() * a2 * mat_element2)
                                 })
                             })
                         })
@@ -181,7 +181,7 @@ impl LMMatrixElementArray {
                                     let a1 = vec1[i1];
                                     let a2 = vec2[i2];
 
-                                    a1 * a2 * mat_element
+                                    a1.conj() * a2 * mat_element
                                 })
                             })
                         })
@@ -260,7 +260,7 @@ impl LMMatrixElementArray {
 
         let mut radial = (m2.abs() as f64)/beta_2 * self.get_overlap(i1, i2, l - 1, mu, lag_coeffs);
         
-        radial += self.get_overlap(i1, i2, l, mu, lag_coeffs);
+        radial -= 0.5 * self.get_overlap(i1, i2, l, mu, lag_coeffs);
 
         if n2 - m2.abs() - 1 >= 0 {
             let n1 = i1.0;
@@ -270,7 +270,7 @@ impl LMMatrixElementArray {
             let lag_coeff1 = &lag_coeffs[&(n1, m1.abs())];
             let lag_coeff2 = self.laguerre((n2 - m2.abs() - 1) as usize, (2 * m2.abs() + 1) as f64);
 
-            radial += lag_coeff1.iter().fold(0.0, |acc1, (i, c1)| {
+            radial -= lag_coeff1.iter().fold(0.0, |acc1, (i, c1)| {
                 acc1 + lag_coeff2.iter().fold(0.0, |acc2, (j, c2)| {
                     // \int e^{-a r} r^b dr = b! / a^(b+1)
 
@@ -290,7 +290,7 @@ impl LMMatrixElementArray {
             });
         }
 
-        radial
+        radial * beta_2
     }
 
     /// Calculate the sine term using analytic integrals of leading Taylor series terms
@@ -302,7 +302,7 @@ impl LMMatrixElementArray {
         q: &Array1<f64>,
         mu: f64,
         lag_coeffs: &HashMap<(i32, i32), Vec<(i32, f64)>>,
-    ) -> f64 {
+    ) -> c64 {
 
         let m1_vec = self.real_l_to_complex_m(i1.1);
         let m2_vec = self.real_l_to_complex_m(i2.1);
@@ -321,21 +321,15 @@ impl LMMatrixElementArray {
             })
         }).sum::<c64>();
 
-        if angular.im > 1e-10 {
-            warn!("Imaginary part of angular integral is non-zero in get_sin_tayl(): {}", angular.im);
-        }
-
-        let angular = angular.re;
-
-        if angular.abs() < 1e-10 {
-            return 0.0;
+        if angular.norm() < 1e-10 {
+            return c64::zero();
         }
 
         let norms = self.norm_constant(i1,mu) * self.norm_constant(i2, mu);
 
         let rad_integral = self.get_overlap(i1, i2, 2, mu, lag_coeffs);
 
-        norms * rad_integral * PI * q.norm() / 2.0 * angular
+        c64::new(norms * rad_integral * PI * q.norm() / 2.0, 0.0) * angular
     }
 
     /// Calculate the cosine term using analytic integrals of leading Taylor series terms
@@ -347,7 +341,7 @@ impl LMMatrixElementArray {
         q: &Array1<f64>,
         mu: f64,
         lag_coeffs: &HashMap<(i32, i32), Vec<(i32, f64)>>,
-    ) -> f64 {
+    ) -> c64 {
 
         let overlap = if i1.0 == i2.0 && i1.1 == i2.1 {
             1.0
@@ -373,21 +367,15 @@ impl LMMatrixElementArray {
             })
         }).sum::<c64>();
 
-        if angular.im > 1e-10 {
-            warn!("Imaginary part of angular integral is non-zero in get_cos_tayl(): {}", angular.im);
-        }
-
-        let angular = angular.re;
-
-        if angular.abs() < 1e-10 {
-            return overlap;
+        if angular.norm() < 1e-10 {
+            return c64::new(overlap, 0.0);
         }
 
         let norms = self.norm_constant(i1,mu) * self.norm_constant(i2, mu);
 
         let rad_integral = self.get_overlap(i1, i2, 3, mu, lag_coeffs);
 
-        overlap - angular * norms * rad_integral
+        c64::new(overlap, 0.0) - angular * c64::new(norms * rad_integral, 0.0)
     }
 
     /// Matrix element: i < n1,m1 | (epsilon·∇) cos(q·r/2) | n2,m2 >
@@ -400,7 +388,7 @@ impl LMMatrixElementArray {
         eps: &Array1<f64>,
         mu: f64,
         lag_coeffs: &HashMap<(i32, i32), Vec<(i32, f64)>>,
-    ) -> f64 {
+    ) -> c64 {
 
         let m1_vec = self.real_l_to_complex_m(i1.1);
         let m2_vec = self.real_l_to_complex_m(i2.1);
@@ -411,7 +399,7 @@ impl LMMatrixElementArray {
 
         let integral = m1_vec.iter().flat_map( |(m1, weight1)| {
             m2_vec.iter().map( move |(m2, weight2)| {
-                let diff = m1 - m2;
+                let diff = m2 - m1;
 
                 let j1 = & (i1.0, *m1);
                 let j2 = & (i2.0, *m2);
@@ -419,56 +407,50 @@ impl LMMatrixElementArray {
                 match diff {
                     3  => c64::from_polar(1.0,  theta_eps + 2.0 * theta_q) 
                             * q2 * PI / 32.0
-                            * ( (*m2 as f64) * self.get_overlap(j1, j2, 2, mu, lag_coeffs)
+                            * (-(*m2 as f64) * self.get_overlap(j1, j2, 2, mu, lag_coeffs)
                                 - self.get_dr_overlap(j1, j2, 3, mu, lag_coeffs))
                             * weight1 * weight2,
                     -3 => c64::from_polar(1.0, -theta_eps - 2.0 * theta_q) 
                             * q2 * PI / 32.0
-                            * (-(*m2 as f64) * self.get_overlap(j1, j2, 2, mu, lag_coeffs)
+                            * ( (*m2 as f64) * self.get_overlap(j1, j2, 2, mu, lag_coeffs)
                                 - self.get_dr_overlap(j1, j2, 3, mu, lag_coeffs))
                             * weight1 * weight2,
-                    1  => c64::from_polar(1.0,  theta_eps)
-                            * (
-                                -(*m2 as f64) * self.get_overlap(j1, j2, 0, mu, lag_coeffs)
-                                + self.get_dr_overlap(j1, j2, 1, mu, lag_coeffs)
-                                - q2 / 32.0 * (
-                                    -(*m2 as f64) * (2.0 - c64::from_polar(1.0,  2.0 * (theta_q - theta_eps))) 
-                                    * self.get_overlap(j1, j2, 2, mu, lag_coeffs)
-                                    + (2.0 + c64::from_polar(1.0,  2.0 * (theta_q - theta_eps)))
-                                    * self.get_dr_overlap(j1, j2, 3, mu, lag_coeffs)
-                                )
+                    1  => c64::from_polar(PI,  theta_eps)
+                        * (
+                            (*m2 as f64) * self.get_overlap(j1, j2, 0, mu, lag_coeffs)
+                            + self.get_dr_overlap(j1, j2, 1, mu, lag_coeffs)
+                            - q2 / 32.0 * (
+                                 (*m2 as f64) * (2.0 - c64::from_polar(1.0,  2.0 * (theta_q - theta_eps))) 
+                                * self.get_overlap(j1, j2, 2, mu, lag_coeffs)
+                                + (2.0 + c64::from_polar(1.0,  2.0 * (theta_q - theta_eps)))
+                                * self.get_dr_overlap(j1, j2, 3, mu, lag_coeffs)
                             )
-                            * weight1 * weight2,
-                    -1 => c64::from_polar(1.0,  theta_eps)
-                            * (
-                                 (*m2 as f64) * self.get_overlap(j1, j2, 0, mu, lag_coeffs)
-                                + self.get_dr_overlap(j1, j2, 1, mu, lag_coeffs)
-                                - q2 / 32.0 * (
-                                     (*m2 as f64) * (2.0 - c64::from_polar(1.0, -2.0 * (theta_q - theta_eps))) 
-                                    * self.get_overlap(j1, j2, 2, mu, lag_coeffs)
-                                    + (2.0 + c64::from_polar(1.0, -2.0 * (theta_q - theta_eps)))
-                                    * self.get_dr_overlap(j1, j2, 3, mu, lag_coeffs)
-                                )
+                        )
+                        * weight1 * weight2,
+                    -1 => c64::from_polar(PI, -theta_eps)
+                        * (
+                            -(*m2 as f64) * self.get_overlap(j1, j2, 0, mu, lag_coeffs)
+                            + self.get_dr_overlap(j1, j2, 1, mu, lag_coeffs)
+                            - q2 / 32.0 * (
+                                -(*m2 as f64) * (2.0 - c64::from_polar(1.0, -2.0 * (theta_q - theta_eps))) 
+                                * self.get_overlap(j1, j2, 2, mu, lag_coeffs)
+                                + (2.0 + c64::from_polar(1.0, -2.0 * (theta_q - theta_eps)))
+                                * self.get_dr_overlap(j1, j2, 3, mu, lag_coeffs)
                             )
-                            * weight1 * weight2,
+                        )
+                        * weight1 * weight2,
                     _  => c64::new(0.0, 0.0),
                 }
             })
         }).sum::<c64>();
 
-        if integral.im > 1e-10 {
-            warn!("Imaginary part of integral is non-zero in get_p_cos_tayl(): {}", integral.im);
-        }
-
-        let integral = integral.re;
-
-        if integral.abs() < 1e-10 {
-            return 0.0;
+        if integral.norm() < 1e-10 {
+            return c64::zero();
         }
 
         let norms = self.norm_constant(i1,mu) * self.norm_constant(i2, mu);
 
-        norms * integral
+        c64::new(norms, 0.0) * integral
     }
 
     fn real_l_to_complex_m(&self, l: i32) -> Vec<(i32, c64)>{
@@ -654,7 +636,7 @@ impl LMMatrixElementArray {
             lag_coeffs.insert((n, m), self.laguerre((n - m.abs()) as usize, 2. * m.abs() as f64));
         }
 
-            // Ensure all necessary keys are present
+        // Ensure all necessary keys are present
         for &(n1, m1) in &states {
             if !lag_coeffs.contains_key(&(n1, m1.abs())) {
                 panic!("Missing key ({},{})", n1, m1.abs());

@@ -1,5 +1,5 @@
 use log::warn;
-use ndarray::{Array1, Array2, array};
+use ndarray::{Array1, Array2, LinalgScalar, array};
 use rust_slepc_bindings::EPSType;
 use serde::{Serialize, Deserialize};
 use sprs::smmp::mul_csr_csr;
@@ -52,7 +52,58 @@ macro_rules! impl_convert_from_for_c64 {
     };
 }
 
+
+/// Helper macro to try downcasting and converting from a specific scalar type
+macro_rules! try_downcast_and_convert {
+    ($any_ref:expr, $dim:expr, $scalar_type:ty) => {{
+        // Try Array2<S>
+        if let Some(dense_op) = $any_ref.downcast_ref::<Array2<$scalar_type>>() {
+            // Convert Array2<S> to Array2<T> using ConvertFrom
+            return dense_op.mapv(|val| {
+                T::convert_from(val).expect("Failed to convert between scalar types")
+            });
+        }
+        
+        // Try CsMat<S> - convert to dense Array2<T>
+        if let Some(sparse_op) = $any_ref.downcast_ref::<CsMat<$scalar_type>>() {
+            let mut matrix = Array2::zeros(($dim, $dim));
+            for (val, (row, col)) in sparse_op.iter() {
+                matrix[[row, col]] = T::convert_from(*val)
+                    .expect("Failed to convert between scalar types");
+            }
+
+            return matrix;
+        }
+        
+        None::<Array2<T>>
+    }};
+}
+
+pub trait Norm {
+    fn norm(val: Self) -> f64;
+}
+
+impl Norm for c64 {
+    fn norm(val: Self) -> f64 {
+        c64::norm(val)
+    }
+}
+
+// Implement for norm from other numeric types via f64
+macro_rules! impl_norm {
+    ($($t:ty),*) => {
+        $(
+            impl Norm for $t {
+                fn norm(val: Self) -> f64 {
+                    (val as f64).abs()
+                }
+            }
+        )*
+    };
+}
+
 impl_convert_from_for_c64!(i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize, f32);
+impl_norm!(i8, i16, i32, i64, i128, isize, u8, u16, u32, u64, u128, usize, f32);
 
 
 // Speed of light in atomic units
@@ -360,7 +411,8 @@ pub trait MatrixOps: Clone {
         + std::ops::Add<Output = Self::Scalar>
         + std::ops::Mul<Output = Self::Scalar>
         + ConvertFrom<Self::Scalar>
-        + ConvertFrom<f64>;
+        + ConvertFrom<f64>
+        + LinalgScalar;
 
     /// Create an identity matrix
     fn eye(n: usize) -> Self;
@@ -398,7 +450,9 @@ pub trait MatrixOps: Clone {
             Self::Scalar: ConvertFrom<T>;
 
     fn from_dense<T>(dense: &Array2<T>) -> Self
-        where T: Clone + NumCast + Zero,;
+        where 
+            T: Clone + NumCast + Zero + 'static  + Copy,
+            Self::Scalar: ConvertFrom<T>;
     
     /// Sum multiple matrices efficiently
     /// Default implementation uses pairwise addition, but can be overridden
@@ -487,9 +541,9 @@ macro_rules! impl_matrix_ops_dense {
             fn from_dense<T>(dense: &Array2<T>) -> Self 
             where
                 T: Clone + NumCast + Zero,
-                Self::Scalar: NumCast + Zero,
+                Self::Scalar: ConvertFrom<T> + Zero,
             { 
-                dense.mapv(|x| NumCast::from(x).unwrap_or_else(|| Self::Scalar::zero()))
+                dense.mapv(|x| <Self::Scalar as ConvertFrom<T>>::convert_from(x).unwrap_or_else(|| Self::Scalar::zero()))
             }
         }
     };
@@ -552,22 +606,25 @@ macro_rules! impl_matrix_ops_sparse {
                 trimat.to_csr()
             }
 
-            fn transpose(&self) -> Self {self.clone().transpose_into().to_csr()}
+            fn transpose(&self) -> Self {
+                self.transpose_view().to_csr()
+            }
 
             fn scale<T>(&self, scalar: T) -> Self 
             where
                 T: Clone + NumCast + Zero,
                 Self::Scalar: ConvertFrom<T>
-
             {
                 // For sparse matrices, we need to scale element-wise
                 let scalar_converted = <Self::Scalar as ConvertFrom<T>>::convert_from(scalar).unwrap();
-                self.map(|x| x * scalar_converted)
+                // Use map to create a new matrix with scaled values
+                self.map(|&x| x * scalar_converted)
             }
             
             fn from_dense<T>(dense: &Array2<T>) -> Self 
             where
-                T: Clone + NumCast + Zero
+                T: Clone + NumCast + Zero,
+                Self::Scalar: ConvertFrom<T>
             {
                 let (rows, cols) = (dense.nrows(), dense.ncols());
                 let mut trimat = TriMat::new((rows, cols));
@@ -577,13 +634,44 @@ macro_rules! impl_matrix_ops_sparse {
                         let val = dense[[i, j]].clone();
                         if !val.is_zero() {
                             // Convert T to Self::Scalar
-                            if let Some(converted) = <Self::Scalar as NumCast>::from(val) {
+                            if let Some(converted) = <Self::Scalar as ConvertFrom<T>>::convert_from(val) {
                                 trimat.add_triplet(i, j, converted);
                             }
                         }
                     }
                 }
                 
+                trimat.to_csr()
+            }
+            
+            /// Optimized sum for sparse matrices using TriMat accumulator
+            /// This avoids O(n) intermediate CSR matrix allocations
+            fn sum(matrices: Vec<Self>) -> Self 
+            where 
+                Self: Sized,
+            {
+                if matrices.is_empty() {
+                    panic!("Cannot sum empty list of matrices");
+                }
+                
+                if matrices.len() == 1 {
+                    return matrices.into_iter().next().unwrap();
+                }
+                
+                // Get dimensions from first matrix
+                let shape = matrices[0].shape();
+                
+                // Use TriMat as accumulator - much more efficient for summing many sparse matrices
+                let mut trimat = TriMat::new(shape);
+                
+                // Add all non-zero entries from all matrices
+                for matrix in matrices {
+                    for (val, (row, col)) in matrix.iter() {
+                        trimat.add_triplet(row, col, *val);
+                    }
+                }
+                
+                // Convert to CSR once at the end
                 trimat.to_csr()
             }
         }
@@ -609,7 +697,7 @@ pub trait Operator<T> {
 }
 
 /// Trait for operators that can be used with solvers
-pub trait SolverOperator<T: Clone>: Send + Sync  {
+pub trait SolverOperator<T: Clone>: Send + Sync + std::any::Any {
     /// Apply the operator to a vector
     fn apply(&self, x: &[T], y: &mut [T]);
 
@@ -626,33 +714,80 @@ pub trait SolverOperator<T: Clone>: Send + Sync  {
     fn diagonalize(&self, n_eig: Option<usize>, solve_type: Option<EPSType>, initial_guess: Option<&Array2<c64>>) -> (Array1<f64>, Array2<c64>);
 }
 
-#[derive(Clone)]
-pub struct CsMatOperator {
-    pub matrix: CsMat<c64>,
-}
+// #[derive(Clone)]
+// pub struct CsMatOperator {
+//     pub matrix: CsMat<c64>,
+// }
 
-impl CsMatOperator {
-    pub fn new(matrix: CsMat<c64>) -> Self{
-        Self { matrix }
-    }
-}
+// impl CsMatOperator {
+//     pub fn new(matrix: CsMat<c64>) -> Self{
+//         Self { matrix }
+//     }
+// }
 
-impl SolverOperator<c64> for CsMatOperator {
+// impl SolverOperator<c64> for CsMatOperator {
+//     fn apply(&self, x: &[c64], y: &mut [c64]) {
+//         // Apply matrix-vector product
+//         // Note: sprs only provides accumulating matrix-vector multiplication (mul_acc_*)
+//         // so we must zero the output vector first
+//         y.fill(c64::zero());
+//         sprs::prod::mul_acc_mat_vec_csr(self.matrix.view(), x, y);
+//     }
+
+//     fn apply_transpose(&self, x: &[c64], y: &mut [c64]) {
+//         // Apply transpose (not conjugate transpose)
+//         // Note: sprs only provides accumulating matrix-vector multiplication (mul_acc_*)
+//         // so we must zero the output vector first
+//         y.fill(c64::zero());
+//         sprs::prod::mul_acc_mat_vec_csc(self.matrix.transpose_view(), x, y);
+//     }
+
+//     fn get_diagonal(&self) -> Vec<c64> {
+//         let mut diags: Vec<c64> = vec![c64::zero(); self.matrix.shape().0];
+
+//         self.matrix.diag().iter().for_each(|(i, val)| {
+//             diags[i] = *val;
+//         });
+
+//         diags
+//     }
+
+//     fn dimension(&self) -> usize {
+//         self.matrix.shape().0
+//     }
+
+//     fn diagonalize(&self, n_eig: Option<usize>, solve_type: Option<EPSType>, initial_guess: Option<&Array2<c64>>) -> (Array1<f64>, Array2<c64>) {
+//         if let Some(n) = n_eig {                   
+//             diagonalize_slepc(self, n, 128, solve_type, initial_guess)
+//         }
+//         else {
+//             timed_println!("Warning: No eigenvalue count specified, using default of 128");
+//             diagonalize_slepc(self, 128, 128, solve_type, initial_guess)
+//         }
+//     }
+// }
+
+impl SolverOperator<c64> for CsMat<c64> {
     fn apply(&self, x: &[c64], y: &mut [c64]) {
         // Apply matrix-vector product
-        sprs::prod::mul_acc_mat_vec_csr(self.matrix.view(), x, y);
+        // Note: sprs only provides accumulating matrix-vector multiplication (mul_acc_*)
+        // so we must zero the output vector first
+        y.fill(c64::zero());
+        sprs::prod::mul_acc_mat_vec_csr(self.view(), x, y);
     }
 
     fn apply_transpose(&self, x: &[c64], y: &mut [c64]) {
-        // transpose_view() returns CSC format, but mul_acc_mat_vec_csr expects CSR
-        // Use the CSC-specific function instead
-        sprs::prod::mul_acc_mat_vec_csc(self.matrix.transpose_view(), x, y);
+        // Apply transpose (not conjugate transpose)
+        // Note: sprs only provides accumulating matrix-vector multiplication (mul_acc_*)
+        // so we must zero the output vector first
+        y.fill(c64::zero());
+        sprs::prod::mul_acc_mat_vec_csc(self.transpose_view(), x, y);
     }
 
     fn get_diagonal(&self) -> Vec<c64> {
-        let mut diags: Vec<c64> = vec![c64::zero(); self.matrix.shape().0];
+        let mut diags: Vec<c64> = vec![c64::zero(); self.shape().0];
 
-        self.matrix.diag().iter().for_each(|(i, val)| {
+        self.diag().iter().for_each(|(i, val)| {
             diags[i] = *val;
         });
 
@@ -660,7 +795,7 @@ impl SolverOperator<c64> for CsMatOperator {
     }
 
     fn dimension(&self) -> usize {
-        self.matrix.shape().0
+        self.shape().0
     }
 
     fn diagonalize(&self, n_eig: Option<usize>, solve_type: Option<EPSType>, initial_guess: Option<&Array2<c64>>) -> (Array1<f64>, Array2<c64>) {
@@ -674,22 +809,56 @@ impl SolverOperator<c64> for CsMatOperator {
     }
 }
 
-#[derive(Clone)]
-pub struct DenseOperator {
-    pub matrix: Array2<c64>,
-}
+// #[derive(Clone)]
+// pub struct DenseOperator {
+//     pub matrix: Array2<c64>,
+// }
 
-impl DenseOperator {
-    pub fn new(matrix: Array2<c64>) -> Self{
-        Self { matrix }
-    }
-}
+// impl DenseOperator {
+//     pub fn new(matrix: Array2<c64>) -> Self{
+//         Self { matrix }
+//     }
+// }
 
-impl SolverOperator<c64> for DenseOperator {
+// impl SolverOperator<c64> for DenseOperator {
+//     fn apply(&self, x: &[c64], y: &mut [c64]) {
+//         // Apply matrix-vector product
+//         let x_arr = Array1::from_iter(x.iter().copied());
+//         let result = ndarray::linalg::Dot::dot(&self.matrix, &x_arr);
+//         y.iter_mut().zip(result.iter()).for_each(|(y_i, r_i)| {
+//             *y_i = *r_i
+//         });
+//     }
+    
+//     fn apply_transpose(&self, x: &[c64], y: &mut [c64]) {
+//         // Apply matrix-vector product
+//         let x_arr = Array1::from_iter(x.iter().copied());
+//         let result = ndarray::linalg::Dot::dot(&self.matrix.t(), &x_arr);
+//         y.iter_mut().zip(result.iter()).for_each(|(y_i, r_i)| {
+//             *y_i = *r_i
+//         });
+//     }
+
+//     fn get_diagonal(&self) -> Vec<c64> {
+//         self.matrix.diag().to_vec()
+//     }
+
+//     fn dimension(&self) -> usize {
+//         self.matrix.shape()[0]
+//     }
+
+//     fn diagonalize(&self, _: Option<usize>, _: Option<EPSType>, _: Option<&Array2<c64>>) 
+//         -> (Array1<f64>, Array2<c64>) {
+        
+//         self.matrix.eigh(ndarray_linalg::UPLO::Upper).unwrap()
+//     }
+// }
+
+impl SolverOperator<c64> for Array2<c64> {
     fn apply(&self, x: &[c64], y: &mut [c64]) {
         // Apply matrix-vector product
         let x_arr = Array1::from_iter(x.iter().copied());
-        let result = ndarray::linalg::Dot::dot(&self.matrix, &x_arr);
+        let result = ndarray::linalg::Dot::dot(self, &x_arr);
         y.iter_mut().zip(result.iter()).for_each(|(y_i, r_i)| {
             *y_i = *r_i
         });
@@ -698,28 +867,30 @@ impl SolverOperator<c64> for DenseOperator {
     fn apply_transpose(&self, x: &[c64], y: &mut [c64]) {
         // Apply matrix-vector product
         let x_arr = Array1::from_iter(x.iter().copied());
-        let result = ndarray::linalg::Dot::dot(&self.matrix.t(), &x_arr);
+        let result = ndarray::linalg::Dot::dot(&self.t(), &x_arr);
         y.iter_mut().zip(result.iter()).for_each(|(y_i, r_i)| {
             *y_i = *r_i
         });
     }
 
     fn get_diagonal(&self) -> Vec<c64> {
-        self.matrix.diag().to_vec()
+        self.diag().to_vec()
     }
 
     fn dimension(&self) -> usize {
-        self.matrix.shape()[0]
+        self.shape()[0]
     }
 
     fn diagonalize(&self, _: Option<usize>, _: Option<EPSType>, _: Option<&Array2<c64>>) 
         -> (Array1<f64>, Array2<c64>) {
         
-        self.matrix.eigh(ndarray_linalg::UPLO::Upper).unwrap()
+        self.eigh(ndarray_linalg::UPLO::Upper).unwrap()
     }
 }
 
 use std::sync::Arc;
+
+use std::collections::HashMap;
 
 /// Enum representing different types of linear operator compositions
 #[derive(Clone)]
@@ -750,13 +921,30 @@ pub enum ComposedOperator<T: Clone> {
     Identity(usize),
     
     /// Zero operator
-    Zero(usize, usize),
+    Zero(usize),
 
     /// Transpose operator
     Transpose(Box<ComposedOperator<T>>),
+    
+    /// Optimized sum of Kronecker products: Σᵢ Mᵢ ⊗ |to_i⟩⟨from_i|
+    /// This efficiently handles the common pattern of light-matter coupling
+    /// where exciton matrices are tensored with photon transition operators.
+    /// 
+    /// State vector layout (standard Kronecker product convention):
+    /// x = [ex₀_ph₀, ex₀_ph₁, ..., ex₀_ph_{n-1}, ex₁_ph₀, ex₁_ph₁, ..., ex_{m-1}_ph_{n-1}]
+    /// where exciton index varies slowest (outer loop) and photon index varies fastest (inner loop).
+    KronSum {
+        /// Maps photon transition (from_state, to_state) -> summed exciton matrix
+        transition_matrices: HashMap<(usize, usize), Array2<T>>,
+        /// Dimension of the exciton space
+        exciton_dim: usize,
+        /// Dimension of the photon space
+        photon_dim: usize,
+    },
 }
 
-impl<T: Clone + num_traits::Zero + std::ops::Add<Output = T> + std::ops::Mul<Output = T>> ComposedOperator<T> {
+
+impl<T: Clone + num_traits::Zero + LinalgScalar + std::ops::Add<Output = T> + std::ops::Mul<Output = T>> ComposedOperator<T> {
     /// Create from a base operator
     pub fn from_operator<O: SolverOperator<T> + 'static>(op: O) -> Self {
         ComposedOperator::Base(Arc::new(op))
@@ -764,14 +952,577 @@ impl<T: Clone + num_traits::Zero + std::ops::Add<Output = T> + std::ops::Mul<Out
     
     /// Create a sum of multiple operators
     /// This is more efficient than chaining binary Add operations
-    pub fn sum(ops: Vec<ComposedOperator<T>>) -> Self {
+    /// Additionally attempts to detect and optimize KronSum patterns
+    pub fn sum(ops: Vec<ComposedOperator<T>>) -> Self 
+    where
+        T: Copy + One + std::fmt::Debug + Norm + ConvertFrom<c64> + ConvertFrom<f64>,
+    {
         if ops.is_empty() {
-            // Return a zero operator - need to know dimension
             panic!("Cannot create sum of empty operator list");
         } else if ops.len() == 1 {
             ops.into_iter().next().unwrap()
         } else {
+            // Try to build an optimized KronSum if the pattern matches
+            if let Some(kron_sum) = Self::try_build_kron_sum(&ops) {
+                match kron_sum {
+                    ComposedOperator::KronSum { ref transition_matrices, .. } => {
+                        timed_println!("Optimized {} terms into KronSum with {} unique transitions",
+                            ops.len(), transition_matrices.len());
+                    }
+                    _ => {}
+                }
+
+                return kron_sum;
+            }
+            timed_println!("Debug: Not using KronSum");
+            
             ComposedOperator::Sum(ops.into_iter().map(Box::new).collect())
+        }
+    }
+    
+    /// Extract photon transition from a sparse operator that represents |to⟩⟨from|
+    /// Returns Some((from, to)) if the operator is a single-element transition, None otherwise
+    /// Optimized for single-excitation operators where only vacuum->mode transitions exist
+    fn extract_photon_transition(op: &ComposedOperator<T>) -> Option<(usize, usize)>
+    where
+        T: Copy + Zero + One,
+    {
+        match op {
+            ComposedOperator::Transpose(inner) => {
+                // For transpose, swap from and to
+                if let Some((from, to)) = Self::extract_photon_transition(inner) {
+                    Some((to, from))
+                } else {
+                    None
+                }
+            }
+            
+            ComposedOperator::ScalarMul(_, inner) => {
+                // Scalar multiplication doesn't change the transition structure
+                Self::extract_photon_transition(inner)
+            }
+            
+            ComposedOperator::Dot(left, right) => {
+                // Matrix multiplication is right-to-left: Dot(A, B)x = A(Bx)
+                // Check if Dot results in a single-element operator
+                if let (Some((from_l, to_l)), Some((from_r, to_r))) = 
+                    (Self::extract_photon_transition(left), Self::extract_photon_transition(right)) {
+                    // For Dot(left, right):
+                    // - First apply right: from_r → to_r
+                    // - Then apply left: from_l → to_l
+                    // - For valid composition: output of right must match input of left
+                    
+                    if to_r == from_l {
+                        // Valid composition: right's output feeds into left's input
+                        // Overall transition: from_r → to_l
+                        Some((from_r, to_l))
+                    } else {
+                        // The operators don't compose to a single element
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            
+            ComposedOperator::Base(base_op) => {
+                // For single-excitation operators, test vacuum state (index 0)
+                // and look for non-zero transitions
+                let dim = base_op.dimension();
+                
+                // First, try the vacuum state (most common case for single excitation)
+                let mut x_vacuum = vec![T::zero(); dim];
+                let mut y_vacuum = vec![T::zero(); dim];
+                x_vacuum[0] = T::one();
+                base_op.apply(&x_vacuum, &mut y_vacuum);
+                
+                // Check if vacuum produces exactly one non-zero mode
+                let mut to_idx = None;
+                let mut count = 0;
+                for (j, &val) in y_vacuum.iter().enumerate() {
+                    if !val.is_zero() {
+                        to_idx = Some(j);
+                        count += 1;
+                        if count > 1 {
+                            break; // More than one transition from vacuum
+                        }
+                    }
+                }
+                
+                if count == 1 {
+                    // This is a vacuum -> mode transition
+                    return Some((0, to_idx.unwrap()));
+                }
+                
+                // If not from vacuum, test each photon mode state
+                // For single-excitation, we expect mode -> vacuum transitions
+                for i in 1..dim {
+                    let mut x = vec![T::zero(); dim];
+                    let mut y = vec![T::zero(); dim];
+                    x[i] = T::one();
+                    base_op.apply(&x, &mut y);
+                    
+                    // Check if this mode produces exactly one transition
+                    let mut transition_found = false;
+                    let mut target = None;
+                    for (j, &val) in y.iter().enumerate() {
+                        if !val.is_zero() {
+                            if transition_found {
+                                return None; // Multiple transitions
+                            }
+                            transition_found = true;
+                            target = Some(j);
+                        }
+                    }
+                    
+                    if transition_found {
+                        // Found exactly one transition from state i
+                        // Check if other states also have transitions (should not for single-element op)
+                        let mut other_transitions = false;
+                        for k in (1..dim).filter(|&k| k != i) {
+                            let mut x_test = vec![T::zero(); dim];
+                            let mut y_test = vec![T::zero(); dim];
+                            x_test[k] = T::one();
+                            base_op.apply(&x_test, &mut y_test);
+                            
+                            if y_test.iter().any(|&v| !v.is_zero()) {
+                                other_transitions = true;
+                                break;
+                            }
+                        }
+                        
+                        if !other_transitions {
+                            return Some((i, target.unwrap()));
+                        } else {
+                            return None; // Multiple independent transitions
+                        }
+                    }
+                }
+                
+                None // No single-element transition found
+            }
+            _ => None,
+        }
+    }
+    
+    /// Flatten nested Add operators into a list of terms
+    /// Also distributes Kron over Add: Kron(M, Add(a,b)) -> [Kron(M,a), Kron(M,b)]
+    /// And handles ScalarMul: ScalarMul(s, Add(a,b)) -> [ScalarMul(s,a), ScalarMul(s,b)]
+    fn flatten_adds(op: &ComposedOperator<T>) -> Vec<ComposedOperator<T>>
+    where
+        T: Copy,
+    {
+        match op {
+            ComposedOperator::Add(left, right) => {
+                let mut terms = Self::flatten_adds(left);
+                terms.extend(Self::flatten_adds(right));
+                terms
+            }
+            ComposedOperator::Sum(ops) => {
+                ops.iter().flat_map(|op| Self::flatten_adds(op)).collect()
+            }
+            ComposedOperator::ScalarMul(scalar, inner) => {
+                // Flatten the inner operator first
+                let inner_terms = Self::flatten_adds(inner);
+                if inner_terms.len() > 1 {
+                    // Distribute scalar: ScalarMul(s, Add(a,b)) -> [ScalarMul(s,a), ScalarMul(s,b)]
+                    inner_terms.into_iter()
+                        .map(|term| ComposedOperator::ScalarMul(*scalar, Box::new(term)))
+                        .collect()
+                } else {
+                    // No distribution needed
+                    vec![op.clone()]
+                }
+            }
+            ComposedOperator::Kron(left, right) => {
+                // Check if right side is an Add - if so, distribute
+                let right_terms = Self::flatten_adds(right);
+                if right_terms.len() > 1 {
+                    // Distribute: Kron(M, Add(a,b)) -> [Kron(M,a), Kron(M,b)]
+                    right_terms.into_iter()
+                        .map(|r_term| ComposedOperator::Kron(left.clone(), Box::new(r_term)))
+                        .collect()
+                } else {
+                    // No distribution needed
+                    vec![op.clone()]
+                }
+            }
+            _ => vec![op.clone()],
+        }
+    }
+    
+    /// Check if an operator is effectively zero by testing it
+    fn is_zero_operator(op: &ComposedOperator<T>) -> bool
+    where
+        T: Copy + Zero + One + Norm,
+    {
+        match op {
+            ComposedOperator::Zero(_) => true,
+            ComposedOperator::ScalarMul(scalar, inner) => {
+                scalar.is_zero() || Self::is_zero_operator(inner)
+            }
+            ComposedOperator::Dot(left, right ) => {
+                if Self::is_zero_operator(left) || Self::is_zero_operator(right) {
+                    return true
+                }
+                else {
+                    let dim = op.dimension();
+
+                    let mut y = vec![T::zero(); dim];
+                    for i in 0..dim {
+                        let mut x = vec![T::zero(); dim];
+                        x[i] = T::one();
+                        op.apply(&x, &mut y);
+                        
+                        for j in 0..dim {
+                            if Norm::norm(y[j]) > f64::EPSILON {return false};
+                        }
+                    }
+
+                    return true
+                }
+            }
+            ComposedOperator::Kron(left, right) => {
+                Self::is_zero_operator(left) || Self::is_zero_operator(right) 
+            }
+            ComposedOperator::Add(left, right) => {
+                Self::is_zero_operator(left) && Self::is_zero_operator(right) 
+            }
+            ComposedOperator::Diagonal(diags) => {
+                for i in 0 .. diags.len() {
+                    if Norm::norm(diags[i]) > f64::EPSILON { return false; }
+                }
+
+                return true;
+            }
+            _ => false,
+        }
+    }
+    
+   
+    /// Fast extraction of matrix from an operator
+    /// Uses direct access for Base operators with automatic type conversion, falls back to basis vector application
+    fn extract_matrix_fast(op: &ComposedOperator<T>, dim: usize) -> Array2<T>
+    where
+        T: Copy + Zero + One + LinalgScalar + ConvertFrom<c64> + ConvertFrom<f64>,
+    {
+        match op {
+            // Fast path: Direct extraction from Base operators
+            ComposedOperator::Base(base_op) => {
+                // Try to downcast Arc<dyn SolverOperator> to concrete types
+                let any_ref = base_op.as_ref() as &dyn std::any::Any;
+                
+                // Try all known scalar types that implement MatrixOps
+                // The macro will attempt to downcast to Array2<S> and CsMat<S> for each type S
+                if let Some(matrix) = try_downcast_and_convert!(any_ref, dim, c64) {
+                    return matrix;
+                }
+                
+                if let Some(matrix) = try_downcast_and_convert!(any_ref, dim, f64) {
+                    return matrix;
+                }
+                
+                // Fall through to basis vector extraction for unknown types
+                Self::extract_matrix_by_apply(op, dim)
+            }
+            
+            // Fast path: Identity matrix
+            ComposedOperator::Identity(_) => Array2::eye(dim),
+            
+            // Fast path: Zero matrix
+            ComposedOperator::Zero(_) => Array2::zeros((dim, dim)),
+            
+            // Fast path: Diagonal matrix
+            ComposedOperator::Diagonal(diag) => Array2::from_diag(&Array1::from_vec(diag.clone())),
+            
+            // Fast path: Scalar multiplication
+            ComposedOperator::ScalarMul(scalar, inner) => {
+                let inner_matrix = Self::extract_matrix_fast(inner, dim);
+                inner_matrix.mapv(|v| *scalar * v)
+            }
+            
+            // Fast path: Transpose
+            ComposedOperator::Transpose(inner) => {
+                let inner_matrix = Self::extract_matrix_fast(inner, dim);
+                inner_matrix.t().to_owned()
+            }
+            
+            // Fast path: Matrix multiplication (Dot)
+            ComposedOperator::Dot(left, right) => {
+                // Try to extract both matrices and multiply them
+                // This is faster than applying to basis vectors if extraction is cheap
+                let left_matrix = Self::extract_matrix_fast(left, dim);
+                let right_matrix = Self::extract_matrix_fast(right, dim);
+                ndarray::linalg::Dot::dot(&left_matrix, &right_matrix)
+            }
+            
+            // Fast path: Addition
+            ComposedOperator::Add(left, right) => {
+                let left_matrix = Self::extract_matrix_fast(left, dim);
+                let right_matrix = Self::extract_matrix_fast(right, dim);
+                &left_matrix + &right_matrix
+            }
+            
+            // For other cases, fall back to basis vector application
+            _ => Self::extract_matrix_by_apply(op, dim),
+        }
+    }
+    
+    /// Extract matrix by applying operator to basis vectors (slow fallback)
+    /// This is only called when we can't directly access the matrix representation
+    fn extract_matrix_by_apply(op: &ComposedOperator<T>, dim: usize) -> Array2<T>
+    where
+        T: Copy + Zero + One,
+    {
+        let mut matrix = Array2::zeros((dim, dim));
+        
+        // Reuse these vectors across all columns to avoid repeated allocations
+        let mut x = vec![T::zero(); dim];
+        let mut y = vec![T::zero(); dim];
+        
+        for col in 0..dim {
+            // Set up basis vector (x is already zeroed from previous iteration)
+            x[col] = T::one();
+            
+            // Apply operator
+            op.apply(&x, &mut y);
+            
+            // Copy column into matrix
+            for row in 0..dim {
+                matrix[[row, col]] = y[row];
+            }
+            
+            // Reset x for next iteration (y will be overwritten by apply)
+            x[col] = T::zero();
+        }
+        
+        matrix
+    }
+    
+    /// Try to detect and build a KronSum from a list of operators
+    /// Returns a potentially optimized operator that may be:
+    /// - A single KronSum if all terms match the pattern
+    /// - A Sum containing a KronSum and other terms if some match
+    /// - The original Sum if no terms match
+    fn try_build_kron_sum(ops: &[ComposedOperator<T>]) -> Option<ComposedOperator<T>>
+    where
+        T: Copy + One + std::fmt::Debug + LinalgScalar + Norm + ConvertFrom<f64> + ConvertFrom<c64>,
+    {
+        use std::time::Instant;
+        let start = Instant::now();
+        
+        // First, flatten any Add operators in the list
+        let flattened_ops: Vec<ComposedOperator<T>> = ops.iter()
+            .flat_map(|op| Self::flatten_adds(op))
+            .collect();
+        
+        timed_println!("  Flattened {} ops into {} terms", ops.len(), flattened_ops.len());
+        
+        let mut transition_matrices: HashMap<(usize, usize), Array2<T>> = HashMap::new();
+        let mut exciton_dim: Option<usize> = None;
+        let mut photon_dim: Option<usize> = None;
+        let mut non_kronsum_terms: Vec<ComposedOperator<T>> = Vec::new();
+        let mut n_valid = 0;
+        let mut n_zero = 0;
+        let mut n_other = 0;
+        
+        // Track reasons for non-matching terms (for debugging)
+        let mut n_not_kron = 0;
+        let mut n_no_transition = 0;
+        let mut n_dim_mismatch = 0;
+        
+        // Cache for extracted matrices - maps operator pointer to extracted matrix
+        // This avoids re-extracting the same operator multiple times
+        let mut matrix_cache: HashMap<usize, Array2<T>> = HashMap::new();
+        
+        for op in &flattened_ops {
+            // Skip zero operators
+            if Self::is_zero_operator(op) {
+                n_zero += 1;
+                continue;
+            }
+            
+            // Unwrap ScalarMul to get to the underlying operator
+            let (scalar, inner_op) = match op {
+                ComposedOperator::ScalarMul(s, inner) => (Some(*s), inner.as_ref()),
+                _ => (None, op),
+            };
+            
+            // Check if this is a Kron(exciton_op, photon_op) pattern
+            if let ComposedOperator::Kron(left, right) = inner_op {
+                // Debug: print operator types for first few terms
+                if n_valid < 3 {
+                    timed_println!("    Debug: Kron term #{}", n_valid);
+                    timed_println!("      Left type: {:?}", std::mem::discriminant(left.as_ref()));
+                    timed_println!("      Right type: {:?}", std::mem::discriminant(right.as_ref()));
+                }
+                
+                // Check if right operator is a photon transition
+                let transition = Self::extract_photon_transition(right);
+                if n_valid < 5 {
+                    timed_println!("      Transition result: {:?}", transition);
+                }
+                match transition {
+                    Some((from, to)) => {
+                        // Extract the exciton matrix from the left operator
+                        let ex_dim = left.dimension();
+                        let ph_dim = right.dimension();
+                        
+                        // Verify dimensions are consistent
+                        let dims_ok = if let Some(stored_ex_dim) = exciton_dim {
+                            stored_ex_dim == ex_dim
+                        } else {
+                            exciton_dim = Some(ex_dim);
+                            true
+                        } && if let Some(stored_ph_dim) = photon_dim {
+                            stored_ph_dim == ph_dim
+                        } else {
+                            photon_dim = Some(ph_dim);
+                            true
+                        };
+                        
+                        if !dims_ok {
+                            // Inconsistent dimensions - treat as non-KronSum term
+                            non_kronsum_terms.push(op.clone());
+                            n_other += 1;
+                            n_dim_mismatch += 1;
+                            continue;
+                        }
+                        
+                        // Extract the exciton matrix - use cache if possible
+                        // Use the operator's memory address as a cache key
+                        let cache_key = left.as_ref() as *const ComposedOperator<T> as usize;
+                        let mut ex_matrix = if let Some(cached) = matrix_cache.get(&cache_key) {
+                            cached.clone()
+                        } else {
+                            let matrix = Self::extract_matrix_fast(left.as_ref(), ex_dim);
+                            matrix_cache.insert(cache_key, matrix.clone());
+                            matrix
+                        };
+                        
+                        // Apply scalar if present
+                        if let Some(s) = scalar {
+                            ex_matrix = ex_matrix.mapv(|v| s * v);
+                        }
+                        
+                        // Add or accumulate to the transition matrix
+                        transition_matrices.entry((from, to))
+                            .and_modify(|existing| {
+                                *existing = &*existing + &ex_matrix;
+                            })
+                            .or_insert(ex_matrix);
+                        
+                        n_valid += 1;
+                    }
+                    None => {
+                        // Right side is not a single photon transition
+                        // Could be a complex operator - keep it as a separate term
+                        if n_no_transition < 10 {
+                            // Debug: print first few cases with more detail
+                            timed_println!("    Debug: Kron with no transition detected. Right op type: {:?}",
+                                std::mem::discriminant(right.as_ref()));
+                            
+                            // If it's a Dot, show what's inside
+                            if let ComposedOperator::Dot(dot_left, dot_right) = right.as_ref() {
+                                timed_println!("      Dot components: left={:?}, right={:?}",
+                                    std::mem::discriminant(dot_left.as_ref()),
+                                    std::mem::discriminant(dot_right.as_ref()));
+                                
+                                // Try to extract transitions from each side
+                                let left_trans = Self::extract_photon_transition(dot_left);
+                                let right_trans = Self::extract_photon_transition(dot_right);
+                                timed_println!("      Left transition: {:?}, Right transition: {:?}",
+                                    left_trans, right_trans);
+                            }
+                        }
+                        non_kronsum_terms.push(op.clone());
+                        n_other += 1;
+                        n_no_transition += 1;
+                    }
+                }
+            } else {
+                // Not a Kron pattern - keep as separate term
+                if n_not_kron < 5 {
+                    // Debug: print first few non-Kron terms
+                    let type_name = match op {
+                        ComposedOperator::Base(_) => "Base",
+                        ComposedOperator::Add(_, _) => "Add",
+                        ComposedOperator::Sum(_) => "Sum",
+                        ComposedOperator::Dot(_, _) => "Dot",
+                        ComposedOperator::ScalarMul(_, _) => "ScalarMul",
+                        ComposedOperator::Kron(_, _) => "Kron",
+                        ComposedOperator::Diagonal(_) => "Diagonal",
+                        ComposedOperator::Identity(_) => "Identity",
+                        ComposedOperator::Zero(_) => "Zero",
+                        ComposedOperator::Transpose(_) => "Transpose",
+                        ComposedOperator::KronSum { .. } => "KronSum",
+                    };
+                    timed_println!("    Debug: Non-Kron term #{}: type = {}", n_not_kron + 1, type_name);
+                }
+                non_kronsum_terms.push(op.clone());
+                n_other += 1;
+                n_not_kron += 1;
+            }
+        }
+        
+        let elapsed = start.elapsed();
+        timed_println!("  KronSum pattern detection took {:?}", elapsed);
+        timed_println!("  Pattern matching: {} KronSum terms, {} other terms, {} zero terms", 
+            n_valid, n_other, n_zero);
+        let cache_hits = if n_valid > matrix_cache.len() { n_valid - matrix_cache.len() } else { 0 };
+        timed_println!("  Matrix cache: {} unique matrices extracted, {} cache hits",
+            matrix_cache.len(), cache_hits);
+        if n_other > 0 {
+            timed_println!("    Other terms breakdown: {} not Kron, {} no transition, {} dim mismatch",
+                n_not_kron, n_no_transition, n_dim_mismatch);
+        }
+        
+        // Decide what to return based on what we found
+        if !transition_matrices.is_empty() {
+            let kronsum = ComposedOperator::KronSum {
+                transition_matrices,
+                exciton_dim: exciton_dim.unwrap(),
+                photon_dim: photon_dim.unwrap(),
+            };
+            
+            if non_kronsum_terms.is_empty() {
+                // All terms matched the KronSum pattern!
+                timed_println!("  ✓ Pure KronSum with {} unique transitions", 
+                    if let ComposedOperator::KronSum { ref transition_matrices, .. } = kronsum {
+                        transition_matrices.len()
+                    } else { 0 });
+                Some(kronsum)
+            } else {
+                // Hybrid: some terms matched, some didn't
+                timed_println!("  ✓ Hybrid: KronSum with {} transitions + {} other terms",
+                    if let ComposedOperator::KronSum { ref transition_matrices, .. } = kronsum {
+                        transition_matrices.len()
+                    } else { 0 },
+                    non_kronsum_terms.len());
+                
+                // Create a Sum with the KronSum and the other terms
+                let mut all_terms = vec![Box::new(kronsum)];
+                all_terms.extend(non_kronsum_terms.into_iter().map(Box::new));
+                Some(ComposedOperator::Sum(all_terms))
+            }
+        } else {
+            // No terms matched the KronSum pattern
+            timed_println!("  ✗ KronSum not applied: no valid KronSum terms found");
+            None
+        }
+    }
+    
+    /// Check if this operator is a KronSum variant
+    pub fn is_kron_sum(&self) -> bool {
+        matches!(self, ComposedOperator::KronSum { .. })
+    }
+    
+    /// Get information about KronSum if this is a KronSum operator
+    pub fn get_kron_sum_info(&self) -> Option<(usize, usize, usize)> {
+        if let ComposedOperator::KronSum { transition_matrices, exciton_dim, photon_dim } = self {
+            Some((transition_matrices.len(), *exciton_dim, *photon_dim))
+        } else {
+            None
         }
     }
     
@@ -786,14 +1537,15 @@ impl<T: Clone + num_traits::Zero + std::ops::Add<Output = T> + std::ops::Mul<Out
             ComposedOperator::Kron(a, b) => a.dimension() * b.dimension(),
             ComposedOperator::Diagonal(diag) => diag.len(),
             ComposedOperator::Identity(n) => *n,
-            ComposedOperator::Zero(n, _) => *n,
-            ComposedOperator::Transpose(a) => a.dimension()
+            ComposedOperator::Zero(n) => *n,
+            ComposedOperator::Transpose(a) => a.dimension(),
+            ComposedOperator::KronSum { exciton_dim, photon_dim, .. } => exciton_dim * photon_dim,
         }
     }
 
     pub fn apply_transpose(&self, x: &[T], y: &mut [T]) 
     where
-        T: Copy + One,
+        T: Copy + One + LinalgScalar,
     {
         let dim = self.dimension();
         assert_eq!(dim, x.len(), "Input vector x has wrong dimension: expected {}, got {}", dim, x.len());
@@ -836,10 +1588,10 @@ impl<T: Clone + num_traits::Zero + std::ops::Add<Output = T> + std::ops::Mul<Out
             }
             
             ComposedOperator::Dot(a, b) => {
-                // y = ABx
+                // (AB)^T = B^T A^T, so (AB)^T x = B^T(A^T x)
                 let mut temp = vec![T::zero(); y.len()];
-                b.apply_transpose(x, &mut temp);
-                a.apply_transpose(&temp, y);
+                a.apply_transpose(x, &mut temp);  // temp = A^T x
+                b.apply_transpose(&temp, y);      // y = B^T temp = B^T A^T x
             }
 
             ComposedOperator::ScalarMul(alpha, a) => {
@@ -853,6 +1605,9 @@ impl<T: Clone + num_traits::Zero + std::ops::Add<Output = T> + std::ops::Mul<Out
             ComposedOperator::Kron(a, b) => {
                 let na = a.dimension();
                 let nb = b.dimension();
+
+                // Zero output first since we write to slices
+                y.fill(T::zero());
 
                 match (a.as_ref(), b.as_ref()) {
                     // I ⊗ B = B repeated na times
@@ -916,12 +1671,39 @@ impl<T: Clone + num_traits::Zero + std::ops::Add<Output = T> + std::ops::Mul<Out
                 y[..*n].copy_from_slice(&x[..*n]);
             }
             
-            ComposedOperator::Zero(_, _) => {
+            ComposedOperator::Zero(_) => {
                 y.fill(T::zero());
             }
 
             ComposedOperator::Transpose(a) => {
                 a.apply(x, y);
+            }
+            
+            ComposedOperator::KronSum { transition_matrices, exciton_dim, photon_dim } => {
+                // Apply transpose: y = Σᵢ (Mᵢᵀ ⊗ |from_i⟩⟨to_i|) x
+                // For transpose, swap from and to in the photon transition
+                
+                y.fill(T::zero());
+                
+                for (&(from, to), matrix) in transition_matrices {
+                    // For transpose: read from photon state 'to', write to photon state 'from'
+                    // and apply transposed exciton matrix
+                    
+                    // Gather input: x_block[ex] = x[ex * photon_dim + to]
+                    let mut x_block = vec![T::zero(); *exciton_dim];
+                    for ex in 0..*exciton_dim {
+                        x_block[ex] = x[ex * photon_dim + to];
+                    }
+                    
+                    // Apply the transposed exciton matrix: result = Mᵀ * x_block
+                    let x_arr = Array1::from_iter(x_block.iter().copied());
+                    let result = ndarray::linalg::Dot::dot(&matrix.t(), &x_arr);
+                    
+                    // Scatter output: y[ex * photon_dim + from] += result[ex]
+                    for (ex, &val) in result.iter().enumerate() {
+                        y[ex * photon_dim + from] = y[ex * photon_dim + from] + val;
+                    }
+                }
             }
         }
     }
@@ -930,7 +1712,7 @@ impl<T: Clone + num_traits::Zero + std::ops::Add<Output = T> + std::ops::Mul<Out
     /// Apply the composed operator to a vector
     pub fn apply(&self, x: &[T], y: &mut [T]) 
     where
-        T: Copy + One,
+        T: Copy + One + LinalgScalar,
     {
         let dim = self.dimension();
         assert_eq!(dim, x.len(), "Input vector x has wrong dimension: expected {}, got {}", dim, x.len());
@@ -991,6 +1773,9 @@ impl<T: Clone + num_traits::Zero + std::ops::Add<Output = T> + std::ops::Mul<Out
             ComposedOperator::Kron(a, b) => {
                 let na = a.dimension();
                 let nb = b.dimension();
+
+                // Zero output first since we write to slices
+                y.fill(T::zero());
 
                 match (a.as_ref(), b.as_ref()) {
                     // I ⊗ B = B repeated na times
@@ -1054,12 +1839,40 @@ impl<T: Clone + num_traits::Zero + std::ops::Add<Output = T> + std::ops::Mul<Out
                 y[..*n].copy_from_slice(&x[..*n]);
             }
             
-            ComposedOperator::Zero(_, _) => {
+            ComposedOperator::Zero(_) => {
                 y.fill(T::zero());
             }
 
             ComposedOperator::Transpose(a) => {
                 a.apply_transpose(x, y);
+            }
+            
+            ComposedOperator::KronSum { transition_matrices, exciton_dim, photon_dim } => {
+                // Optimized application: y = Σᵢ (Mᵢ ⊗ |to_i⟩⟨from_i|) x
+                // Standard Kronecker product layout: x = [ex₀_ph₀, ex₀_ph₁, ..., ex₁_ph₀, ex₁_ph₁, ...]
+                // Exciton index varies slowest (outer loop), photon index varies fastest (inner loop)
+                
+                y.fill(T::zero());
+                
+                for (&(from, to), matrix) in transition_matrices {
+                    // For each exciton state, extract the component in photon state 'from'
+                    // and write to photon state 'to' after applying the exciton matrix
+                    
+                    // Gather input: x_block[ex] = x[ex * photon_dim + from]
+                    let mut x_block = vec![T::zero(); *exciton_dim];
+                    for ex in 0..*exciton_dim {
+                        x_block[ex] = x[ex * photon_dim + from];
+                    }
+                    
+                    // Apply the exciton matrix: result = M * x_block
+                    let x_arr = Array1::from_iter(x_block.iter().copied());
+                    let result = ndarray::linalg::Dot::dot(matrix, &x_arr);
+                    
+                    // Scatter output: y[ex * photon_dim + to] += result[ex]
+                    for (ex, &val) in result.iter().enumerate() {
+                        y[ex * photon_dim + to] = y[ex * photon_dim + to] + val;
+                    }
+                }
             }
         }
     }
@@ -1148,9 +1961,28 @@ impl<T: Clone + num_traits::Zero + std::ops::Add<Output = T> + std::ops::Mul<Out
             
             ComposedOperator::Identity(n) => vec![T::one(); *n],
             
-            ComposedOperator::Zero(n, _) => vec![T::zero(); *n],
+            ComposedOperator::Zero(n) => vec![T::zero(); *n],
 
-            ComposedOperator::Transpose(a) => a.get_diagonal()
+            ComposedOperator::Transpose(a) => a.get_diagonal(),
+            
+            ComposedOperator::KronSum { transition_matrices, exciton_dim, photon_dim } => {
+                // Diagonal elements come from transitions where from == to
+                // Standard layout: diag[ex * photon_dim + ph] for exciton state ex, photon state ph
+                let mut diag = vec![T::zero(); exciton_dim * photon_dim];
+                
+                for (&(from, to), matrix) in transition_matrices {
+                    if from == to {
+                        // This is a diagonal block contribution
+                        // For each exciton state, add the diagonal element of the matrix
+                        for ex in 0..*exciton_dim {
+                            let idx = ex * photon_dim + from;
+                            diag[idx] = diag[idx] + matrix[[ex, ex]];
+                        }
+                    }
+                }
+                
+                diag
+            }
         }
     }
 }
@@ -1196,7 +2028,7 @@ macro_rules! impl_matrix_ops_lin_op {
             }
             
             fn zeros(shape: (usize, usize)) -> Self {
-                ComposedOperator::Zero(shape.0, shape.1)
+                ComposedOperator::Zero(shape.0)
             }
             
             fn kron(&self, other: &Self) -> Self {
@@ -1234,7 +2066,7 @@ macro_rules! impl_matrix_ops_lin_op {
             fn from_trimat(trimat: &TriMat<Self::Scalar>) -> Self {
                 // Convert TriMat to sparse and wrap as an operator
                 let csmat = trimat.to_csr();
-                ComposedOperator::from_operator(CsMatOperator::new(csmat))
+                ComposedOperator::from_operator(csmat)
             }
             
             fn add_trimat(&mut self, trimat: &TriMat<Self::Scalar>) {
@@ -1242,11 +2074,20 @@ macro_rules! impl_matrix_ops_lin_op {
             }
 
             fn from_dense<T>(dense: &Array2<T>) -> Self
-                    where T: Clone + NumCast + Zero, {
+                    where T: Clone + NumCast + Zero + 'static + Copy,Self::Scalar: ConvertFrom<T> {
                 
-                let dense = dense.mapv(|x| NumCast::from(x).unwrap_or_else(|| Self::Scalar::zero()));
-                
-                ComposedOperator::from_operator(DenseOperator::new(dense))
+                // For other types, convert element-wise to Self::Scalar
+                let (rows, cols) = (dense.nrows(), dense.ncols());
+                let mut new_dense = Array2::zeros((rows,cols));
+                for i in 0..rows {
+                    for j in 0..cols {
+                        let val = dense[[i, j]];
+                        if let Some(converted) = <Self::Scalar as ConvertFrom<T>>::convert_from(val) {
+                            new_dense[[i, j]] = converted;
+                        }
+                    }
+                }
+                ComposedOperator::from_operator(new_dense)
             }
 
             fn transpose(&self) -> Self {
