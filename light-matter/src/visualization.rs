@@ -27,7 +27,7 @@ fn extract_params_from_filename(path: &Path) -> Option<DielectricParams> {
     let filename = path.file_name()?.to_str()?;
     
     // Skip if not a dielectric function file
-    if !filename.starts_with("dielectric_sin_") {
+    if !filename.starts_with("dielectric_") {
         return None;
     }
     
@@ -81,7 +81,7 @@ pub fn plot_dielectric_function(
     zoomed: bool
 ) -> Result<(), Box<dyn std::error::Error>> {
 
-    let verbose = false;
+    let verbose = true;
     let dark_mode = false;
 
     let mut background = &WHITE;

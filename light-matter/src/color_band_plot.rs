@@ -661,12 +661,12 @@ pub fn plot_color_band_structure(
     writeln!(script, "set bmargin 3")?;
         
     if dark {
-        writeln!(script, "set title 'Exciton-Polariton Band Structure (a₀={:.1}, V₀={:.1}, g={:.3})' font 'Arial,16' textcolor rgb '#e0e0e0'", a0, v0, coupling)?;
+        writeln!(script, "set title 'Exciton-Polariton Band Structure (a₀={:.1}, V₀={:.1}, g={:.6})' font 'Arial,16' textcolor rgb '#e0e0e0'", a0, v0, coupling)?;
         writeln!(script, "set xlabel 'Wave vector' textcolor rgb '#e0e0e0'")?;
         writeln!(script, "set ylabel 'Energy (a.u.)' textcolor rgb '#e0e0e0'")?;
     }
     else {
-        writeln!(script, "set title 'Exciton-Polariton Band Structure (a₀={:.1}, V₀={:.1}, g={:.3})' font 'Arial,16'", a0, v0, coupling)?;
+        writeln!(script, "set title 'Exciton-Polariton Band Structure (a₀={:.1}, V₀={:.1}, g={:.6})' font 'Arial,16'", a0, v0, coupling)?;
         writeln!(script, "set xlabel 'Wave vector'")?;
         writeln!(script, "set ylabel 'Energy (a.u.)'")?;
     }

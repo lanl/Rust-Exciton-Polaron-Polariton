@@ -52,6 +52,17 @@ macro_rules! impl_convert_from_for_c64 {
     };
 }
 
+impl ConvertFrom<Array2<f64>> for Array2<c64>{
+    fn convert_from(val: Array2<f64>) -> Option<Self> where Self: Sized {
+
+        let shape = val.shape();
+
+        Some(Array2::from_shape_fn([shape[0], shape[1]], |(i,j)| {
+            c64::new(val[[i,j]], 0.0)
+        }))
+    }
+}
+
 
 /// Helper macro to try downcasting and converting from a specific scalar type
 macro_rules! try_downcast_and_convert {
@@ -77,6 +88,34 @@ macro_rules! try_downcast_and_convert {
         
         None::<Array2<T>>
     }};
+}
+
+pub trait HermitianConjugate {
+    fn dag(&self) -> Self;
+}
+
+impl HermitianConjugate for Array2<f64> {
+    fn dag(&self) -> Self {
+        self.t().to_owned()
+    }
+}
+
+impl HermitianConjugate for Array2<c64> {
+    fn dag(&self) -> Self {
+        self.t().to_owned().mapv_into(|val| val.conj())
+    }
+}
+
+impl HermitianConjugate for c64 {
+    fn dag(&self) -> Self {
+        self.conj()
+    }
+}
+
+impl HermitianConjugate for f64 {
+    fn dag(&self) -> Self {
+        *self
+    }
 }
 
 pub trait Norm {
@@ -311,62 +350,162 @@ impl PPConfig {
 }
 
 use std::fmt;
+// helper shared by both pretty‑printers
+fn fmt_scientific(val: f64, prec: usize) -> String {
+    let mut s = format!("{:.*e}", prec, val); // e.g. "1.00e0" or "1.35e-17"
+    if let Some(e_pos) = s.find('e') {
+        let exp_part = &s[e_pos + 1..];
+        let (sign, digits) = match exp_part.chars().next() {
+            Some('-') => ("-", &exp_part[1..]),
+            Some('+') => ("+", &exp_part[1..]),
+            _ => ("+", exp_part),
+        };
+        let digits_padded = if digits.len() < 2 {
+            format!("0{}", digits)
+        } else {
+            digits.to_string()
+        };
+        s = format!("{}e{}{}", &s[..e_pos], sign, digits_padded);
+    }
+    s
+}
+
 #[derive(Debug)]
-pub struct PrettyArray2<'a>(pub &'a Array2<f64>, pub usize); // Second parameter is precision
+pub struct PrettyArray2<'a>(pub &'a Array2<f64>, pub usize); // second param = precision
 
 impl<'a> fmt::Display for PrettyArray2<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let precision = self.1;
-        
-        // First pass: determine the maximum width for each column
-        let mut max_widths = vec![0; self.0.ncols()];
-        
-        for row in self.0.rows() {
-            for (i, val) in row.iter().enumerate() {
-                // Format the number in scientific notation with the specified precision
-                let formatted = format!("{:.*e}", precision, val);
-                max_widths[i] = max_widths[i].max(formatted.len());
+        let prec = self.1;
+        const THRESH: f64 = 1e-15;
+        const GREEN: &str = "\x1b[32m";
+        const RED:   &str = "\x1b[31m";
+        const RESET: &str = "\x1b[0m";
+
+        fn colourize(val: f64, s: String) -> String {
+            let mag = val.abs();
+            if mag <= THRESH {
+                s
+            } else if val > 0.0 {
+                format!("{}{}{}", GREEN, s, RESET)
+            } else {
+                format!("{}{}{}", RED, s, RESET)
             }
         }
-        
-        // Calculate the total width of each column including padding and divider
-        let col_widths: Vec<usize> = max_widths.iter().map(|w| w + 2).collect(); // +2 for padding
-        
-        // Function to create a horizontal divider line
-        let create_divider = |widths: &[usize]| {
-            let mut divider = String::from("+");
-            for width in widths {
-                divider.push_str(&"-".repeat(*width));
-                divider.push('+');
-            }
-            divider
-        };
-        
-        let divider = create_divider(&col_widths);
-        
-        // Add a newline at the beginning
-        writeln!(f)?;
-        
-        // Print the top divider
-        writeln!(f, "{}", divider)?;
-        
-        // Second pass: print with proper alignment and dividers
+
+        // compute maximum plain width for each column
+        let mut maxw = vec![0; self.0.ncols()];
         for row in self.0.rows() {
-            write!(f, "|")?; // Start each row with a divider
-            
-            for (i, val) in row.iter().enumerate() {
-                // Right-align each number within its column width
-                write!(f, " {:>width$.prec$e} |", val, width = max_widths[i], prec = precision)?;
+            for (j, &v) in row.iter().enumerate() {
+                let plain = fmt_scientific(v, prec);
+                maxw[j] = maxw[j].max(plain.len());
+            }
+        }
+        let colw: Vec<usize> = maxw.iter().map(|w| w + 2).collect(); // +2 for the fixed
+                                                                 // one‑space margins
+        let make_div = |widths: &[usize]| {
+            let mut d = String::from("+");
+            for &w in widths {
+                d.push_str(&"-".repeat(w));
+                d.push('+');
+            }
+            d
+        };
+        let divider = make_div(&colw);
+
+        writeln!(f)?;
+        writeln!(f, "{}", divider)?;
+        for row in self.0.rows() {
+            write!(f, "|")?;
+            for (j, &v) in row.iter().enumerate() {
+                let plain = fmt_scientific(v, prec);
+                let coloured = colourize(v, plain.clone());
+                let pad = maxw[j] - plain.len();       // everything goes on the right
+
+                write!(
+                    f,
+                    " {}{}{} |",
+                    coloured,
+                    " ".repeat(pad),
+                    ""          // trailing space is already in the format string
+                )?;
             }
             writeln!(f)?;
-            
-            // Print a horizontal divider after each row
             writeln!(f, "{}", divider)?;
         }
-        
-        // Add a newline at the end
         writeln!(f)?;
-        
+        Ok(())
+    }
+}
+
+pub struct PrettyC64Array2<'a>(pub &'a Array2<c64>, pub usize); // second parameter is precision
+
+impl<'a> fmt::Display for PrettyC64Array2<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let prec = self.1;
+        const THRESH: f64 = 1e-15;
+        const GREEN: &str = "\x1b[32m";
+        const RED:   &str = "\x1b[31m";
+        const RESET: &str = "\x1b[0m";
+
+        fn colourize(val: c64, s: String) -> String {
+            let real = val.re;
+            let imag = val.im;
+            let mag_real = real.abs();
+            let mag_imag = imag.abs();
+            if mag_real <= THRESH && mag_imag <= THRESH {
+                s
+            } else if real > THRESH || (mag_real <= THRESH && imag > THRESH) {
+                format!("{}{}{}", GREEN, s, RESET)
+            } else {
+                format!("{}{}{}", RED, s, RESET)
+            }
+        }
+
+        let mut maxw = vec![0; self.0.ncols()];
+        for row in self.0.rows() {
+            for (j, v) in row.iter().enumerate() {
+                let real_s = fmt_scientific(v.re, prec);
+                let imag_s = fmt_scientific(v.im.abs(), prec);
+                let sign = if v.im >= 0.0 { "+" } else { "-" };
+                let plain = format!("({} {} {} i)", real_s, sign, imag_s);
+                maxw[j] = maxw[j].max(plain.len());
+            }
+        }
+        let colw: Vec<usize> = maxw.iter().map(|w| w + 2).collect();
+        let make_div = |widths: &[usize]| {
+            let mut d = String::from("+");
+            for &w in widths {
+                d.push_str(&"-".repeat(w));
+                d.push('+');
+            }
+            d
+        };
+        let divider = make_div(&colw);
+
+        writeln!(f)?;
+        writeln!(f, "{}", divider)?;
+        for row in self.0.rows() {
+            write!(f, "|")?;
+            for (j, v) in row.iter().enumerate() {
+                let real_s = fmt_scientific(v.re, prec);
+                let imag_s = fmt_scientific(v.im.abs(), prec);
+                let sign = if v.im >= 0.0 { "+" } else { "-" };
+                let plain = format!("({} {} {} i)", real_s, sign, imag_s);
+                let coloured = colourize(*v, plain.clone());
+                let pad = maxw[j] - plain.len();
+
+                write!(
+                    f,
+                    " {}{}{} |",
+                    coloured,
+                    " ".repeat(pad),
+                    ""
+                )?;
+            }
+            writeln!(f)?;
+            writeln!(f, "{}", divider)?;
+        }
+        writeln!(f)?;
         Ok(())
     }
 }
@@ -714,59 +853,6 @@ pub trait SolverOperator<T: Clone>: Send + Sync + std::any::Any {
     fn diagonalize(&self, n_eig: Option<usize>, solve_type: Option<EPSType>, initial_guess: Option<&Array2<c64>>) -> (Array1<f64>, Array2<c64>);
 }
 
-// #[derive(Clone)]
-// pub struct CsMatOperator {
-//     pub matrix: CsMat<c64>,
-// }
-
-// impl CsMatOperator {
-//     pub fn new(matrix: CsMat<c64>) -> Self{
-//         Self { matrix }
-//     }
-// }
-
-// impl SolverOperator<c64> for CsMatOperator {
-//     fn apply(&self, x: &[c64], y: &mut [c64]) {
-//         // Apply matrix-vector product
-//         // Note: sprs only provides accumulating matrix-vector multiplication (mul_acc_*)
-//         // so we must zero the output vector first
-//         y.fill(c64::zero());
-//         sprs::prod::mul_acc_mat_vec_csr(self.matrix.view(), x, y);
-//     }
-
-//     fn apply_transpose(&self, x: &[c64], y: &mut [c64]) {
-//         // Apply transpose (not conjugate transpose)
-//         // Note: sprs only provides accumulating matrix-vector multiplication (mul_acc_*)
-//         // so we must zero the output vector first
-//         y.fill(c64::zero());
-//         sprs::prod::mul_acc_mat_vec_csc(self.matrix.transpose_view(), x, y);
-//     }
-
-//     fn get_diagonal(&self) -> Vec<c64> {
-//         let mut diags: Vec<c64> = vec![c64::zero(); self.matrix.shape().0];
-
-//         self.matrix.diag().iter().for_each(|(i, val)| {
-//             diags[i] = *val;
-//         });
-
-//         diags
-//     }
-
-//     fn dimension(&self) -> usize {
-//         self.matrix.shape().0
-//     }
-
-//     fn diagonalize(&self, n_eig: Option<usize>, solve_type: Option<EPSType>, initial_guess: Option<&Array2<c64>>) -> (Array1<f64>, Array2<c64>) {
-//         if let Some(n) = n_eig {                   
-//             diagonalize_slepc(self, n, 128, solve_type, initial_guess)
-//         }
-//         else {
-//             timed_println!("Warning: No eigenvalue count specified, using default of 128");
-//             diagonalize_slepc(self, 128, 128, solve_type, initial_guess)
-//         }
-//     }
-// }
-
 impl SolverOperator<c64> for CsMat<c64> {
     fn apply(&self, x: &[c64], y: &mut [c64]) {
         // Apply matrix-vector product
@@ -808,51 +894,6 @@ impl SolverOperator<c64> for CsMat<c64> {
         }
     }
 }
-
-// #[derive(Clone)]
-// pub struct DenseOperator {
-//     pub matrix: Array2<c64>,
-// }
-
-// impl DenseOperator {
-//     pub fn new(matrix: Array2<c64>) -> Self{
-//         Self { matrix }
-//     }
-// }
-
-// impl SolverOperator<c64> for DenseOperator {
-//     fn apply(&self, x: &[c64], y: &mut [c64]) {
-//         // Apply matrix-vector product
-//         let x_arr = Array1::from_iter(x.iter().copied());
-//         let result = ndarray::linalg::Dot::dot(&self.matrix, &x_arr);
-//         y.iter_mut().zip(result.iter()).for_each(|(y_i, r_i)| {
-//             *y_i = *r_i
-//         });
-//     }
-    
-//     fn apply_transpose(&self, x: &[c64], y: &mut [c64]) {
-//         // Apply matrix-vector product
-//         let x_arr = Array1::from_iter(x.iter().copied());
-//         let result = ndarray::linalg::Dot::dot(&self.matrix.t(), &x_arr);
-//         y.iter_mut().zip(result.iter()).for_each(|(y_i, r_i)| {
-//             *y_i = *r_i
-//         });
-//     }
-
-//     fn get_diagonal(&self) -> Vec<c64> {
-//         self.matrix.diag().to_vec()
-//     }
-
-//     fn dimension(&self) -> usize {
-//         self.matrix.shape()[0]
-//     }
-
-//     fn diagonalize(&self, _: Option<usize>, _: Option<EPSType>, _: Option<&Array2<c64>>) 
-//         -> (Array1<f64>, Array2<c64>) {
-        
-//         self.matrix.eigh(ndarray_linalg::UPLO::Upper).unwrap()
-//     }
-// }
 
 impl SolverOperator<c64> for Array2<c64> {
     fn apply(&self, x: &[c64], y: &mut [c64]) {

@@ -393,7 +393,7 @@ impl PPOffHamiltonian {
             }
 
             let mut matrix_element_arrays = LMMatrixElementArray::new();
-            matrix_element_arrays = matrix_element_arrays.populate_tay_mat_elements(
+            matrix_element_arrays.populate_tay_mat_elements(
                 &all_q_ind, 
                 self.exciton.e_vecs.as_ref().unwrap(), 
                 &bosonic_modes, 

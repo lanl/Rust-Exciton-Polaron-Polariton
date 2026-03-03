@@ -8,7 +8,7 @@
 use ndarray::Array2;
 use ndarray_linalg::c64;
 use light_matter::utils::{
-    BosonMode, Vector3D, Polarization,
+    BosonMode, Polarization, PrettyC64Array2, Vector3D
 };
 use light_matter::hamiltonians::{
     BosonicHamiltonian, FullBosons, ExcitonicHamiltonian, LMHamiltonian,
@@ -45,12 +45,14 @@ fn is_anti_hermitian(matrix: &Array2<c64>, tolerance: f64) -> bool {
         return false;
     }
     
+    println!("Antihermitian test for: \n{}", PrettyC64Array2(matrix,2));
+
     for i in 0..nrows {
         for j in 0..ncols {
             let diff = (matrix[[i, j]] + matrix[[j, i]].conj()).norm();
             if diff > tolerance {
                 println!("Anti-Hermitian violation at ({}, {}): {} vs {} (diff: {})", 
-                    i, j, matrix[[i, j]], -matrix[[j, i]].conj(), diff);
+                    i, j, matrix[[i, j]], -matrix[[j, i]], diff);
                 return false;
             }
         }
@@ -79,14 +81,15 @@ fn test_matrix_elements_hermiticity_single_mode() {
     };
     
     let exciton_grid = Exciton2DGridSystem::from_config(config);
+    let mu = exciton_grid.rel_ham.mu;
     let exciton_ham: ExcitonicHamiltonian<Array2<f64>> = 
-        ExcitonicHamiltonian::new(exciton_grid.full_ham, 3, 4);
+        ExcitonicHamiltonian::new(exciton_grid.full_ham, 3, 9);
     
     // Create a single photon mode
-    let q = Vector3D::new(0.01, 0.0, 0.0);
+    let q = Vector3D::new(0.01, 0.04, 0.0);
     let mode = BosonMode::new(q, Polarization::TE, 2);
     let photon_ham: BosonicHamiltonian<Array2<f64>, FullBosons<Array2<f64>>> = 
-        BosonicHamiltonian::new(vec![mode]);
+        BosonicHamiltonian::new(vec![mode.clone()]);
     
     // Create LM Hamiltonian with small coupling
     let mut lm_ham = LMHamiltonian::new(exciton_ham, photon_ham, 0.01);
@@ -96,6 +99,8 @@ fn test_matrix_elements_hermiticity_single_mode() {
     
     // Get the matrix elements
     let matrix_elements = &lm_ham.matrix_elements;
+
+    let (_,sin_mat,p_cos_mat) = lm_ham.matrix_elements.compute_relative_tay_mat_elements(&vec![vec![0]], &vec![mode], 9, mu);
     
     // Check that matrix elements were computed
     assert!(!matrix_elements.is_empty(), "Matrix elements should be computed");
@@ -113,7 +118,7 @@ fn test_matrix_elements_hermiticity_single_mode() {
     
     // Test sin_mat Hermiticity
     println!("\nTesting sin_mat Hermiticity:");
-    for (key, matrix) in matrix_elements.sin_mat.iter() {
+    for (key, matrix) in sin_mat.iter() {
         println!("  Checking sin_mat for key {:?}", key);
         assert!(
             is_hermitian(matrix, EPSILON),
@@ -124,14 +129,26 @@ fn test_matrix_elements_hermiticity_single_mode() {
     
     // Test p_cos_mat anti-Hermiticity
     println!("\nTesting p_cos_mat anti-Hermiticity:");
-    for (key, matrix) in matrix_elements.p_cos_mat.iter() {
-        println!("  Checking p_cos_mat for key {:?}", key);
+    for (key, matrix) in p_cos_mat.iter() {
+        // println!("  Checking p_cos_mat for key {:?}", key);
+        // assert!(
+        //     is_anti_hermitian(&(matrix), EPSILON),
+        //     "p_cos_mat for key {:?} is not anti-Hermitian",
+        //     key
+        // );
+
+        let real_basis = matrix_elements.to_real_rel_basis(&matrix);
+        let exciton = matrix_elements.to_exciton_basis(&real_basis, &lm_ham.exciton.e_vecs.as_ref().unwrap(), lm_ham.exciton.exciton_ham.kappa_vectors.len());
+
+        println!("  Checking p_cos_mat in real basis for key {:?}", key);
         assert!(
-            is_anti_hermitian(matrix, EPSILON),
+            is_anti_hermitian(&(exciton), EPSILON),
             "p_cos_mat for key {:?} is not anti-Hermitian",
             key
         );
     }
+
+    // panic!("Placeholder to see test output");
 }
 
 #[test]

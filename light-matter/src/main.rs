@@ -66,17 +66,17 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     let total_coupling = 0.015 ;  // Coupling strength
     timed_println!("total_coupling = {}", total_coupling);
     let omega_0 = 0.24;    // Photon frequency
-    let n_modes = 11;
+    let n_modes = 23;
     let coupling = total_coupling / (n_modes as f64);
 
     // Define photon modes
     // let qx_values = vec![0.0]; // Photon wavevectors along x
-    let qx_values = Array1::linspace(-0.0015, 0.0015, n_modes); // Photon wavevectors along x
-    let qy_values = Array1::linspace(-0.0015, 0.0015, n_modes);
+    let qx_values = Array1::linspace(-0.002, 0.002, n_modes); // Photon wavevectors along x
+    let qy_values = Array1::linspace(-0.002, 0.002, n_modes);
     let qz = omega_0 / C;
     let n_fock = 2;      // Dimension of Fock space
 
-    let n_k_points = 1024;  // Number of k-points along the path
+    let n_k_points = 256;  // Number of k-points along the path
     let n_bands = 16;
 
     let q_values: Vec<Vector3D> = qx_values.iter().flat_map(|qx| {
@@ -174,7 +174,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
         },
 
         Method::LinOp => {
-            let n_eig = 64;
+            let n_eig = 512;
             let start_time = Instant::now();
 
             // Diagonalization test:
@@ -228,7 +228,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
 
         Method::SingExLegacy => {
             timed_println!("Using Mat-Vec methods for light-matter coupling in single photon limit.");
-            let n_eig = 64;
+            let n_eig = 128;
 
             let start_time = Instant::now();
 
@@ -284,7 +284,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
 fn run_dielectric_scan(e_config: ExcitonConfig) {
     // Check if we should calculate or just plot
     let calculate = true; // Set to false to skip calculation and just plot
-    let use_cached = true; // Set to true to use cached diagonalization results (allows testing different gamma values)
+    let use_cached = false; // Set to true to use cached diagonalization results (allows testing different gamma values)
 
     let zoomed = false;
 
@@ -295,10 +295,10 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
     // Light-matter coupling parameters
     // let coupling_values = Array1::linspace(0.00, 0.05, 1); // Scan from weak to strong coupling
     // let total_coupling_values = Array1::from_vec(vec![0.0, 0.00725, 0.015]);
-    let total_coupling_values = Array1::from_vec(vec![0.0, 0.01, 0.0175]);
+    let total_coupling_values = Array1::from_vec(vec![0.0, 0.010, 0.011]);
 
     let omega_0 = 0.24;    // Photon frequency
-    let n_modes = 32;
+    let n_modes = 11;
     let coupling_values = total_coupling_values /( (n_modes) as f64);
     let qz = omega_0 / C;
 
@@ -320,16 +320,16 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
     
     // Define phonon parameters
     // let pn_coupling = 0.01; // 114 cm^-1
-    let pn_coupling = 0.004385964912; // 50 cm^-1
+    // let pn_coupling = 0.004385964912; // 50 cm^-1
     // let pn_coupling = 0.008771929825; // 100 cm^-1
-    // let pn_coupling = 0.0;
+    let pn_coupling = 0.0;
     let pn_omega = 0.0025; // 500 cm^-1
     // let pn_coupling = 0.0; // 10 cm^-1
     let pn_k = arr1(&[0.,0.05]); // 1 nm^1
     let pn_n_fock = 1;
 
     // Parameters for dielectric function calculation
-    let n_eig = 1024;  // Number of eigenstates to use
+    let n_eig = 128;  // Number of eigenstates to use
     let omegas = Array1::linspace(0.1, 0.5, 100000);  // Frequency range
     let gamma = 1e-4;  // Broadening parameter
 
@@ -607,6 +607,7 @@ fn main() {
     match run_mode {
         "bandstructure" => {
             run_bandstructure(Method::LinOp, e_config.clone());
+            // run_bandstructure(Method::SingExLegacy, e_config.clone());
             // run_bandstructure(Method::Sparse, e_config.clone());
             // run_bandstructure(Method::Dense, e_config.clone());
         },

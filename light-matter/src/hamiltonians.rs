@@ -347,7 +347,7 @@ impl<M: MatrixOps, B: Boson<M>>  LMHamiltonian<M,B> {
 
             let time_mat = Instant::now();
             let all_q_ind = self.photon.get_all_q_ind();
-            self.matrix_elements = self.matrix_elements.populate_tay_mat_elements(
+            self.matrix_elements.populate_tay_mat_elements(
                 &all_q_ind, 
                 self.exciton.e_vecs.as_ref().unwrap(), 
                 self.photon.boson.get_modes(), 
