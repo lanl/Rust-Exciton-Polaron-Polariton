@@ -689,7 +689,7 @@ macro_rules! impl_matrix_ops_dense {
 }
 
 use sprs::{CsMat};
-use sprs::TriMat;
+use sprs::{TriMat};
 // Implement for sparse matrices
 macro_rules! impl_matrix_ops_sparse {
     ($scalar:ty) => {
@@ -966,6 +966,16 @@ pub enum ComposedOperator<T: Clone> {
 
     /// Transpose operator
     Transpose(Box<ComposedOperator<T>>),
+
+    /// Single‑photon transition |to⟩⟨from| acting on a `dim`‑dimensional
+    /// photon space.  this is the key to the Kron‑sum optimisation: the
+    /// indices are stored explicitly so that `try_build_kron_sum`
+    /// never has to apply the operator to a basis vector.
+    SingTrans {
+        from: usize,
+        to: usize,
+        dim: usize,
+    },
     
     /// Optimized sum of Kronecker products: Σᵢ Mᵢ ⊗ |to_i⟩⟨from_i|
     /// This efficiently handles the common pattern of light-matter coupling
@@ -990,6 +1000,11 @@ impl<T: Clone + num_traits::Zero + LinalgScalar + std::ops::Add<Output = T> + st
     pub fn from_operator<O: SolverOperator<T> + 'static>(op: O) -> Self {
         ComposedOperator::Base(Arc::new(op))
     }
+
+    /// Convenience constructor for the new variant.
+    pub fn sing_trans(from: usize, to: usize, dim: usize) -> Self {
+        ComposedOperator::SingTrans { from, to, dim }
+    }
     
     /// Create a sum of multiple operators
     /// This is more efficient than chaining binary Add operations
@@ -997,26 +1012,29 @@ impl<T: Clone + num_traits::Zero + LinalgScalar + std::ops::Add<Output = T> + st
     pub fn sum(ops: Vec<ComposedOperator<T>>) -> Self 
     where
         T: Copy + One + std::fmt::Debug + Norm + ConvertFrom<c64> + ConvertFrom<f64>,
+        Array2<T>: SolverOperator<T>,
+        ComposedOperator<T>: MatrixOps,
     {
         if ops.is_empty() {
             panic!("Cannot create sum of empty operator list");
         } else if ops.len() == 1 {
             ops.into_iter().next().unwrap()
         } else {
-            // Try to build an optimized KronSum if the pattern matches
             if let Some(kron_sum) = Self::try_build_kron_sum(&ops) {
-                match kron_sum {
-                    ComposedOperator::KronSum { ref transition_matrices, .. } => {
-                        timed_println!("Optimized {} terms into KronSum with {} unique transitions",
-                            ops.len(), transition_matrices.len());
+                match &kron_sum {
+                    ComposedOperator::KronSum { transition_matrices, .. } => {
+                        timed_println!(
+                            "Optimized {} terms into KronSum with {} unique transitions",
+                            ops.len(),
+                            transition_matrices.len()
+                        );
                     }
                     _ => {}
                 }
-
                 return kron_sum;
             }
+
             timed_println!("Debug: Not using KronSum");
-            
             ComposedOperator::Sum(ops.into_iter().map(Box::new).collect())
         }
     }
@@ -1029,6 +1047,8 @@ impl<T: Clone + num_traits::Zero + LinalgScalar + std::ops::Add<Output = T> + st
         T: Copy + Zero + One,
     {
         match op {
+            ComposedOperator::SingTrans { from, to, .. } => Some((*from, *to)),
+
             ComposedOperator::Transpose(inner) => {
                 // For transpose, swap from and to
                 if let Some((from, to)) = Self::extract_photon_transition(inner) {
@@ -1303,6 +1323,12 @@ impl<T: Clone + num_traits::Zero + LinalgScalar + std::ops::Add<Output = T> + st
                 let right_matrix = Self::extract_matrix_fast(right, dim);
                 &left_matrix + &right_matrix
             }
+
+            ComposedOperator::SingTrans { from, to, dim: d } => {
+                let mut m = Array2::zeros((*d, *d));
+                m[[*to, *from]] = T::one();
+                m
+            }
             
             // For other cases, fall back to basis vector application
             _ => Self::extract_matrix_by_apply(op, dim),
@@ -1391,18 +1417,18 @@ impl<T: Clone + num_traits::Zero + LinalgScalar + std::ops::Add<Output = T> + st
             
             // Check if this is a Kron(exciton_op, photon_op) pattern
             if let ComposedOperator::Kron(left, right) = inner_op {
-                // Debug: print operator types for first few terms
-                if n_valid < 3 {
-                    timed_println!("    Debug: Kron term #{}", n_valid);
-                    timed_println!("      Left type: {:?}", std::mem::discriminant(left.as_ref()));
-                    timed_println!("      Right type: {:?}", std::mem::discriminant(right.as_ref()));
-                }
+                // // Debug: print operator types for first few terms
+                // if n_valid < 3 {
+                //     timed_println!("    Debug: Kron term #{}", n_valid);
+                //     timed_println!("      Left type: {:?}", std::mem::discriminant(left.as_ref()));
+                //     timed_println!("      Right type: {:?}", std::mem::discriminant(right.as_ref()));
+                // }
                 
                 // Check if right operator is a photon transition
                 let transition = Self::extract_photon_transition(right);
-                if n_valid < 5 {
-                    timed_println!("      Transition result: {:?}", transition);
-                }
+                // if n_valid < 5 {
+                //     timed_println!("      Transition result: {:?}", transition);
+                // }
                 match transition {
                     Some((from, to)) => {
                         // Extract the exciton matrix from the left operator
@@ -1457,25 +1483,25 @@ impl<T: Clone + num_traits::Zero + LinalgScalar + std::ops::Add<Output = T> + st
                     }
                     None => {
                         // Right side is not a single photon transition
-                        // Could be a complex operator - keep it as a separate term
-                        if n_no_transition < 10 {
-                            // Debug: print first few cases with more detail
-                            timed_println!("    Debug: Kron with no transition detected. Right op type: {:?}",
-                                std::mem::discriminant(right.as_ref()));
+                        // // Could be a complex operator - keep it as a separate term
+                        // if n_no_transition < 10 {
+                        //     // Debug: print first few cases with more detail
+                        //     timed_println!("    Debug: Kron with no transition detected. Right op type: {:?}",
+                        //         std::mem::discriminant(right.as_ref()));
                             
-                            // If it's a Dot, show what's inside
-                            if let ComposedOperator::Dot(dot_left, dot_right) = right.as_ref() {
-                                timed_println!("      Dot components: left={:?}, right={:?}",
-                                    std::mem::discriminant(dot_left.as_ref()),
-                                    std::mem::discriminant(dot_right.as_ref()));
+                        //     // If it's a Dot, show what's inside
+                        //     if let ComposedOperator::Dot(dot_left, dot_right) = right.as_ref() {
+                        //         timed_println!("      Dot components: left={:?}, right={:?}",
+                        //             std::mem::discriminant(dot_left.as_ref()),
+                        //             std::mem::discriminant(dot_right.as_ref()));
                                 
-                                // Try to extract transitions from each side
-                                let left_trans = Self::extract_photon_transition(dot_left);
-                                let right_trans = Self::extract_photon_transition(dot_right);
-                                timed_println!("      Left transition: {:?}, Right transition: {:?}",
-                                    left_trans, right_trans);
-                            }
-                        }
+                        //         // Try to extract transitions from each side
+                        //         let left_trans = Self::extract_photon_transition(dot_left);
+                        //         let right_trans = Self::extract_photon_transition(dot_right);
+                        //         timed_println!("      Left transition: {:?}, Right transition: {:?}",
+                        //             left_trans, right_trans);
+                        //     }
+                        // }
                         non_kronsum_terms.push(op.clone());
                         n_other += 1;
                         n_no_transition += 1;
@@ -1483,23 +1509,24 @@ impl<T: Clone + num_traits::Zero + LinalgScalar + std::ops::Add<Output = T> + st
                 }
             } else {
                 // Not a Kron pattern - keep as separate term
-                if n_not_kron < 5 {
-                    // Debug: print first few non-Kron terms
-                    let type_name = match op {
-                        ComposedOperator::Base(_) => "Base",
-                        ComposedOperator::Add(_, _) => "Add",
-                        ComposedOperator::Sum(_) => "Sum",
-                        ComposedOperator::Dot(_, _) => "Dot",
-                        ComposedOperator::ScalarMul(_, _) => "ScalarMul",
-                        ComposedOperator::Kron(_, _) => "Kron",
-                        ComposedOperator::Diagonal(_) => "Diagonal",
-                        ComposedOperator::Identity(_) => "Identity",
-                        ComposedOperator::Zero(_) => "Zero",
-                        ComposedOperator::Transpose(_) => "Transpose",
-                        ComposedOperator::KronSum { .. } => "KronSum",
-                    };
-                    timed_println!("    Debug: Non-Kron term #{}: type = {}", n_not_kron + 1, type_name);
-                }
+                // if n_not_kron < 5 {
+                //     // Debug: print first few non-Kron terms
+                //     let type_name = match op {
+                //         ComposedOperator::Base(_) => "Base",
+                //         ComposedOperator::Add(_, _) => "Add",
+                //         ComposedOperator::Sum(_) => "Sum",
+                //         ComposedOperator::Dot(_, _) => "Dot",
+                //         ComposedOperator::ScalarMul(_, _) => "ScalarMul",
+                //         ComposedOperator::Kron(_, _) => "Kron",
+                //         ComposedOperator::Diagonal(_) => "Diagonal",
+                //         ComposedOperator::Identity(_) => "Identity",
+                //         ComposedOperator::Zero(_) => "Zero",
+                //         ComposedOperator::Transpose(_) => "Transpose",
+                //         ComposedOperator::KronSum { .. } => "KronSum",
+                //         ComposedOperator::SingTrans { .. } => "SingTrans",
+                //     };
+                //     timed_println!("    Debug: Non-Kron term #{}: type = {}", n_not_kron + 1, type_name);
+                // }
                 non_kronsum_terms.push(op.clone());
                 n_other += 1;
                 n_not_kron += 1;
@@ -1581,6 +1608,7 @@ impl<T: Clone + num_traits::Zero + LinalgScalar + std::ops::Add<Output = T> + st
             ComposedOperator::Zero(n) => *n,
             ComposedOperator::Transpose(a) => a.dimension(),
             ComposedOperator::KronSum { exciton_dim, photon_dim, .. } => exciton_dim * photon_dim,
+            ComposedOperator::SingTrans { from: _, to: _, dim } => *dim,
         }
     }
 
@@ -1718,6 +1746,11 @@ impl<T: Clone + num_traits::Zero + LinalgScalar + std::ops::Add<Output = T> + st
 
             ComposedOperator::Transpose(a) => {
                 a.apply(x, y);
+            }
+
+            ComposedOperator::SingTrans { from, to, dim: _ } => {
+                y.fill(T::zero());
+                y[*from] = x[*to];
             }
             
             ComposedOperator::KronSum { transition_matrices, exciton_dim, photon_dim } => {
@@ -1887,6 +1920,11 @@ impl<T: Clone + num_traits::Zero + LinalgScalar + std::ops::Add<Output = T> + st
             ComposedOperator::Transpose(a) => {
                 a.apply_transpose(x, y);
             }
+
+            ComposedOperator::SingTrans { from, to, dim: _ } => {
+                y.fill(T::zero());
+                y[*to] = x[*from];
+            }
             
             ComposedOperator::KronSum { transition_matrices, exciton_dim, photon_dim } => {
                 // Optimized application: y = Σᵢ (Mᵢ ⊗ |to_i⟩⟨from_i|) x
@@ -2005,6 +2043,14 @@ impl<T: Clone + num_traits::Zero + LinalgScalar + std::ops::Add<Output = T> + st
             ComposedOperator::Zero(n) => vec![T::zero(); *n],
 
             ComposedOperator::Transpose(a) => a.get_diagonal(),
+
+            ComposedOperator::SingTrans { from, to, dim } => {
+                let mut diag = vec![T::zero(); *dim];
+                if from == to {
+                    diag[*from] = T::one();
+                }
+                diag
+            }
             
             ComposedOperator::KronSum { transition_matrices, exciton_dim, photon_dim } => {
                 // Diagonal elements come from transitions where from == to
@@ -2105,6 +2151,44 @@ macro_rules! impl_matrix_ops_lin_op {
             }
             
             fn from_trimat(trimat: &TriMat<Self::Scalar>) -> Self {
+
+                let nnz = trimat.nnz();
+                let threshold = 100;
+                let dim = trimat.shape().0;
+
+                if nnz == 0 {
+                    return ComposedOperator::Zero(dim)
+                }
+
+                if nnz < threshold {
+                    // Collect a Vec of elementary operators
+                    let mut terms: Vec<Box<ComposedOperator<Self::Scalar>>> = Vec::with_capacity(nnz);
+
+                    // `triplet_iter` yields ((row, col), value) for each non‑zero entry
+                    for (val, (row, col)) in trimat.triplet_iter() {
+                        // In the photon‑space convention used elsewhere,
+                        // a matrix element |to⟩⟨from| corresponds to (row = to,
+                        // col = from).  The `SingTrans` variant stores exactly that.
+                        let sing = ComposedOperator::sing_trans(col, row, dim);
+
+                        // If the value is exactly 1 we can push the plain SingTrans,
+                        // otherwise we need a scalar multiplication wrapper.
+                        if *val == Self::Scalar::one() {
+                            terms.push(Box::new(sing));
+                        } else {
+                            terms.push(Box::new(ComposedOperator::ScalarMul(val.clone(), Box::new(sing))));
+                        }
+                    }
+
+                    if terms.len() == 1 {
+                        return *terms[0].clone()
+                    }
+
+                    return ComposedOperator::Sum(terms);
+                }
+
+
+
                 // Convert TriMat to sparse and wrap as an operator
                 let csmat = trimat.to_csr();
                 ComposedOperator::from_operator(csmat)
@@ -2157,7 +2241,9 @@ macro_rules! impl_matrix_ops_lin_op {
 impl_matrix_ops_lin_op!(c64);
 
 // Implement std::ops::Add for ComposedOperator to enable + syntax
-impl std::ops::Add for ComposedOperator<c64> {
+impl<T> std::ops::Add for ComposedOperator<T> 
+    where T: Clone, ComposedOperator<T>: MatrixOps
+{
     type Output = Self;
     
     fn add(self, other: Self) -> Self::Output {
@@ -2165,26 +2251,89 @@ impl std::ops::Add for ComposedOperator<c64> {
     }
 }
 
-impl std::ops::Add<&ComposedOperator<c64>> for ComposedOperator<c64> {
+impl<T> std::ops::Add<&ComposedOperator<T>> for ComposedOperator<T> 
+    where T: Clone, ComposedOperator<T>: MatrixOps
+{
     type Output = Self;
     
-    fn add(self, other: &ComposedOperator<c64>) -> Self::Output {
+    fn add(self, other: &ComposedOperator<T>) -> Self::Output {
         MatrixOps::add(&self, other)
     }
 }
 
-impl std::ops::Add<ComposedOperator<c64>> for &ComposedOperator<c64> {
-    type Output = ComposedOperator<c64>;
+impl<T> std::ops::Add<ComposedOperator<T>> for &ComposedOperator<T> 
+    where T: Clone, ComposedOperator<T>: MatrixOps
+{
+    type Output = ComposedOperator<T>;
     
-    fn add(self, other: ComposedOperator<c64>) -> Self::Output {
+    fn add(self, other: ComposedOperator<T>) -> Self::Output {
         MatrixOps::add(self, &other)
     }
 }
 
-impl std::ops::Add for &ComposedOperator<c64> {
-    type Output = ComposedOperator<c64>;
+impl<T> std::ops::Add for &ComposedOperator<T> 
+    where T: Clone, ComposedOperator<T>: MatrixOps
+{
+    type Output = ComposedOperator<T>;
     
-    fn add(self, other: &ComposedOperator<c64>) -> Self::Output {
+    fn add(self, other: &ComposedOperator<T>) -> Self::Output {
         MatrixOps::add(self, other)
+    }
+}
+
+impl<T> ComposedOperator<T>
+where
+    T: Clone
+        + num_traits::Zero
+        + LinalgScalar
+        + std::ops::Add<Output = T>
+        + std::ops::Mul<Output = T>
+        + std::fmt::Debug
+        + ConvertFrom<c64>
+        + ConvertFrom<f64>,
+        
+    ComposedOperator<T>: MatrixOps
+{
+    /// Build a `KronSum` *without* ever constructing the intermediate
+    /// `Kron` products.  The caller supplies an iterator of
+    /// `(exciton_operator, from_photon, to_photon)`.  All exciton
+    /// operators are assumed to act on the **same** exciton dimension.
+    ///
+    /// This is the fast‑path that replaces the old `ComposedOperator::sum`
+    /// when every term is of the form `Kron(ex, SingTrans{from,to,dim})`.
+    pub fn build_kron_sum_from_terms<I>(terms: I, exciton_dim: usize, photon_dim: usize) -> Self
+    where
+        I: IntoIterator<Item = (Self, usize, usize)>, 
+    {
+        // Accumulate exciton matrices for each photon transition.
+        // Using a HashMap gives us O(1) aggregation per term.
+        let mut map: HashMap<(usize, usize), Self> = HashMap::new();
+
+        for (ex_op, from, to) in terms {
+            map.entry((from, to))
+                .and_modify(|existing| {
+                    // `+` on `ComposedOperator` creates an `Add` node – that is cheap.
+                    *existing = existing.clone() + ex_op.clone();
+                })
+                .or_insert(ex_op);
+        }
+
+        // Convert the map into the `KronSum` variant.
+        let transition_matrices: HashMap<(usize, usize), Array2<T>> = map
+            .into_iter()
+            .map(|((from, to), op)| {
+                // All exciton ops are dense (or at least we can extract a dense
+                // matrix efficiently).  `extract_matrix_fast` already knows how
+                // to handle `Base`, `ScalarMul`, `Add`, etc.
+                let mat = Self::extract_matrix_fast(&op, exciton_dim);
+                ((from, to), mat)
+            })
+            .collect();
+
+        ComposedOperator::KronSum {
+            transition_matrices,
+            exciton_dim,
+            photon_dim,
+        }
     }
 }

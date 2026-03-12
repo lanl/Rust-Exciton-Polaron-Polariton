@@ -6,7 +6,7 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 
-use crate::timed_println;
+use crate::{Vector3D, timed_println};
 
 /// Structure to hold parameters extracted from dielectric function filenames
 #[derive(Debug, Clone)]
@@ -70,6 +70,34 @@ fn extract_params_from_filename(path: &Path) -> Option<DielectricParams> {
     Some(params)
 }
 
+
+const C: f64 = 137.036;
+
+macro_rules! plot_photon_freqs {
+    ($chart:expr, $y_min:expr, $y_max:expr, $qs:expr) => {
+        // Style: light‑gray, 1 pixel width
+        let line_style = ShapeStyle {
+            color: RGBColor(200, 200, 200).mix(0.8),
+            filled: false,
+            stroke_width: 1,
+        };
+
+        let freqs: Vec<f64> = $qs.iter().map(|q| q.magnitude() * C).collect();
+
+        // Current x‑range of the chart (used to skip out‑of‑range lines)
+        let x_range = $chart.x_range();
+
+        for &freq in freqs.iter() {
+            // Only draw if the frequency is inside the plotted ω‑range
+            if freq >= x_range.start && freq <= x_range.end {
+                // Two‑point line: (freq, y_min) → (freq, y_max)
+                $chart
+                    .draw_series(LineSeries::new(vec![(freq, $y_min), (freq, $y_max)], line_style.clone()))?;
+            }
+        }
+    };
+}
+
 /// Plots the dielectric function for different coupling strengths
 pub fn plot_dielectric_function(
     dir_path: &str,                // Directory containing dielectric function data files
@@ -78,25 +106,25 @@ pub fn plot_dielectric_function(
     omega_range: Option<(f64, f64)>, // Optional frequency range to plot
     coupling_values: &Array1<f64>,
     reference_params: Option<&DielectricParams>, // Optional reference parameters to match against
-    zoomed: bool
+    zoomed: bool,
+    q_values: Option<&Vec<Vector3D>>, 
 ) -> Result<(), Box<dyn std::error::Error>> {
 
-    let verbose = true;
+    let verbose = false;
     let dark_mode = false;
 
     let mut background = &WHITE;
     let mut text_color = &BLACK;
 
-    let mut _ref_colors = vec![(255.,0.,0.), (0.,0.,255.)];
+    let mut ref_colors = vec![(255.,0.,0.), (0.,0.,255.)];
 
     if dark_mode {
         background = &BLACK;
         text_color = &WHITE;
-        _ref_colors = vec![(237.,110.,87.), (148.,33.,148.), (72.,159.,248.)];
+        ref_colors = vec![(237.,110.,87.), (148.,33.,148.), (72.,159.,248.)];
     }
 
-
-    let colors = [RGBColor(0,0,0), RGBColor(255,0,0), RGBColor(0,0,255)];
+    // let colors = [RGBColor(0,0,0), RGBColor(255,0,0), RGBColor(0,0,255)];
 
     timed_println!("Plotting dielectric function from directory: {}", dir_path);
     // Get all dielectric function files in the directory
@@ -294,7 +322,7 @@ pub fn plot_dielectric_function(
     } else {
         title_base.to_string()
     };
-    
+      
     // Plot the real part
     if plot_type == DielectricPlotType::Real || plot_type == DielectricPlotType::Both {
         // Symlog transformation with threshold
@@ -368,12 +396,17 @@ pub fn plot_dielectric_function(
             .disable_mesh() // Remove fine grid lines
             .draw()?;
         
-        for (i, (key, coupling)) in couplings.iter().enumerate().rev() {
+
+        if let Some(qs) = q_values {
+            plot_photon_freqs!(&mut chart, transformed_min, transformed_max, qs);
+        }
+
+        for (i, (key, coupling)) in couplings.iter().enumerate() {
             let (omegas, re_eps, _, params) = &all_data[key];
             
             // Create a color gradient from blue to red
-            // let color = interpolate_colormap(&ref_colors, i as f64/ (couplings.len() - 1) as f64);
-            let color = colors[i];
+            let color = interpolate_colormap(&ref_colors, i as f64/ (couplings.len() - 1) as f64);
+            // let color = colors[i];
 
             // Filter data points within the omega range and apply symlog transformation
             let points: Vec<(f64, f64)> = omegas.iter()
@@ -436,6 +469,8 @@ pub fn plot_dielectric_function(
             .y_label_area_size(60)
             // .build_cartesian_2d(omega_min..omega_max, 2.0*eps_min.1..eps_max.0 * 0.05)?;
             .build_cartesian_2d(omega_min..omega_max, (e_min..e_max).log_scale())?;
+
+        println!("Built mesh");
         
         chart.configure_mesh()
             .x_desc("Frequency (a.u.)")
@@ -445,13 +480,15 @@ pub fn plot_dielectric_function(
             .label_style(("sans-serif", 18).into_font().color(text_color))
             .disable_mesh() // Remove fine grid lines
             .draw()?;
+
+        println!("Configured mesh");
         
         // Draw each coupling strength with a different color
-        for (i, (key, coupling)) in couplings.iter().enumerate().rev() {
+        for (i, (key, coupling)) in couplings.iter().enumerate() {
             let (omegas, _, im_eps, params) = &all_data[key];
             
-            // let color = _interpolate_colormap(&ref_colors, i as f64/ (couplings.len() - 1) as f64);
-            let color = colors[i];
+            let color = interpolate_colormap(&ref_colors, i as f64/ (couplings.len() - 1) as f64);
+            // let color = colors[i];
 
             // Filter data points within the omega range
             let points: Vec<(f64, f64)> = omegas.iter()
@@ -463,9 +500,9 @@ pub fn plot_dielectric_function(
             
             // Create a more detailed label if we have the parameters
             let label = if params.n_modes > 0 {
-                format!("g = {:.3}, {} modes", coupling, params.n_modes)
+                format!("g = {:e}, {} modes", coupling*(params.n_modes as f64).sqrt(), params.n_modes)
             } else {
-                format!("g = {:.3}", coupling)
+                format!("g = {:e}", coupling*(params.n_modes as f64).sqrt())
             };
             
             chart.draw_series(LineSeries::new(
@@ -473,22 +510,28 @@ pub fn plot_dielectric_function(
                 ShapeStyle {
                     color: color.into(),
                     filled: true,
-                    stroke_width: 8, // Increased line thickness
+                    stroke_width: 4, // Increased line thickness
                 }
             ))?.label(label)
               .legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], color));
         }
         
-        // if plot_type == DielectricPlotType::Imaginary {
-        //     // Add legend
-        //     chart.configure_series_labels()
-        //         .background_style(&WHITE.mix(0.9)) // More opaque background
-        //         .border_style(&BLACK)
-        //         .label_font(("sans-serif", 16)) // Slightly larger font
-        //         .position(SeriesLabelPosition::LowerRight)
-        //         .margin(15) // Add some margin around the legend text
-        //         .draw()?;
-        // }
+        println!("Plotted Couplings");
+
+        if let Some(qs) = q_values {
+            plot_photon_freqs!(&mut chart, e_min, e_max, qs);
+        }
+
+        if plot_type == DielectricPlotType::Imaginary && !zoomed{
+            // Add legend
+            chart.configure_series_labels()
+                .background_style(&WHITE.mix(0.9)) // More opaque background
+                .border_style(&BLACK)
+                .label_font(("sans-serif", 16)) // Slightly larger font
+                .position(SeriesLabelPosition::LowerRight)
+                .margin(15) // Add some margin around the legend text
+                .draw()?;
+        }
     }
     
     // Present the final plot
@@ -497,6 +540,7 @@ pub fn plot_dielectric_function(
     
     Ok(())
 }
+
 
 /// Helper function to extract coupling strength from filename
 fn _extract_coupling_from_filename(path: &Path) -> Option<f64> {
@@ -714,7 +758,7 @@ pub fn plot_band_structure(
     }
 }
 
-fn _interpolate_colormap(colors: &[(f64, f64, f64)], t: f64) -> RGBColor {
+fn interpolate_colormap(colors: &[(f64, f64, f64)], t: f64) -> RGBColor {
     // Handle edge cases
     if colors.is_empty() {
         return RGBColor(0,0,0);

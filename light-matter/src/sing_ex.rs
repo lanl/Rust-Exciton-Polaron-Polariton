@@ -845,7 +845,7 @@ pub fn get_dielectric_function_filename(
     gamma: f64
 ) -> String {
     format!(
-        "{}/dielectric_sin_a0{}_V0{}_nrel{}_lmcoup{}_nmodes{}_pncoup{}_npn{}_neig{}_gamma{:.1e}.dat",
+        "{}/dielectric_a0{}_V0{}_nrel{}_lmcoup{}_nmodes{}_pncoup{}_npn{}_neig{}_gamma{:.1e}.dat",
         save_dir,
         pp_config.e_config.a0,
         pp_config.e_config.v0,

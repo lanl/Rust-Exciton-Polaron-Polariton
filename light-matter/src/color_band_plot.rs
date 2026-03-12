@@ -356,8 +356,8 @@ pub fn calculate_color_band_structure_mpi_simple(
     // Generate k-points along the path
     let k_points: Vec<Vec<f64>>;
     if zoomed {
-        let start = vec![3. / 4. * PI / pp_config.e_config.a0, 0.];
-        let end =   vec![PI / pp_config.e_config.a0, 0.];
+        let start = vec![0., 0.];
+        let end =   vec![PI / pp_config.e_config.a0 / 3.0, 0.];
 
         timed_println!("Performing zoomed in band structure from k = {:?} to {:?}", start, end);
         k_points = (0 .. n_k_points).map(|k_ind|{
@@ -567,7 +567,7 @@ pub fn plot_color_band_structure(
     zoomed: bool
 ) -> Result<(), Box<dyn std::error::Error>> {
 
-    let dark = true;
+    let dark = false;
 
     // Create x-axis for the plot (path length)
     let mut x = vec![0.0; k_points.len()];
@@ -605,7 +605,7 @@ pub fn plot_color_band_structure(
     }
     
     // Set max energy to 0.3 or use calculated max
-    max_energy = 0.0;
+    max_energy = 0.05;
 
     // Add padding to the energy range (5%)
     let energy_padding = (max_energy - min_energy) * 0.05;
@@ -613,8 +613,8 @@ pub fn plot_color_band_structure(
     max_energy += energy_padding;
 
     if zoomed {
-        min_energy = -0.195;
-        max_energy = -0.16;
+        min_energy = -0.05;
+        max_energy =  0.01;
     }
 
     // Create data files for gnuplot

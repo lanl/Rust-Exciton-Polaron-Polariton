@@ -46,11 +46,11 @@ struct Args {
     n_jobs: i32,
     
     /// Number of relative coordinate eigenstates
-    #[clap(long, default_value_t = 9)]
+    #[clap(long, default_value_t = 25)]
     n_rel_states: usize,
     
     /// Number of bands to calculate
-    #[clap(long, default_value_t = 16)]
+    #[clap(long, default_value_t = 100)]
     n_bands: usize,
     
     /// Directory to save output figures
@@ -80,7 +80,7 @@ fn plot_n_colored_bands(system: &Exciton2DGridSystem, args: &Args) {
     
     // Calculate band structure with n-expectation values
     let (k_points, eigvals_list, n_expectation_list) = system.calculate_n_colored_band_structure(
-        600,
+        100,
         args.n_rel_states,
         args.n_bands,
         args.recalculate_bands
@@ -103,7 +103,7 @@ fn plot_n_colored_bands(system: &Exciton2DGridSystem, args: &Args) {
 ///
 /// # Arguments
 /// * `args` - Command-line arguments
-fn scan_parameters(args: &Args) {
+fn _scan_parameters(args: &Args) {
     // List of lattice constants and potential strengths to run
     let a0_list = vec![9.0];
     let v0_list = vec![0.1, 0.2, 0.3];
@@ -176,6 +176,16 @@ fn scan_parameters(args: &Args) {
     }
 }
 
+
+fn gamma_point_eigenstates(system: &Exciton2DGridSystem, args: &Args) {
+    
+    let (e_vals, _,_,_) = system.diagonalize_full_hamiltonian(args.n_rel_states, args.n_bands);
+
+    let diffs = &e_vals - e_vals[0];
+
+    println!("Exciton transitions at gamma point are: \n {:?}", diffs);
+}
+
 /// Main function
 ///
 /// Parses command-line arguments, sets up the system, and runs calculations.
@@ -197,11 +207,11 @@ fn main() {
     // Create configuration
     let config = ExcitonConfig {
         n_kappa: 11,
-        a0: 9.0,
-        v0: 0.25,
+        a0: 16.0,
+        v0: 0.05,
         k: vec![0.0, 0.0],
-        m_e: 0.3,
-        m_h: 0.3,
+        m_e: 0.2,
+        m_h: 0.2,
         verbose: false,
         grid_size: 64,
         box_size: 3.0,
@@ -215,9 +225,11 @@ fn main() {
     // Create the 2D exciton system
     let system = Exciton2DGridSystem::from_config(config);
 
+    gamma_point_eigenstates(&system, &args);
+
     plot_n_colored_bands(&system, &args);
 
-    scan_parameters(&args);
+    // scan_parameters(&args);
 
     
 }

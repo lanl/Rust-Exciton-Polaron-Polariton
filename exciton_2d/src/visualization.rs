@@ -291,7 +291,7 @@ pub fn plot_n_colored_band_structure(
     // Add padding to the energy range (5%)
     let energy_padding = (max_energy - min_energy) * 0.05;
 
-    max_energy = 0.0;
+    max_energy = 0.05;
 
     min_energy -= energy_padding;
     max_energy += energy_padding;
@@ -301,7 +301,7 @@ pub fn plot_n_colored_band_structure(
     std::fs::create_dir_all(data_dir)?;
     
     // Create a data file for each band
-    for band_idx in 0..n_bands {
+    for band_idx in (0..n_bands).rev() {
         let filename = data_dir.join(format!("n_band_{}.dat", band_idx));
         let mut file = File::create(filename)?;
         

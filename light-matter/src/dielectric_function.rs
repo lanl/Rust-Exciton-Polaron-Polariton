@@ -242,11 +242,40 @@ where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum + ConvertF
     // Diagonalize at the Gamma point
     let (pp_vals, pp_vecs) = h_pp.diagonalize(Some(n_eig), None, None);
 
-    // get <Psi|x|Psi_0> in the PP basis
-    let n_ph = pp_config.q_values.len() + 1;
-    let n_pn = pp_config.pn_n_fock;
+    // If the phonon coupling is effectively zero we *must* use a single
+    // phonon vacuum state (dimension = 1).  This is independent of the value
+    // stored in `pp_config.pn_n_fock`.
+    let n_ph = pp_config.q_values.len() + 1; // photon modes (+ the q=0 mode)
+    let n_pn = if pp_config.pn_coupling.abs() < f64::EPSILON {
+        1
+    } else {
+        // Guard against a user‑provided zero here (which would make the loop
+        // empty and break the indexing logic).
+        if pp_config.pn_n_fock == 0 {
+            timed_println!(
+                "Warning: phonon coupling non-zero but pn_n_fock == 0 -> forcing n_pn = 1"
+            );
+            1
+        } else {
+            pp_config.pn_n_fock
+        }
+    };
 
+    // Sanity check: the size of the ground‑state vector must equal
+    // n_ex_eig * n_ph * n_pn (or be a multiple thereof if extra blocks are
+    // present). If it does not, abort with a clear message.
     let vec0 = pp_vecs.column(0);
+    let expected_len = n_ex_eig * n_ph * n_pn;
+    if vec0.len() != expected_len {
+        panic!(
+            "Inconsistent basis dimensions: vec0.len() = {}, expected {} (n_ex_eig={} * n_ph={} * n_pn={})",
+            vec0.len(),
+            expected_len,
+            n_ex_eig,
+            n_ph,
+            n_pn
+        );
+    }
 
     let x_pp = Array1::from_shape_fn(n_eig, |idx| {
         let vec1 = pp_vecs.column(idx);

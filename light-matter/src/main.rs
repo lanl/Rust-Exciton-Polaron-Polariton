@@ -59,24 +59,24 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     let exciton = Exciton2DGridSystem::from_config(e_config.clone());
     
     // Parameters for diagonalization
-    let n_rel = 9;      // Number of relative coordinate states
-    let n_ex_eig = 16;  // Number of exciton eigenstates
+    let n_rel = 16;      // Number of relative coordinate states
+    let n_ex_eig = 32;  // Number of exciton eigenstates
     
     // Light-matter coupling parameters
-    let total_coupling = 0.015 ;  // Coupling strength
+    let total_coupling = 0.003 ;  // Coupling strength
     timed_println!("total_coupling = {}", total_coupling);
-    let omega_0 = 0.24;    // Photon frequency
+    let omega_0 = 0.15;    // Photon frequency
     let n_modes = 23;
     let coupling = total_coupling / (n_modes as f64);
 
     // Define photon modes
     // let qx_values = vec![0.0]; // Photon wavevectors along x
-    let qx_values = Array1::linspace(-0.002, 0.002, n_modes); // Photon wavevectors along x
-    let qy_values = Array1::linspace(-0.002, 0.002, n_modes);
+    let qx_values = Array1::linspace(-0.001, 0.001, n_modes); // Photon wavevectors along x
+    let qy_values = Array1::linspace(-0.001, 0.001, n_modes);
     let qz = omega_0 / C;
     let n_fock = 2;      // Dimension of Fock space
 
-    let n_k_points = 256;  // Number of k-points along the path
+    let n_k_points = 1024;  // Number of k-points along the path
     let n_bands = 16;
 
     let q_values: Vec<Vector3D> = qx_values.iter().flat_map(|qx| {
@@ -174,7 +174,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
         },
 
         Method::LinOp => {
-            let n_eig = 512;
+            let n_eig = 128;
             let start_time = Instant::now();
 
             // Diagonalization test:
@@ -228,13 +228,13 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
 
         Method::SingExLegacy => {
             timed_println!("Using Mat-Vec methods for light-matter coupling in single photon limit.");
-            let n_eig = 128;
+            let n_eig = 1024;
 
             let start_time = Instant::now();
 
             let calculate = true;
                 
-            let zoomed = false;
+            let zoomed = true;
 
             let (k_points_color, eigvals_list_color, photonic_character_list);
 
@@ -254,7 +254,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
                 timed_println!("Calculating color-coded band structure...");
                 (k_points_color, eigvals_list_color, photonic_character_list) = 
                     color_band_plot::calculate_color_band_structure_mpi_simple(
-                        &mut pp, n_k_points, n_eig, &sym_points, &pp_config, false, zoomed);
+                        &mut pp, n_k_points, n_eig, &sym_points, &pp_config, true, zoomed);
 
                 timed_println!("Calculated Band Structure in {:?}", Instant::now().duration_since(time1));
             }
@@ -289,22 +289,22 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
     let zoomed = false;
 
     // Parameters for diagonalization
-    let n_rel = 25;      // Number of relative coordinate states
+    let n_rel = 16;      // Number of relative coordinate states
     let n_ex_eig = 16;  // Number of exciton eigenstates
     
     // Light-matter coupling parameters
     // let coupling_values = Array1::linspace(0.00, 0.05, 1); // Scan from weak to strong coupling
-    // let total_coupling_values = Array1::from_vec(vec![0.0, 0.00725, 0.015]);
-    let total_coupling_values = Array1::from_vec(vec![0.0, 0.010, 0.011]);
+    let total_coupling_values = Array1::from_vec(vec![0.0, 0.0035, 0.0045]);
+    // let total_coupling_values = Array1::from_vec(vec![0.0, 0.002, 0.0035, 0.0045, 0.005, 0.0055]);
 
-    let omega_0 = 0.24;    // Photon frequency
-    let n_modes = 11;
+    let omega_0 = 0.175;    // Photon frequency
+    let n_modes = 23;
     let coupling_values = total_coupling_values /( (n_modes) as f64);
     let qz = omega_0 / C;
 
     // Define photon modes
-    let qx_values = Array1::linspace(-0.002, 0.002, n_modes); // Photon wavevectors along x
-    let qy_values = Array1::linspace(-0.002, 0.002, n_modes);
+    let qx_values = Array1::linspace(-0.0008, 0.0008, n_modes); // Photon wavevectors along x
+    let qy_values = Array1::linspace(-0.0008, 0.0008, n_modes);
 
     let q_values: Vec<Vector3D> = qx_values.iter().flat_map(|qx| {
         qy_values.iter().map(|qy| {
@@ -322,20 +322,20 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
     // let pn_coupling = 0.01; // 114 cm^-1
     // let pn_coupling = 0.004385964912; // 50 cm^-1
     // let pn_coupling = 0.008771929825; // 100 cm^-1
-    let pn_coupling = 0.0;
+    // let pn_coupling = 0.0;
     let pn_omega = 0.0025; // 500 cm^-1
-    // let pn_coupling = 0.0; // 10 cm^-1
+    let pn_coupling = 0.001; // 11.4 cm^-1
     let pn_k = arr1(&[0.,0.05]); // 1 nm^1
-    let pn_n_fock = 1;
+    let pn_n_fock = 4;
 
     // Parameters for dielectric function calculation
-    let n_eig = 128;  // Number of eigenstates to use
-    let omegas = Array1::linspace(0.1, 0.5, 100000);  // Frequency range
-    let gamma = 1e-4;  // Broadening parameter
+    let n_eig = 2048;  // Number of eigenstates to use
+    let omegas = Array1::linspace(0.0, 0.5, 100000);  // Frequency range
+    let gamma = 3e-4;  // Broadening parameter
 
     let omega_range;
     if !zoomed {
-        omega_range = Some((0.22,0.40));
+        omega_range = Some((0.16, 0.22));
     }
     else{
         omega_range = Some((0.168,0.18));
@@ -383,17 +383,17 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
             gamma,
         };
         
-        match plot_dielectric_function(save_dir, Some(&real_filename), DielectricPlotType::Real, omega_range, &coupling_values, Some(&ref_params), zoomed) {
+        match plot_dielectric_function(save_dir, Some(&real_filename), DielectricPlotType::Real, omega_range, &coupling_values, Some(&ref_params), zoomed, Some(&q_values)) {
             Ok(_) => timed_println!("Successfully plotted real part of dielectric function"),
             Err(e) => timed_println!("Error plotting dielectric function: {}", e),
         }
         
-        match plot_dielectric_function(save_dir, Some(&imag_filename), DielectricPlotType::Imaginary, omega_range, &coupling_values, Some(&ref_params), zoomed) {
+        match plot_dielectric_function(save_dir, Some(&imag_filename), DielectricPlotType::Imaginary, omega_range, &coupling_values, Some(&ref_params), zoomed, Some(&q_values)) {
             Ok(_) => timed_println!("Successfully plotted imaginary part of dielectric function"),
             Err(e) => timed_println!("Error plotting dielectric function: {}", e),
         }
         
-        match plot_dielectric_function(save_dir, Some(&both_filename), DielectricPlotType::Both, omega_range, &coupling_values, Some(&ref_params), zoomed) {
+        match plot_dielectric_function(save_dir, Some(&both_filename), DielectricPlotType::Both, omega_range, &coupling_values, Some(&ref_params), zoomed, Some(&q_values)) {
             Ok(_) => timed_println!("Successfully plotted both parts of dielectric function"),
             Err(e) => timed_println!("Error plotting dielectric function: {}", e),
         }
@@ -477,6 +477,7 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
         
         // // Save the final dielectric function results
         // let filename = sing_ex::get_dielectric_function_filename(pp, &pp_config, save_dir, n_eig, gamma);
+
         timed_println!("Saving dielectric function data to {}", filename);
         let mut file = File::create(&filename).unwrap();
     
@@ -544,17 +545,17 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
             gamma,
         };
         
-        match plot_dielectric_function(save_dir, Some(&real_filename), DielectricPlotType::Real, omega_range, &plot_coupling_values, Some(&ref_params), zoomed) {
+        match plot_dielectric_function(save_dir, Some(&real_filename), DielectricPlotType::Real, omega_range, &plot_coupling_values, Some(&ref_params), zoomed, Some(&q_values)) {
             Ok(_) => timed_println!("Successfully plotted real part of dielectric function to {}", real_filename),
             Err(e) => timed_println!("Error plotting dielectric function: {}", e),
         }
         
-        match plot_dielectric_function(save_dir, Some(&imag_filename), DielectricPlotType::Imaginary, omega_range, &plot_coupling_values, Some(&ref_params), zoomed) {
+        match plot_dielectric_function(save_dir, Some(&imag_filename), DielectricPlotType::Imaginary, omega_range, &plot_coupling_values, Some(&ref_params), zoomed, Some(&q_values)) {
             Ok(_) => timed_println!("Successfully plotted imaginary part of dielectric function to {}", imag_filename),
             Err(e) => timed_println!("Error plotting dielectric function: {}", e),
         }
         
-        match plot_dielectric_function(save_dir, Some(&both_filename), DielectricPlotType::Both, omega_range, &plot_coupling_values, Some(&ref_params), zoomed) {
+        match plot_dielectric_function(save_dir, Some(&both_filename), DielectricPlotType::Both, omega_range, &plot_coupling_values, Some(&ref_params), zoomed, Some(&q_values)) {
             Ok(_) => timed_println!("Successfully plotted both parts of dielectric function to {}", both_filename),
             Err(e) => timed_println!("Error plotting dielectric function: {}", e),
         }
@@ -583,11 +584,11 @@ fn main() {
     // Create exciton configuration
     let e_config = ExcitonConfig {
         n_kappa: 7,                               // Number of bands
-        a0: 9.0,                                  // Lattice constant
+        a0: 16.0,                                  // Lattice constant
         v0: 0.05,                                 // Potential strength
         k: vec![0.0, 0.0],                        // Initial k-vector
-        m_e: 0.3,                                 // Electron effective mass
-        m_h: 0.3,                                 // Hole effective mass
+        m_e: 0.2,                                 // Electron effective mass
+        m_h: 0.2,                                 // Hole effective mass
         verbose: false,                           // Verbose output flag
         grid_size: 64,                            // Grid size for real-space calculations
         box_size: 3.0,                            // Real-space box size
@@ -600,7 +601,7 @@ fn main() {
     // davidson::davidson_test();
 
     // Choose which function to run
-    let run_mode = "bandstructure"; // Options: "bandstructure", "dielectric_scan"
+    let run_mode = "dielectric_scan"; // Options: "bandstructure", "dielectric_scan"
 
     initialize().expect("Failed to initialize SLEPc");
     
