@@ -330,6 +330,7 @@ impl<M: MatrixOps, B: Boson<M>>  LMHamiltonian<M,B> {
         
         // Check if we need to update k
         let k_changed = if let Some(k_val) = &k {
+            self.is_initialized = false;
             k_val != &self.exciton.exciton_ham.k
         } else {
             false
@@ -339,6 +340,7 @@ impl<M: MatrixOps, B: Boson<M>>  LMHamiltonian<M,B> {
         if !self.is_initialized || k_changed {
             if k_changed {
                 self.update_k(k.unwrap());
+                timed_println!("Updating k to {:?}", &self.exciton.exciton_ham.k)
             }
             
             let time_eig = Instant::now();
@@ -697,15 +699,15 @@ impl<M: MatrixOps, B: Boson<M>>  PPHamiltonian<M,B> {
         PPHamiltonian::new(polariton, phonon, pn_coupling)
     }
 
-    pub fn update_k(&mut self, k: Vec<f64>) 
-    where 
-        M::Scalar: NumCast + Sqrt + Sum + ConvertFrom<c64> + ConvertFrom<f64>, 
-    {
-        self.polariton.exciton.exciton_ham.k = k.clone();
-        self.polariton.initialize(Some(k));
-    } 
+    // pub fn update_k(&mut self, k: Vec<f64>) 
+    // where 
+    //     M::Scalar: NumCast + Sqrt + Sum + ConvertFrom<c64> + ConvertFrom<f64>, 
+    // {
+    //     self.polariton.exciton.exciton_ham.k = k.clone();
+    //     self.polariton.initialize(Some(k));
+    // } 
 
-    pub fn initialize(&mut self)  
+    pub fn initialize(&mut self, k: Option<Vec<f64>>)  
     where 
         M::Scalar: NumCast + Sqrt + Sum + ConvertFrom<c64> + ConvertFrom<f64>, 
     {
@@ -716,7 +718,7 @@ impl<M: MatrixOps, B: Boson<M>>  PPHamiltonian<M,B> {
         }
         
         let time_pol = Instant::now();
-        self.polariton.initialize(None);
+        self.polariton.initialize(k);
         timed_println!("  Polariton initialization: {:?}", time_pol.elapsed());
         
         let time_pn = Instant::now();
@@ -777,7 +779,7 @@ impl<M: MatrixOps, B: Boson<M>>  PPHamiltonian<M,B> {
         }
         
         if !self.is_initialized{
-            self.initialize();
+            self.initialize(k.clone());
         }
 
         // Use cached LM Hamiltonian if available and k hasn't changed

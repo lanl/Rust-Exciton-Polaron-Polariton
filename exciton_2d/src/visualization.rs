@@ -246,7 +246,7 @@ pub fn plot_n_colored_band_structure(
     save_path: &str,
     v0: f64
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let dark = true;
+    let dark = false;
 
     // Create x-axis for the plot (path length)
     let mut x = vec![0.0; k_points.len()];

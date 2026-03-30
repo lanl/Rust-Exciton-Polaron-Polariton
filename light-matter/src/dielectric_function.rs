@@ -5,8 +5,19 @@ use ndarray_linalg::c64;
 use crate::timed_println;
 use std::iter::Sum;
 
-use crate::utils::{MatrixOps, PPConfig, PrettyArray2, SolverOperator, Sqrt, ConvertFrom};
+use crate::utils::{ConvertFrom, HermitianConjugate, MatrixOps, Norm, PPConfig, PrettyArray2, SolverOperator, Sqrt};
 use crate::hamiltonians::{PPHamiltonian, Boson};
+
+/// Result of dielectric‑function calculation including composition data.
+/// The real and imaginary parts of the dielectric function are returned as
+/// separate `Array1<f64>` values.  In addition, the photonic character and the
+/// average phonon number for each eigenstate are provided as `Vec<f64>`.
+pub struct DielectricResult {
+    pub real: Array1<f64>,
+    pub imag: Array1<f64>,
+    pub photonic_chars: Vec<f64>,
+    pub phonon_numbers: Vec<f64>,
+}
 
 /// Generates a filename for the cached diagonalization data (pp_vals and x_pp)
 pub fn get_dielectric_cache_filename<M,B>(
@@ -56,63 +67,83 @@ where M: MatrixOps, B: Boson<M>
     )
 }
 
-/// Save the cached diagonalization data (pp_vals and x_pp)
+/// Save the cached diagonalization data (pp_vals, x_pp, photonic_chars, phonon_numbers)
 pub fn save_dielectric_cache(
     filename: &str,
     pp_vals: &Array1<f64>,
-    x_pp: &Array1<f64>
+    x_pp: &Array1<f64>,
+    photonic_chars: &Vec<f64>,
+    phonon_numbers: &Vec<f64>,
 ) -> std::io::Result<()> {
     use std::fs::File;
     use std::io::Write;
-    
+
     let mut file = File::create(filename)?;
-    
-    // Write dimensions
-    let n_eig = pp_vals.len();
-    file.write_all(&(n_eig as u64).to_le_bytes())?;
-    
+
+    // Write dimensions (number of eigenstates)
+    let n_eig = pp_vals.len() as u64;
+    file.write_all(&n_eig.to_le_bytes())?;
+
     // Write pp_vals
     for &val in pp_vals.iter() {
         file.write_all(&val.to_le_bytes())?;
     }
-    
     // Write x_pp
     for &val in x_pp.iter() {
         file.write_all(&val.to_le_bytes())?;
     }
-    
+    // Write photonic_chars
+    for &val in photonic_chars.iter() {
+        file.write_all(&val.to_le_bytes())?;
+    }
+    // Write phonon_numbers
+    for &val in phonon_numbers.iter() {
+        file.write_all(&val.to_le_bytes())?;
+    }
+
     Ok(())
 }
 
-/// Load the cached diagonalization data (pp_vals and x_pp)
+/// Load the cached diagonalization data (pp_vals, x_pp, photonic_chars, phonon_numbers)
 pub fn load_dielectric_cache(
     filename: &str
-) -> std::io::Result<(Array1<f64>, Array1<f64>)> {
+) -> std::io::Result<(Array1<f64>, Array1<f64>, Vec<f64>, Vec<f64>)> {
     use std::fs::File;
     use std::io::Read;
-    
+
     let mut file = File::open(filename)?;
-    
+
     // Read dimensions
     let mut buf = [0u8; 8];
     file.read_exact(&mut buf)?;
     let n_eig = u64::from_le_bytes(buf) as usize;
-    
+
     // Read pp_vals
     let mut pp_vals = Array1::<f64>::zeros(n_eig);
     for i in 0..n_eig {
         file.read_exact(&mut buf)?;
         pp_vals[i] = f64::from_le_bytes(buf);
     }
-    
     // Read x_pp
     let mut x_pp = Array1::<f64>::zeros(n_eig);
     for i in 0..n_eig {
         file.read_exact(&mut buf)?;
         x_pp[i] = f64::from_le_bytes(buf);
     }
-    
-    Ok((pp_vals, x_pp))
+    // Read photonic_chars
+    let mut photonic_chars = Vec::with_capacity(n_eig);
+    for _ in 0..n_eig {
+        file.read_exact(&mut buf)?;
+        photonic_chars.push(f64::from_le_bytes(buf));
+    }
+    // Read phonon_numbers
+    let mut phonon_numbers = Vec::with_capacity(n_eig);
+    for _ in 0..n_eig {
+        file.read_exact(&mut buf)?;
+        phonon_numbers.push(f64::from_le_bytes(buf));
+    }
+
+    Ok((pp_vals, x_pp, photonic_chars, phonon_numbers))
 }
 
 /// Calculate the dielectric function from cached or newly computed pp_vals and x_pp
@@ -124,40 +155,30 @@ pub fn get_dielectric_function<M,B>(
     gamma: f64, 
     save_dir: &str,
     use_cached: bool
-) -> (Array1<f64>, Array1<f64>) 
-where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum + ConvertFrom<f64> + ConvertFrom<c64> , B: Boson<M>
+) -> DielectricResult 
+where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum + ConvertFrom<f64> + ConvertFrom<c64> + Norm + HermitianConjugate, B: Boson<M>
 {
     timed_println!("Calculating dielectric function with {} eigenstates, gamma={:.1e}", n_eig, gamma);
 
     let cache_filename = get_dielectric_cache_filename(pp, pp_config, save_dir, n_eig);
     
     // Try to load cached data if requested
-    let (pp_vals, x_pp) = if use_cached && std::path::Path::new(&cache_filename).exists() {
+    // Load cached eigenvalues/x_pp if possible, otherwise compute everything
+    let (pp_vals, x_pp, photonic_chars, phonon_numbers) = if use_cached && std::path::Path::new(&cache_filename).exists() {
         timed_println!("Loading cached diagonalization data from {}", cache_filename);
         match load_dielectric_cache(&cache_filename) {
-            Ok((vals, x)) => {
+            Ok((vals, x,photonic_chars, phonon_numbers)) => {
                 timed_println!("Successfully loaded cached data");
-                (vals, x)
+                (vals, x, photonic_chars, phonon_numbers)
             },
             Err(e) => {
                 timed_println!("Failed to load cache ({}), recalculating...", e);
-                let (vals, x) = compute_dielectric_cache(pp_config, pp, n_eig);
-                // Save the newly computed cache
-                if let Err(e) = save_dielectric_cache(&cache_filename, &vals, &x) {
-                    timed_println!("Warning: Failed to save cache: {}", e);
-                }
-                (vals, x)
+                compute_dielectric_cache(pp_config, pp, n_eig)
             }
         }
     } else {
         timed_println!("Computing diagonalization data...");
-        let (vals, x) = compute_dielectric_cache(pp_config, pp, n_eig);
-        // Save the cache
-        timed_println!("Saving diagonalization cache to {}", cache_filename);
-        if let Err(e) = save_dielectric_cache(&cache_filename, &vals, &x) {
-            timed_println!("Warning: Failed to save cache: {}", e);
-        }
-        (vals, x)
+        compute_dielectric_cache(pp_config, pp, n_eig)
     };
 
     timed_println!("Relative energies = {:?}", pp_vals.slice(s![0..50.min(pp_vals.len())]).to_owned() - pp_vals[0]);
@@ -173,7 +194,12 @@ where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum + ConvertF
         1.0 + 4.0 * PI * result
     });
 
-    (dielectric_function.map(|&x| x.re), dielectric_function.map(|&x| x.im))
+    DielectricResult {
+        real: dielectric_function.map(|&x| x.re),
+        imag: dielectric_function.map(|&x| x.im),
+        photonic_chars,
+        phonon_numbers,
+    }
 }
 
 /// Helper function to compute the expensive diagonalization and matrix elements
@@ -181,8 +207,8 @@ fn compute_dielectric_cache<M,B>(
     pp_config: &PPConfig,
     pp: &mut PPHamiltonian<M,B>,
     n_eig: usize,
-) -> (Array1<f64>, Array1<f64>) 
-where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum + ConvertFrom<f64> + ConvertFrom<c64> , B: Boson<M>
+) -> (Array1<f64>, Array1<f64>, Vec<f64>, Vec<f64>) 
+where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum + ConvertFrom<f64> + ConvertFrom<c64> , B: Boson<M>, M::Scalar: ConvertFrom<f64> + ConvertFrom<c64> + HermitianConjugate + Norm
 {
 
     // Build Hamiltonian
@@ -293,5 +319,45 @@ where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum + ConvertF
         }).fold(c64::zero(), |acc, val| acc + val).norm()
     });
 
-    (pp_vals, x_pp)
+    // -----------------------------------------------------------------
+    // Compute composition data: photonic character and average phonon number
+    // -----------------------------------------------------------------
+    let n_photon_modes = pp.polariton.photon.boson.get_modes().len();
+
+    let mut photonic_chars: Vec<f64> = Vec::with_capacity(n_eig);
+    let mut phonon_numbers: Vec<f64> = Vec::with_capacity(n_eig);
+    
+    let ex_eye = M::eye(n_ex_eig);
+    let pn_eye = M::eye(n_pn);
+
+    let lm_eye = M::eye(n_ex_eig * n_ph);
+
+    // Single phonon mode number operator (mode index 0)
+    let phonon_number_op = lm_eye.kron(&pp.phonon.boson.adag_a(0));
+
+    for idx in 0..n_eig {
+        let vec = pp_vecs.column(idx).iter()
+            .map(|val| M::Scalar::convert_from(*val).unwrap())
+            .collect::<Array1<M::Scalar>>();
+        let vec_dag = vec.mapv(|x| x.dag());
+
+        // Photonic character: sum_i <ψ|a_i† a_i|ψ>
+        let mut photon_sum = 0.0f64;
+        for mode_i in 0..n_photon_modes {
+            let adag_a = ex_eye.kron(&pp.polariton.photon.get_adag_a(mode_i)).kron(&pn_eye);
+            let mut tmp = Array1::zeros(vec.len()); // zero vector of same shape
+            adag_a.apply(vec.as_slice().unwrap(), tmp.as_slice_mut().unwrap());
+            let val: M::Scalar = vec_dag.dot(&tmp);
+            photon_sum += <M as MatrixOps>::Scalar::norm(val);
+        }
+        photonic_chars.push(photon_sum);
+
+        // Phonon number expectation
+        let mut tmp = Array1::zeros(vec.len()); // zero vector of same shape
+        phonon_number_op.apply(vec.as_slice().unwrap(), tmp.as_slice_mut().unwrap());
+        let val: M::Scalar = vec_dag.dot(&tmp);
+        phonon_numbers.push(<M as MatrixOps>::Scalar::norm(val));
+    }
+
+    (pp_vals, x_pp, photonic_chars, phonon_numbers)
 }

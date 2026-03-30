@@ -26,15 +26,15 @@ unsafe extern "C" {
     fn MatDestroy(A: *mut Mat) -> c_int;
     
     // Vector operations
-    fn VecGetArray(v: rust_slepc_bindings::Vec, a: *mut *mut c_double) -> c_int;
-    fn VecRestoreArray(v: rust_slepc_bindings::Vec, a: *mut *mut c_double) -> c_int;
+    fn VecGetArray(v: rust_slepc_bindings::PetscVec, a: *mut *mut c_double) -> c_int;
+    fn VecRestoreArray(v: rust_slepc_bindings::PetscVec, a: *mut *mut c_double) -> c_int;
 }
 
 // Constants needed for this implementation
 const MATOP_MULT: c_int = 3; // Matrix-vector product operation
 
 // Instrumented callback function for matrix-vector product (complex version)
-extern "C" fn mv_product_instrumented(mat: Mat, x: rust_slepc_bindings::Vec, y: rust_slepc_bindings::Vec) -> c_int {
+extern "C" fn mv_product_instrumented(mat: Mat, x: rust_slepc_bindings::PetscVec, y: rust_slepc_bindings::PetscVec) -> c_int {
     let callback_start = Instant::now();
     
     unsafe {
@@ -256,7 +256,7 @@ pub fn diagonalize_slepc_instrumented(
 
 /// Convert an Array2 of initial vectors to a Vec of PETSc Vec objects
 /// For complex vectors, the real values are used as the real part with zero imaginary part
-fn create_petsc_vecs_from_array2(initial_vecs: &Array2<f64>) -> Result<Vec<rust_slepc_bindings::Vec>, PetscError> {
+fn create_petsc_vecs_from_array2(initial_vecs: &Array2<f64>) -> Result<Vec<rust_slepc_bindings::PetscVec>, PetscError> {
     let n_vecs = initial_vecs.ncols();
     let vec_size = initial_vecs.nrows();
     let mut petsc_vecs = Vec::with_capacity(n_vecs);
@@ -273,8 +273,8 @@ fn create_petsc_vecs_from_array2(initial_vecs: &Array2<f64>) -> Result<Vec<rust_
         
         let mut vec_ptr: *mut c_double = std::ptr::null_mut();
         unsafe extern "C" {
-            fn VecGetArray(v: rust_slepc_bindings::Vec, a: *mut *mut c_double) -> c_int;
-            fn VecRestoreArray(v: rust_slepc_bindings::Vec, a: *mut *mut c_double) -> c_int;
+            fn VecGetArray(v: rust_slepc_bindings::PetscVec, a: *mut *mut c_double) -> c_int;
+            fn VecRestoreArray(v: rust_slepc_bindings::PetscVec, a: *mut *mut c_double) -> c_int;
         }
         
         let result = unsafe { VecGetArray(v, &mut vec_ptr) };

@@ -1,4 +1,5 @@
 use ndarray::{Array1, Array2, s};
+use std::f64::EPSILON;
 use std::f64::consts::PI;
 use std::fs::File;
 use std::io::{Write};
@@ -27,7 +28,11 @@ where M: MatrixOps, B: Boson<M>
 {
     let n_ex = pp.polariton.exciton.n_ex_eig;
     let n_ph = pp.polariton.photon.dimension(); // +1 for ground state
-    let n_pn = pp.phonon.dimension();
+    let n_pn = if pp.pn_coupling < EPSILON || pp.phonon.dimension() == 1 {
+        1
+    } else {
+        pp.phonon.dimension()
+    };
     
     // Calculate the total probability in photonic states (excluding ground state)
     let mut photonic_prob = 0.0;
@@ -245,8 +250,8 @@ where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum + ConvertF
     // Generate k-points along the path
     let k_points: Vec<Vec<f64>>;
     if zoomed {
-        let start = vec![3. / 4. * PI / pp_config.e_config.a0, 0.];
-        let end =   vec![PI / pp_config.e_config.a0, 0.];
+        let start = vec![0., 0.];
+        let end =   vec![PI / pp_config.e_config.a0 / 6., 0.];
 
         timed_println!("Performing zoomed in band structure from k = {:?} to {:?}", start, end);
         k_points = (0 .. n_k_points).map(|k_ind|{
@@ -292,7 +297,7 @@ where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum + ConvertF
     let mut prev_eigvecs: Option<Array2<c64>> = None;
 
     for (global_idx, k) in my_k_points.iter() {
-        pp.update_k(k.clone());
+        // pp.update_k(k.clone());
         let h_pp = pp.build_pp_hamiltonian(Some(k.clone()));
 
         let (eigvals, eigvecs) = h_pp.diagonalize(Some(n_eig), None, prev_eigvecs.as_ref());
@@ -447,7 +452,7 @@ pub fn plot_color_band_structure(
     zoomed: bool
 ) -> Result<(), Box<dyn std::error::Error>> {
 
-    let dark = true;
+    let dark = false;
 
     // Create x-axis for the plot (path length)
     let mut x = vec![0.0; k_points.len()];
@@ -485,7 +490,7 @@ pub fn plot_color_band_structure(
     }
     
     // Set max energy to 0.3 or use calculated max
-    max_energy = 0.0;
+    max_energy = 0.05;
 
     // Add padding to the energy range (5%)
     let energy_padding = (max_energy - min_energy) * 0.05;
@@ -493,8 +498,8 @@ pub fn plot_color_band_structure(
     max_energy += energy_padding;
 
     if zoomed {
-        min_energy = -0.195;
-        max_energy = -0.16;
+        min_energy = -0.03;
+        max_energy = -0.01;
     }
 
     // Create data files for gnuplot
@@ -541,12 +546,12 @@ pub fn plot_color_band_structure(
     writeln!(script, "set bmargin 3")?;
         
     if dark {
-        writeln!(script, "set title 'Exciton-Polariton Band Structure (a₀={:.1}, V₀={:.1}, g={:.3})' font 'Arial,16' textcolor rgb '#e0e0e0'", a0, v0, coupling)?;
+        writeln!(script, "set title 'Exciton-Polariton Band Structure (a₀={:.1}, V₀={:.1}, g={:.6})' font 'Arial,16' textcolor rgb '#e0e0e0'", a0, v0, coupling)?;
         writeln!(script, "set xlabel 'Wave vector' textcolor rgb '#e0e0e0'")?;
         writeln!(script, "set ylabel 'Energy (a.u.)' textcolor rgb '#e0e0e0'")?;
     }
     else {
-        writeln!(script, "set title 'Exciton-Polariton Band Structure (a₀={:.1}, V₀={:.1}, g={:.3})' font 'Arial,16'", a0, v0, coupling)?;
+        writeln!(script, "set title 'Exciton-Polariton Band Structure (a₀={:.1}, V₀={:.1}, g={:.6})' font 'Arial,16'", a0, v0, coupling)?;
         writeln!(script, "set xlabel 'Wave vector'")?;
         writeln!(script, "set ylabel 'Energy (a.u.)'")?;
     }

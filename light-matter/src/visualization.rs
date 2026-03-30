@@ -116,7 +116,7 @@ pub fn plot_dielectric_function(
     let mut background = &WHITE;
     let mut text_color = &BLACK;
 
-    let mut ref_colors = vec![(255.,0.,0.), (0.,0.,255.)];
+    let mut ref_colors = vec![(0.,0.,0.), (255.,0.,0.), (0.,0.,255.)];
 
     if dark_mode {
         background = &BLACK;
@@ -484,7 +484,7 @@ pub fn plot_dielectric_function(
         println!("Configured mesh");
         
         // Draw each coupling strength with a different color
-        for (i, (key, coupling)) in couplings.iter().enumerate() {
+        for (i, (key, coupling)) in couplings.iter().enumerate().rev() {
             let (omegas, _, im_eps, params) = &all_data[key];
             
             let color = interpolate_colormap(&ref_colors, i as f64/ (couplings.len() - 1) as f64);
@@ -510,7 +510,7 @@ pub fn plot_dielectric_function(
                 ShapeStyle {
                     color: color.into(),
                     filled: true,
-                    stroke_width: 4, // Increased line thickness
+                    stroke_width: 8, // Increased line thickness
                 }
             ))?.label(label)
               .legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], color));
@@ -522,16 +522,16 @@ pub fn plot_dielectric_function(
             plot_photon_freqs!(&mut chart, e_min, e_max, qs);
         }
 
-        if plot_type == DielectricPlotType::Imaginary && !zoomed{
-            // Add legend
-            chart.configure_series_labels()
-                .background_style(&WHITE.mix(0.9)) // More opaque background
-                .border_style(&BLACK)
-                .label_font(("sans-serif", 16)) // Slightly larger font
-                .position(SeriesLabelPosition::LowerRight)
-                .margin(15) // Add some margin around the legend text
-                .draw()?;
-        }
+        // if plot_type == DielectricPlotType::Imaginary && !zoomed{
+        //     // Add legend
+        //     chart.configure_series_labels()
+        //         .background_style(&WHITE.mix(0.9)) // More opaque background
+        //         .border_style(&BLACK)
+        //         .label_font(("sans-serif", 16)) // Slightly larger font
+        //         .position(SeriesLabelPosition::LowerRight)
+        //         .margin(15) // Add some margin around the legend text
+        //         .draw()?;
+        // }
     }
     
     // Present the final plot

@@ -20,8 +20,8 @@ unsafe extern "C" {
     fn MatDestroy(A: *mut Mat) -> c_int;
     
     // Vector operations
-    fn VecGetArray(v: rust_slepc_bindings::Vec, a: *mut *mut c_double) -> c_int;
-    fn VecRestoreArray(v: rust_slepc_bindings::Vec, a: *mut *mut c_double) -> c_int;
+    fn VecGetArray(v: rust_slepc_bindings::PetscVec, a: *mut *mut c_double) -> c_int;
+    fn VecRestoreArray(v: rust_slepc_bindings::PetscVec, a: *mut *mut c_double) -> c_int;
 }
 
 // Constants needed for this implementation
@@ -30,8 +30,8 @@ const MATOP_MULT: c_int = 3; // Matrix-vector product operation
 // Callback function for matrix-vector product (complex version)
 extern "C" fn mv_product_complex<T: SolverOperator<c64>>(
     mat: Mat, 
-    x: rust_slepc_bindings::Vec, 
-    y: rust_slepc_bindings::Vec
+    x: rust_slepc_bindings::PetscVec, 
+    y: rust_slepc_bindings::PetscVec
 ) -> c_int {
     unsafe {
         // Extract the operator from the context
@@ -299,7 +299,7 @@ pub fn diagonalize_slepc<T: SolverOperator<c64>>(
 /// 
 /// For Hermitian problems, we align the phase of each eigenvector to maximize
 /// the real component, which provides a consistent gauge across k-points.
-fn create_petsc_vecs_from_array2(initial_vecs: &Array2<c64>) -> Result<Vec<rust_slepc_bindings::Vec>, PetscError> {
+fn create_petsc_vecs_from_array2(initial_vecs: &Array2<c64>) -> Result<Vec<rust_slepc_bindings::PetscVec>, PetscError> {
     let n_vecs = initial_vecs.ncols();
     let vec_size = initial_vecs.nrows();
     let mut petsc_vecs = Vec::with_capacity(n_vecs);
@@ -343,8 +343,8 @@ fn create_petsc_vecs_from_array2(initial_vecs: &Array2<c64>) -> Result<Vec<rust_
         // Copy our phase-aligned buffer to the PETSc vector
         let mut vec_ptr: *mut c_double = std::ptr::null_mut();
         unsafe extern "C" {
-            fn VecGetArray(v: rust_slepc_bindings::Vec, a: *mut *mut c_double) -> c_int;
-            fn VecRestoreArray(v: rust_slepc_bindings::Vec, a: *mut *mut c_double) -> c_int;
+            fn VecGetArray(v: rust_slepc_bindings::PetscVec, a: *mut *mut c_double) -> c_int;
+            fn VecRestoreArray(v: rust_slepc_bindings::PetscVec, a: *mut *mut c_double) -> c_int;
         }
         
         let result = unsafe {VecGetArray(v, &mut vec_ptr)};

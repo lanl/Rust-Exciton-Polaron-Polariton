@@ -18,7 +18,7 @@ struct Args {
     a0: f64,
     
     /// Potential strength
-    #[clap(long, default_value_t = 0.05)]
+    #[clap(long, default_value_t = 0.1)]
     v0: f64,
     
     /// Grid size
@@ -46,11 +46,11 @@ struct Args {
     n_jobs: i32,
     
     /// Number of relative coordinate eigenstates
-    #[clap(long, default_value_t = 25)]
+    #[clap(long, default_value_t = 16)]
     n_rel_states: usize,
     
     /// Number of bands to calculate
-    #[clap(long, default_value_t = 100)]
+    #[clap(long, default_value_t = 35)]
     n_bands: usize,
     
     /// Directory to save output figures
@@ -80,7 +80,7 @@ fn plot_n_colored_bands(system: &Exciton2DGridSystem, args: &Args) {
     
     // Calculate band structure with n-expectation values
     let (k_points, eigvals_list, n_expectation_list) = system.calculate_n_colored_band_structure(
-        100,
+        150,
         args.n_rel_states,
         args.n_bands,
         args.recalculate_bands
@@ -208,7 +208,7 @@ fn main() {
     let config = ExcitonConfig {
         n_kappa: 11,
         a0: 16.0,
-        v0: 0.05,
+        v0: 0.1,
         k: vec![0.0, 0.0],
         m_e: 0.2,
         m_h: 0.2,

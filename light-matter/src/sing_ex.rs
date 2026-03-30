@@ -552,7 +552,7 @@ impl Operator<c64> for PPOffHamiltonian {
                         let x_ph_pn = x_vec.slice(s![pn_dex_start..;stride]);
                         
                         // Calculate b_dag_term using BLAS-powered dot product
-                        let b_dag_term = &sin_mat_phonon.dot(&x_ph_pn) * pn_coupling_factor;
+                        let b_dag_term = &sin_mat_phonon.dot(&x_ph_pn) * 2.0 * pn_coupling_factor;
                         
                         // Add to y at phonon pn_ind+1 and photon in ph_ind
                         let indices: Vec<usize> = (0..n_ex).map(|ex_ind| (pn_ind + 1) + ph_ind * n_pn + ex_ind * stride).collect();
@@ -566,7 +566,7 @@ impl Operator<c64> for PPOffHamiltonian {
                         let x_ph_pn_plus_1 = x_vec.slice(s![pn_exc_start..;stride]);
                         
                         // Calculate b_term using BLAS-powered dot product
-                        let b_term = &sin_mat_phonon.dot(&x_ph_pn_plus_1) * pn_coupling_factor;
+                        let b_term = &sin_mat_phonon.dot(&x_ph_pn_plus_1) * -2.0 * pn_coupling_factor;
                         
                         // Add to y at phonon pn_ind and photon in ph_ind
                         let indices: Vec<usize> = (0..n_ex).map(|ex_ind| pn_ind + ph_ind * n_pn + ex_ind * stride).collect();

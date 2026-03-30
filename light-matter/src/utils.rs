@@ -127,6 +127,11 @@ impl Norm for c64 {
         c64::norm(val)
     }
 }
+impl Norm for f64 {
+    fn norm(val: Self) -> f64 {
+        val.abs()
+    }
+}
 
 // Implement for norm from other numeric types via f64
 macro_rules! impl_norm {
