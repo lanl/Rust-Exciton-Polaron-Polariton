@@ -358,11 +358,11 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
     
     // Light-matter coupling parameters
     // let coupling_values = Array1::linspace(0.00, 0.05, 1); // Scan from weak to strong coupling
-    let total_coupling_values = Array1::from_vec(vec![0.0, 0.0035, 0.0046]);
+    let total_coupling_values = Array1::from_vec(vec![0.0, 0.0035, 0.006]); // Scan from weak to strong coupling
     // let total_coupling_values = Array1::from_vec(vec![0.0043, 0.0044, 0.0045, 0.0046, 0.0047, 0.0048]);
 
     let omega_0 = 0.175;    // Photon frequency
-    let n_modes = 32;
+    let n_modes = 45;
     let coupling_values = total_coupling_values /( (n_modes) as f64);
     let qz = omega_0 / C;
 
@@ -388,21 +388,22 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
     // let pn_coupling = 0.008771929825; // 100 cm^-1
     // let pn_coupling = 0.0;
     let pn_omega = 0.0025; // 500 cm^-1
-    let pn_coupling = 0.001; // 11.4 cm^-1
+    // let pn_coupling = 0.001; // 11.4 cm^-1
+    let pn_coupling = 0.0005; // 11.4 cm^-1
     let pn_k = arr1(&[0.,0.05]); // 1 nm^1
-    let pn_n_fock = 4;
+    let pn_n_fock = 1;
 
     // Parameters for dielectric function calculation
-    let n_eig = 4096;  // Number of eigenstates to use
+    let n_eig = 2048;  // Number of eigenstates to use
     let omegas = Array1::linspace(0.0, 0.5, 100000);  // Frequency range
-    let gamma = 3e-4;  // Broadening parameter ~0.9 meV
+    let gamma = 1e-4;  // Broadening parameter ~0.9 meV
 
     let omega_range;
     if !zoomed {
         omega_range = Some((0.172, 0.202));
     }
     else{
-        omega_range = Some((0.174,0.178));
+        omega_range = Some((0.176,0.178));
     }
 
     // Create directory for saving results
@@ -452,7 +453,7 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
             Err(e) => timed_println!("Error plotting dielectric function: {}", e),
         }
         
-        match plot_dielectric_function(save_dir, Some(&imag_filename), DielectricPlotType::Imaginary, omega_range, &coupling_values, Some(&ref_params), zoomed, Some(&q_values)) {
+        match plot_dielectric_function(save_dir, Some(&imag_filename), DielectricPlotType::Imaginary, omega_range, &coupling_values, Some(&ref_params), zoomed, None) {
             Ok(_) => timed_println!("Successfully plotted imaginary part of dielectric function"),
             Err(e) => timed_println!("Error plotting dielectric function: {}", e),
         }
@@ -473,7 +474,10 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
         .or_else(|_| env::var("I_MPI_SIZE"))
         .or_else(|_| env::var("OMPI_COMM_WORLD_SIZE"))
         .or_else(|_| env::var("SLURM_NTASKS"))
-        .expect("Could not find MPI world size in environment variables. Tried: PMI_SIZE, PMIX_SIZE, I_MPI_SIZE, OMPI_COMM_WORLD_SIZE, SLURM_NTASKS")
+        .unwrap_or_else(|_| {
+            timed_println!("Could not find MPI world size in environment variables. Using default value of 1.");
+            1.to_string()
+        })
         .parse()
         .expect("Failed to parse world size as integer");
     
@@ -482,7 +486,10 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
         .or_else(|_| env::var("I_MPI_RANK"))
         .or_else(|_| env::var("OMPI_COMM_WORLD_RANK"))
         .or_else(|_| env::var("SLURM_PROCID"))
-        .expect("Could not find MPI rank in environment variables. Tried: PMI_RANK, PMIX_RANK, I_MPI_RANK, OMPI_COMM_WORLD_RANK, SLURM_PROCID")
+        .unwrap_or_else(|_|{
+            timed_println!("Could not find MPI rank in environment variables. Using default value of 0.");
+            0.to_string()
+        })
         .parse()
         .expect("Failed to parse rank as integer");
 
@@ -670,9 +677,9 @@ fn main() {
     
     match run_mode {
         "bandstructure" => {
-            run_bandstructure(Method::LinOp, e_config.clone());
+            // run_bandstructure(Method::LinOp, e_config.clone());
             // run_bandstructure(Method::SingExLegacy, e_config.clone());
-            // run_bandstructure(Method::Sparse, e_config.clone());
+            run_bandstructure(Method::Sparse, e_config.clone());
             // run_bandstructure(Method::Dense, e_config.clone());
         },
         "dielectric_scan" => {

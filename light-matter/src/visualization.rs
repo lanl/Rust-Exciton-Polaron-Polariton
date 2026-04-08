@@ -23,7 +23,7 @@ pub struct DielectricParams {
 }
 
 /// Helper function to extract all parameters from a dielectric function filename
-fn extract_params_from_filename(path: &Path) -> Option<DielectricParams> {
+pub fn extract_params_from_filename(path: &Path) -> Option<DielectricParams> {
     let filename = path.file_name()?.to_str()?;
     
     // Skip if not a dielectric function file
@@ -71,8 +71,7 @@ fn extract_params_from_filename(path: &Path) -> Option<DielectricParams> {
 }
 
 
-const C: f64 = 137.036;
-
+#[macro_export]
 macro_rules! plot_photon_freqs {
     ($chart:expr, $y_min:expr, $y_max:expr, $qs:expr) => {
         // Style: light‑gray, 1 pixel width
@@ -81,6 +80,8 @@ macro_rules! plot_photon_freqs {
             filled: false,
             stroke_width: 1,
         };
+
+        const C: f64 = 137.036;
 
         let freqs: Vec<f64> = $qs.iter().map(|q| q.magnitude() * C).collect();
 

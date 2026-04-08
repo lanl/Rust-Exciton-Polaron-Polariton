@@ -610,6 +610,23 @@ pub trait MatrixOps: Clone {
         matrices.into_iter().reduce(|acc, m| acc.add(&m)).unwrap()
     }
 
+    /// Build a sum of Kronecker products efficiently
+    /// Input: vector of (left_op, right_op) tuples
+    /// Output: Σᵢ (left_op_i ⊗ right_op_i)
+    /// 
+    /// Default implementation creates Kron operators then sums them.
+    /// ComposedOperator overrides this to directly build KronSum when possible.
+    fn build_kron_sum(terms: Vec<(Self, Self)>, _: usize, _: usize) -> Self 
+    where 
+        Self: Sized,
+    {
+        // Default: just do normal kron + sum
+        let kron_terms: Vec<Self> = terms
+            .into_iter()
+            .map(|(left, right)| left.kron(&right))
+            .collect();
+        Self::sum(kron_terms)
+    }
 }
 
 // Implement for dense matrices
@@ -972,13 +989,12 @@ pub enum ComposedOperator<T: Clone> {
     /// Transpose operator
     Transpose(Box<ComposedOperator<T>>),
 
-    /// Single‑photon transition |to⟩⟨from| acting on a `dim`‑dimensional
-    /// photon space.  this is the key to the Kron‑sum optimisation: the
-    /// indices are stored explicitly so that `try_build_kron_sum`
-    /// never has to apply the operator to a basis vector.
+    /// Single‑photon transition: value * |to⟩⟨from| acting on a `dim`‑dimensional
+    /// photon space. Represents a single matrix element at position [to, from].
     SingTrans {
         from: usize,
         to: usize,
+        value: T,
         dim: usize,
     },
     
@@ -1000,15 +1016,15 @@ pub enum ComposedOperator<T: Clone> {
 }
 
 
-impl<T: Clone + num_traits::Zero + LinalgScalar + std::ops::Add<Output = T> + std::ops::Mul<Output = T>> ComposedOperator<T> {
+impl<T: Clone + num_traits::Zero + LinalgScalar + std::ops::Add<Output = T> + std::ops::Mul<Output = T> + Send + Sync + PartialEq> ComposedOperator<T> {
     /// Create from a base operator
     pub fn from_operator<O: SolverOperator<T> + 'static>(op: O) -> Self {
         ComposedOperator::Base(Arc::new(op))
     }
 
     /// Convenience constructor for the new variant.
-    pub fn sing_trans(from: usize, to: usize, dim: usize) -> Self {
-        ComposedOperator::SingTrans { from, to, dim }
+    pub fn sing_trans(from: usize, to: usize, value: T, dim: usize) -> Self {
+        ComposedOperator::SingTrans { from, to, value, dim }
     }
     
     /// Create a sum of multiple operators
@@ -1047,41 +1063,43 @@ impl<T: Clone + num_traits::Zero + LinalgScalar + std::ops::Add<Output = T> + st
     /// Extract photon transition from a sparse operator that represents |to⟩⟨from|
     /// Returns Some((from, to)) if the operator is a single-element transition, None otherwise
     /// Optimized for single-excitation operators where only vacuum->mode transitions exist
-    fn extract_photon_transition(op: &ComposedOperator<T>) -> Option<(usize, usize)>
+    fn extract_photon_transition(op: &ComposedOperator<T>) -> Option<(usize, usize, T)>
     where
         T: Copy + Zero + One,
     {
         match op {
-            ComposedOperator::SingTrans { from, to, .. } => Some((*from, *to)),
+            ComposedOperator::SingTrans { from, to, value, .. } => Some((*from, *to, *value)),
 
             ComposedOperator::Transpose(inner) => {
                 // For transpose, swap from and to
-                if let Some((from, to)) = Self::extract_photon_transition(inner) {
-                    Some((to, from))
+                if let Some((from, to, value)) = Self::extract_photon_transition(inner) {
+                    // For complex conjugate transpose, we'd need value.conj()
+                    // For now, assuming real or just transpose without conjugate
+                    Some((to, from, value))
                 } else {
                     None
                 }
             }
             
-            ComposedOperator::ScalarMul(_, inner) => {
-                // Scalar multiplication doesn't change the transition structure
-                Self::extract_photon_transition(inner)
+            ComposedOperator::ScalarMul(scalar, inner) => {
+                // Scalar multiplication multiplies the value
+                if let Some((from, to, value)) = Self::extract_photon_transition(inner) {
+                    Some((from, to, *scalar * value))
+                } else {
+                    None
+                }
             }
             
             ComposedOperator::Dot(left, right) => {
                 // Matrix multiplication is right-to-left: Dot(A, B)x = A(Bx)
                 // Check if Dot results in a single-element operator
-                if let (Some((from_l, to_l)), Some((from_r, to_r))) = 
+                if let (Some((from_l, to_l, val_l)), Some((from_r, to_r, val_r))) = 
                     (Self::extract_photon_transition(left), Self::extract_photon_transition(right)) {
-                    // For Dot(left, right):
-                    // - First apply right: from_r → to_r
-                    // - Then apply left: from_l → to_l
-                    // - For valid composition: output of right must match input of left
                     
                     if to_r == from_l {
                         // Valid composition: right's output feeds into left's input
-                        // Overall transition: from_r → to_l
-                        Some((from_r, to_l))
+                        // Overall transition: from_r → to_l with multiplied values
+                        Some((from_r, to_l, val_l * val_r))
                     } else {
                         // The operators don't compose to a single element
                         None
@@ -1089,6 +1107,42 @@ impl<T: Clone + num_traits::Zero + LinalgScalar + std::ops::Add<Output = T> + st
                 } else {
                     None
                 }
+            }
+            
+            ComposedOperator::Diagonal(diag) => {
+                // Diagonal operators can only represent transitions where from == to
+                // Check if exactly one diagonal element is non-zero
+                let mut non_zero_idx = None;
+                let mut non_zero_val = T::zero();
+                let mut count = 0;
+                
+                for (i, &val) in diag.iter().enumerate() {
+                    if !val.is_zero() {
+                        non_zero_idx = Some(i);
+                        non_zero_val = val;
+                        count += 1;
+                        if count > 1 {
+                            return None; // Multiple non-zero elements
+                        }
+                    }
+                }
+                
+                if count == 1 {
+                    let idx = non_zero_idx.unwrap();
+                    Some((idx, idx, non_zero_val))
+                } else {
+                    None // All zeros or multiple non-zeros
+                }
+            }
+            
+            ComposedOperator::Identity(_) => {
+                // Identity cannot be represented as a single transition
+                None
+            }
+            
+            ComposedOperator::Zero(_) => {
+                // Zero operator has no transitions
+                None
             }
             
             ComposedOperator::Base(base_op) => {
@@ -1103,12 +1157,14 @@ impl<T: Clone + num_traits::Zero + LinalgScalar + std::ops::Add<Output = T> + st
                 base_op.apply(&x_vacuum, &mut y_vacuum);
                 
                 // Check if vacuum produces exactly one non-zero mode
+                let mut element = T::zero();
                 let mut to_idx = None;
                 let mut count = 0;
                 for (j, &val) in y_vacuum.iter().enumerate() {
                     if !val.is_zero() {
                         to_idx = Some(j);
                         count += 1;
+                        element = val;
                         if count > 1 {
                             break; // More than one transition from vacuum
                         }
@@ -1117,7 +1173,7 @@ impl<T: Clone + num_traits::Zero + LinalgScalar + std::ops::Add<Output = T> + st
                 
                 if count == 1 {
                     // This is a vacuum -> mode transition
-                    return Some((0, to_idx.unwrap()));
+                    return Some((0, to_idx.unwrap(), element));
                 }
                 
                 // If not from vacuum, test each photon mode state
@@ -1138,6 +1194,7 @@ impl<T: Clone + num_traits::Zero + LinalgScalar + std::ops::Add<Output = T> + st
                             }
                             transition_found = true;
                             target = Some(j);
+                            element = val;
                         }
                     }
                     
@@ -1158,7 +1215,7 @@ impl<T: Clone + num_traits::Zero + LinalgScalar + std::ops::Add<Output = T> + st
                         }
                         
                         if !other_transitions {
-                            return Some((i, target.unwrap()));
+                            return Some((i, target.unwrap(), element));
                         } else {
                             return None; // Multiple independent transitions
                         }
@@ -1329,9 +1386,9 @@ impl<T: Clone + num_traits::Zero + LinalgScalar + std::ops::Add<Output = T> + st
                 &left_matrix + &right_matrix
             }
 
-            ComposedOperator::SingTrans { from, to, dim: d } => {
+            ComposedOperator::SingTrans { from, to, value, dim: d } => {
                 let mut m = Array2::zeros((*d, *d));
-                m[[*to, *from]] = T::one();
+                m[[*to, *from]] = *value;
                 m
             }
             
@@ -1371,16 +1428,18 @@ impl<T: Clone + num_traits::Zero + LinalgScalar + std::ops::Add<Output = T> + st
         matrix
     }
     
-    /// Try to detect and build a KronSum from a list of operators
+    /// Try to detect and build a KronSum from a list of operators (parallelized version)
     /// Returns a potentially optimized operator that may be:
     /// - A single KronSum if all terms match the pattern
     /// - A Sum containing a KronSum and other terms if some match
     /// - The original Sum if no terms match
     fn try_build_kron_sum(ops: &[ComposedOperator<T>]) -> Option<ComposedOperator<T>>
     where
-        T: Copy + One + std::fmt::Debug + LinalgScalar + Norm + ConvertFrom<f64> + ConvertFrom<c64>,
+        T: Copy + One + std::fmt::Debug + LinalgScalar + Norm + ConvertFrom<f64> + ConvertFrom<c64> + Send + Sync,
     {
         use std::time::Instant;
+        use rayon::prelude::*;
+        
         let start = Instant::now();
         
         // First, flatten any Add operators in the list
@@ -1390,153 +1449,185 @@ impl<T: Clone + num_traits::Zero + LinalgScalar + std::ops::Add<Output = T> + st
         
         timed_println!("  Flattened {} ops into {} terms", ops.len(), flattened_ops.len());
         
-        let mut transition_matrices: HashMap<(usize, usize), Array2<T>> = HashMap::new();
-        let mut exciton_dim: Option<usize> = None;
-        let mut photon_dim: Option<usize> = None;
-        let mut non_kronsum_terms: Vec<ComposedOperator<T>> = Vec::new();
-        let mut n_valid = 0;
-        let mut n_zero = 0;
-        let mut n_other = 0;
+        // Structure to hold thread-local results
+        struct ThreadLocalResults<T: Clone> {
+            transition_matrices: HashMap<(usize, usize), Array2<T>>,
+            matrix_cache: HashMap<usize, Array2<T>>,
+            non_kronsum_terms: Vec<ComposedOperator<T>>,
+            exciton_dim: Option<usize>,
+            photon_dim: Option<usize>,
+            n_valid: usize,
+            n_zero: usize,
+            n_other: usize,
+            n_not_kron: usize,
+            n_no_transition: usize,
+            n_dim_mismatch: usize,
+        }
         
-        // Track reasons for non-matching terms (for debugging)
-        let mut n_not_kron = 0;
-        let mut n_no_transition = 0;
-        let mut n_dim_mismatch = 0;
-        
-        // Cache for extracted matrices - maps operator pointer to extracted matrix
-        // This avoids re-extracting the same operator multiple times
-        let mut matrix_cache: HashMap<usize, Array2<T>> = HashMap::new();
-        
-        for op in &flattened_ops {
-            // Skip zero operators
-            if Self::is_zero_operator(op) {
-                n_zero += 1;
-                continue;
-            }
-            
-            // Unwrap ScalarMul to get to the underlying operator
-            let (scalar, inner_op) = match op {
-                ComposedOperator::ScalarMul(s, inner) => (Some(*s), inner.as_ref()),
-                _ => (None, op),
-            };
-            
-            // Check if this is a Kron(exciton_op, photon_op) pattern
-            if let ComposedOperator::Kron(left, right) = inner_op {
-                // // Debug: print operator types for first few terms
-                // if n_valid < 3 {
-                //     timed_println!("    Debug: Kron term #{}", n_valid);
-                //     timed_println!("      Left type: {:?}", std::mem::discriminant(left.as_ref()));
-                //     timed_println!("      Right type: {:?}", std::mem::discriminant(right.as_ref()));
-                // }
-                
-                // Check if right operator is a photon transition
-                let transition = Self::extract_photon_transition(right);
-                // if n_valid < 5 {
-                //     timed_println!("      Transition result: {:?}", transition);
-                // }
-                match transition {
-                    Some((from, to)) => {
-                        // Extract the exciton matrix from the left operator
-                        let ex_dim = left.dimension();
-                        let ph_dim = right.dimension();
-                        
-                        // Verify dimensions are consistent
-                        let dims_ok = if let Some(stored_ex_dim) = exciton_dim {
-                            stored_ex_dim == ex_dim
-                        } else {
-                            exciton_dim = Some(ex_dim);
-                            true
-                        } && if let Some(stored_ph_dim) = photon_dim {
-                            stored_ph_dim == ph_dim
-                        } else {
-                            photon_dim = Some(ph_dim);
-                            true
-                        };
-                        
-                        if !dims_ok {
-                            // Inconsistent dimensions - treat as non-KronSum term
-                            non_kronsum_terms.push(op.clone());
-                            n_other += 1;
-                            n_dim_mismatch += 1;
-                            continue;
-                        }
-                        
-                        // Extract the exciton matrix - use cache if possible
-                        // Use the operator's memory address as a cache key
-                        let cache_key = left.as_ref() as *const ComposedOperator<T> as usize;
-                        let mut ex_matrix = if let Some(cached) = matrix_cache.get(&cache_key) {
-                            cached.clone()
-                        } else {
-                            let matrix = Self::extract_matrix_fast(left.as_ref(), ex_dim);
-                            matrix_cache.insert(cache_key, matrix.clone());
-                            matrix
-                        };
-                        
-                        // Apply scalar if present
-                        if let Some(s) = scalar {
-                            ex_matrix = ex_matrix.mapv(|v| s * v);
-                        }
-                        
-                        // Add or accumulate to the transition matrix
-                        transition_matrices.entry((from, to))
-                            .and_modify(|existing| {
-                                *existing = &*existing + &ex_matrix;
-                            })
-                            .or_insert(ex_matrix);
-                        
-                        n_valid += 1;
-                    }
-                    None => {
-                        // Right side is not a single photon transition
-                        // // Could be a complex operator - keep it as a separate term
-                        // if n_no_transition < 10 {
-                        //     // Debug: print first few cases with more detail
-                        //     timed_println!("    Debug: Kron with no transition detected. Right op type: {:?}",
-                        //         std::mem::discriminant(right.as_ref()));
-                            
-                        //     // If it's a Dot, show what's inside
-                        //     if let ComposedOperator::Dot(dot_left, dot_right) = right.as_ref() {
-                        //         timed_println!("      Dot components: left={:?}, right={:?}",
-                        //             std::mem::discriminant(dot_left.as_ref()),
-                        //             std::mem::discriminant(dot_right.as_ref()));
-                                
-                        //         // Try to extract transitions from each side
-                        //         let left_trans = Self::extract_photon_transition(dot_left);
-                        //         let right_trans = Self::extract_photon_transition(dot_right);
-                        //         timed_println!("      Left transition: {:?}, Right transition: {:?}",
-                        //             left_trans, right_trans);
-                        //     }
-                        // }
-                        non_kronsum_terms.push(op.clone());
-                        n_other += 1;
-                        n_no_transition += 1;
-                    }
+        impl<T: Clone> ThreadLocalResults<T> {
+            fn new() -> Self {
+                ThreadLocalResults {
+                    transition_matrices: HashMap::new(),
+                    matrix_cache: HashMap::new(),
+                    non_kronsum_terms: Vec::new(),
+                    exciton_dim: None,
+                    photon_dim: None,
+                    n_valid: 0,
+                    n_zero: 0,
+                    n_other: 0,
+                    n_not_kron: 0,
+                    n_no_transition: 0,
+                    n_dim_mismatch: 0,
                 }
-            } else {
-                // Not a Kron pattern - keep as separate term
-                // if n_not_kron < 5 {
-                //     // Debug: print first few non-Kron terms
-                //     let type_name = match op {
-                //         ComposedOperator::Base(_) => "Base",
-                //         ComposedOperator::Add(_, _) => "Add",
-                //         ComposedOperator::Sum(_) => "Sum",
-                //         ComposedOperator::Dot(_, _) => "Dot",
-                //         ComposedOperator::ScalarMul(_, _) => "ScalarMul",
-                //         ComposedOperator::Kron(_, _) => "Kron",
-                //         ComposedOperator::Diagonal(_) => "Diagonal",
-                //         ComposedOperator::Identity(_) => "Identity",
-                //         ComposedOperator::Zero(_) => "Zero",
-                //         ComposedOperator::Transpose(_) => "Transpose",
-                //         ComposedOperator::KronSum { .. } => "KronSum",
-                //         ComposedOperator::SingTrans { .. } => "SingTrans",
-                //     };
-                //     timed_println!("    Debug: Non-Kron term #{}: type = {}", n_not_kron + 1, type_name);
-                // }
-                non_kronsum_terms.push(op.clone());
-                n_other += 1;
-                n_not_kron += 1;
             }
         }
+        
+        // Process operators in parallel using fold-reduce pattern
+        let results = flattened_ops.par_iter()
+            .fold(
+                || ThreadLocalResults::new(),
+                |mut local, op| {
+                    // Skip zero operators
+                    if Self::is_zero_operator(op) {
+                        local.n_zero += 1;
+                        return local;
+                    }
+                    
+                    // Unwrap ScalarMul to get to the underlying operator
+                    let (scalar, inner_op) = match op {
+                        ComposedOperator::ScalarMul(s, inner) => (Some(*s), inner.as_ref()),
+                        _ => (None, op),
+                    };
+                    
+                    // Check if this is a Kron(exciton_op, photon_op) pattern
+                    if let ComposedOperator::Kron(left, right) = inner_op {
+                        // Check if right operator is a photon transition
+                        let transition = Self::extract_photon_transition(right);
+                        
+                        match transition {
+                            Some((from, to, ph_value)) => {
+                                // Extract the exciton matrix from the left operator
+                                let ex_dim = left.dimension();
+                                let ph_dim = right.dimension();
+                                
+                                // Verify dimensions are consistent with local state
+                                let dims_ok = if let Some(stored_ex_dim) = local.exciton_dim {
+                                    stored_ex_dim == ex_dim
+                                } else {
+                                    local.exciton_dim = Some(ex_dim);
+                                    true
+                                } && if let Some(stored_ph_dim) = local.photon_dim {
+                                    stored_ph_dim == ph_dim
+                                } else {
+                                    local.photon_dim = Some(ph_dim);
+                                    true
+                                };
+                                
+                                if !dims_ok {
+                                    // Inconsistent dimensions - treat as non-KronSum term
+                                    local.non_kronsum_terms.push(op.clone());
+                                    local.n_other += 1;
+                                    local.n_dim_mismatch += 1;
+                                    return local;
+                                }
+                                
+                                // Extract the exciton matrix - use local cache
+                                let cache_key = left.as_ref() as *const ComposedOperator<T> as usize;
+                                let mut ex_matrix = if let Some(cached) = local.matrix_cache.get(&cache_key) {
+                                    cached.clone()
+                                } else {
+                                    let matrix = Self::extract_matrix_fast(left.as_ref(), ex_dim);
+                                    local.matrix_cache.insert(cache_key, matrix.clone());
+                                    matrix
+                                };
+                                
+                                // Apply both the outer scalar (if present) and the photon value
+                                let combined_scalar = if let Some(s) = scalar {
+                                    s * ph_value
+                                } else {
+                                    ph_value
+                                };
+
+                                // Only scale if the combined scalar is not 1
+                                if combined_scalar != T::one() {
+                                    ex_matrix = ex_matrix.mapv(|v| combined_scalar * v);
+                                }
+                                // Add or accumulate to the transition matrix
+                                local.transition_matrices.entry((from, to))
+                                    .and_modify(|existing| {
+                                        *existing = &*existing + &ex_matrix;
+                                    })
+                                    .or_insert(ex_matrix);
+                                
+                                local.n_valid += 1;
+                            }
+                            None => {
+                                local.non_kronsum_terms.push(op.clone());
+                                local.n_other += 1;
+                                local.n_no_transition += 1;
+                            }
+                        }
+                    } else {
+                        // Not a Kron pattern - keep as separate term
+                        local.non_kronsum_terms.push(op.clone());
+                        local.n_other += 1;
+                        local.n_not_kron += 1;
+                    }
+                    
+                    local
+                }
+            )
+            .reduce(
+                || ThreadLocalResults::new(),
+                |mut acc, local| {
+                    // Merge transition matrices
+                    for ((from, to), matrix) in local.transition_matrices {
+                        acc.transition_matrices.entry((from, to))
+                            .and_modify(|existing| {
+                                *existing = &*existing + &matrix;
+                            })
+                            .or_insert(matrix);
+                    }
+                    
+                    // Merge matrix cache
+                    acc.matrix_cache.extend(local.matrix_cache);
+                    
+                    // Merge non-kronsum terms
+                    acc.non_kronsum_terms.extend(local.non_kronsum_terms);
+                    
+                    // Merge dimensions (take first non-None)
+                    if acc.exciton_dim.is_none() {
+                        acc.exciton_dim = local.exciton_dim;
+                    }
+                    if acc.photon_dim.is_none() {
+                        acc.photon_dim = local.photon_dim;
+                    }
+                    
+                    // Accumulate counters
+                    acc.n_valid += local.n_valid;
+                    acc.n_zero += local.n_zero;
+                    acc.n_other += local.n_other;
+                    acc.n_not_kron += local.n_not_kron;
+                    acc.n_no_transition += local.n_no_transition;
+                    acc.n_dim_mismatch += local.n_dim_mismatch;
+                    
+                    acc
+                }
+            );
+        
+        let ThreadLocalResults {
+            transition_matrices,
+            matrix_cache,
+            non_kronsum_terms,
+            exciton_dim,
+            photon_dim,
+            n_valid,
+            n_zero,
+            n_other,
+            n_not_kron,
+            n_no_transition,
+            n_dim_mismatch,
+        } = results;
         
         let elapsed = start.elapsed();
         timed_println!("  KronSum pattern detection took {:?}", elapsed);
@@ -1584,7 +1675,7 @@ impl<T: Clone + num_traits::Zero + LinalgScalar + std::ops::Add<Output = T> + st
             None
         }
     }
-    
+        
     /// Check if this operator is a KronSum variant
     pub fn is_kron_sum(&self) -> bool {
         matches!(self, ComposedOperator::KronSum { .. })
@@ -1613,7 +1704,7 @@ impl<T: Clone + num_traits::Zero + LinalgScalar + std::ops::Add<Output = T> + st
             ComposedOperator::Zero(n) => *n,
             ComposedOperator::Transpose(a) => a.dimension(),
             ComposedOperator::KronSum { exciton_dim, photon_dim, .. } => exciton_dim * photon_dim,
-            ComposedOperator::SingTrans { from: _, to: _, dim } => *dim,
+            ComposedOperator::SingTrans { from: _, to: _, value: _, dim } => *dim,
         }
     }
 
@@ -1753,9 +1844,9 @@ impl<T: Clone + num_traits::Zero + LinalgScalar + std::ops::Add<Output = T> + st
                 a.apply(x, y);
             }
 
-            ComposedOperator::SingTrans { from, to, dim: _ } => {
+            ComposedOperator::SingTrans { from, to, value, dim: _ } => {
                 y.fill(T::zero());
-                y[*from] = x[*to];
+                y[*from] = x[*to] * (*value);
             }
             
             ComposedOperator::KronSum { transition_matrices, exciton_dim, photon_dim } => {
@@ -1926,9 +2017,9 @@ impl<T: Clone + num_traits::Zero + LinalgScalar + std::ops::Add<Output = T> + st
                 a.apply_transpose(x, y);
             }
 
-            ComposedOperator::SingTrans { from, to, dim: _ } => {
+            ComposedOperator::SingTrans { from, to, value, dim: _ } => {
                 y.fill(T::zero());
-                y[*to] = x[*from];
+                y[*to] = x[*from] * (*value);
             }
             
             ComposedOperator::KronSum { transition_matrices, exciton_dim, photon_dim } => {
@@ -2049,10 +2140,10 @@ impl<T: Clone + num_traits::Zero + LinalgScalar + std::ops::Add<Output = T> + st
 
             ComposedOperator::Transpose(a) => a.get_diagonal(),
 
-            ComposedOperator::SingTrans { from, to, dim } => {
+            ComposedOperator::SingTrans { from, to, value, dim } => {
                 let mut diag = vec![T::zero(); *dim];
                 if from == to {
-                    diag[*from] = T::one();
+                    diag[*from] = *value;
                 }
                 diag
             }
@@ -2173,16 +2264,9 @@ macro_rules! impl_matrix_ops_lin_op {
                     for (val, (row, col)) in trimat.triplet_iter() {
                         // In the photon‑space convention used elsewhere,
                         // a matrix element |to⟩⟨from| corresponds to (row = to,
-                        // col = from).  The `SingTrans` variant stores exactly that.
-                        let sing = ComposedOperator::sing_trans(col, row, dim);
-
-                        // If the value is exactly 1 we can push the plain SingTrans,
-                        // otherwise we need a scalar multiplication wrapper.
-                        if *val == Self::Scalar::one() {
-                            terms.push(Box::new(sing));
-                        } else {
-                            terms.push(Box::new(ComposedOperator::ScalarMul(val.clone(), Box::new(sing))));
-                        }
+                        // col = from).  The `SingTrans` variant stores the value directly.
+                        let sing = ComposedOperator::sing_trans(col, row, val.clone(), dim);
+                        terms.push(Box::new(sing));
                     }
 
                     if terms.len() == 1 {
@@ -2238,6 +2322,14 @@ macro_rules! impl_matrix_ops_lin_op {
             
             fn sum(matrices: Vec<Self>) -> Self {
                 ComposedOperator::sum(matrices)
+            }
+            
+            fn build_kron_sum(terms: Vec<(Self, Self)>, exciton_dim: usize, photon_dim: usize) -> Self 
+            where 
+                Self: Sized,
+            {
+                // Use the optimized implementation defined below
+                <ComposedOperator<$scalar>>::build_kron_sum(terms, exciton_dim, photon_dim)
             }
         }
     };
@@ -2295,10 +2387,68 @@ where
         + std::ops::Mul<Output = T>
         + std::fmt::Debug
         + ConvertFrom<c64>
-        + ConvertFrom<f64>,
+        + ConvertFrom<f64>
+        + Send
+        + Sync
+        + PartialEq,
         
     ComposedOperator<T>: MatrixOps
 {
+    pub fn build_kron_sum(terms: Vec<(Self, Self)>, exciton_dim: usize, photon_dim: usize) -> Self 
+    where 
+        Self: Sized,
+        T: Norm,
+        Array2<T>: SolverOperator<T>,
+
+    {
+        // Try to extract photon transitions from all terms
+        let mut kron_sum_terms = Vec::new();
+        let mut fallback_terms = Vec::new();
+        
+        for (ex_op, ph_op) in terms {
+            if let Some((from, to, value)) = Self::extract_photon_transition(&ph_op) {
+                // This term can be optimized into KronSum
+                kron_sum_terms.push((ex_op, from, to, value));
+            } else {
+                // Fall back to normal kron for this term
+                fallback_terms.push(ex_op.kron(&ph_op));
+            }
+        }
+        
+        // If we can optimize at least some terms, use KronSum
+        if !kron_sum_terms.is_empty() {
+            timed_println!(
+                "Optimizing {}/{} terms into KronSum (fallback: {})",
+                kron_sum_terms.len(),
+                kron_sum_terms.len() + fallback_terms.len(),
+                fallback_terms.len()
+            );
+            
+            let kron_sum = Self::build_kron_sum_from_terms(
+                kron_sum_terms, 
+                exciton_dim, 
+                photon_dim
+            );
+            
+            if fallback_terms.is_empty() {
+                // All terms were optimized
+                kron_sum
+            } else {
+                // Mix of optimized and fallback terms
+                fallback_terms.push(kron_sum);
+                Self::sum(fallback_terms)
+            }
+        } else {
+            // No terms could be optimized, use normal path
+            timed_println!(
+                "No KronSum optimization possible for {} terms",
+                fallback_terms.len()
+            );
+            Self::sum(fallback_terms)
+        }
+    }
+    
+    
     /// Build a `KronSum` *without* ever constructing the intermediate
     /// `Kron` products.  The caller supplies an iterator of
     /// `(exciton_operator, from_photon, to_photon)`.  All exciton
@@ -2308,28 +2458,32 @@ where
     /// when every term is of the form `Kron(ex, SingTrans{from,to,dim})`.
     pub fn build_kron_sum_from_terms<I>(terms: I, exciton_dim: usize, photon_dim: usize) -> Self
     where
-        I: IntoIterator<Item = (Self, usize, usize)>, 
+        I: IntoIterator<Item = (Self, usize, usize, T)>, 
     {
-        // Accumulate exciton matrices for each photon transition.
-        // Using a HashMap gives us O(1) aggregation per term.
         let mut map: HashMap<(usize, usize), Self> = HashMap::new();
 
-        for (ex_op, from, to) in terms {
+        // Step 1: Build the HashMap (sequential - fast enough)
+        for (ex_op, from, to, ph_value) in terms {
+            let scaled_ex_op = if ph_value == T::one() {
+                ex_op
+            } else {
+                ComposedOperator::ScalarMul(ph_value, Box::new(ex_op))
+            };
+            
             map.entry((from, to))
                 .and_modify(|existing| {
-                    // `+` on `ComposedOperator` creates an `Add` node – that is cheap.
-                    *existing = existing.clone() + ex_op.clone();
+                    *existing = existing.clone() + scaled_ex_op.clone();
                 })
-                .or_insert(ex_op);
+                .or_insert(scaled_ex_op);
         }
 
-        // Convert the map into the `KronSum` variant.
+        // Step 2: Convert to matrices IN PARALLEL
+        use rayon::prelude::*;
+        
         let transition_matrices: HashMap<(usize, usize), Array2<T>> = map
-            .into_iter()
+            .into_par_iter()  // ← Parallel iterator!
             .map(|((from, to), op)| {
-                // All exciton ops are dense (or at least we can extract a dense
-                // matrix efficiently).  `extract_matrix_fast` already knows how
-                // to handle `Base`, `ScalarMul`, `Add`, etc.
+                // Each thread extracts its own matrix independently
                 let mat = Self::extract_matrix_fast(&op, exciton_dim);
                 ((from, to), mat)
             })

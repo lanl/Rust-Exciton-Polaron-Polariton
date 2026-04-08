@@ -3,7 +3,7 @@ use exciton_2d::{Exciton2DGridSystem};
 use log::warn;
 use crate::timed_println;
 use crate::utils::{BosonMode, ConvertFrom, MatrixOps, PPConfig, Polarization, Sqrt, Vector3D};
-use num_traits::{NumCast, One};
+use num_traits::{NumCast, One, Zero};
 use exciton_2d::FullHamiltonian;
 use ndarray::{Array1, Array2, arr1, s};
 use sprs::{TriMat};
@@ -373,15 +373,31 @@ impl<M: MatrixOps, B: Boson<M>>  LMHamiltonian<M,B> {
     
     fn cache_photon_operators(&mut self)
     where 
-        M::Scalar: NumCast + Sqrt,
+        M::Scalar: NumCast + Sqrt + One + Zero,
     {
         let n_modes = self.photon.boson.get_modes().len();
+        let n_ph = self.photon.boson.dimension();
         let mut a_ops = Vec::with_capacity(n_modes);
         let mut adag_a_ops = Vec::with_capacity(n_modes);
         
         for i in 0..n_modes {
             a_ops.push(self.photon.get_a(i));
-            adag_a_ops.push(self.photon.get_adag_a(i));
+            
+            // Materialize a†a as a diagonal operator for better KronSum optimization
+            // For single-excitation: dimension is n_modes + 1 (vacuum + n_modes single-photon states)
+            // The number operator for mode i is: diag(0, 0, ..., 1, ..., 0) with 1 at position i+1
+            
+            if n_ph == n_modes + 1 {
+                // Single-excitation case: simple diagonal
+                let mut tri_mat = TriMat::new((n_ph,n_ph));
+                tri_mat.add_triplet(i + 1, i + 1, M::Scalar::one());
+
+                adag_a_ops.push(M::from_trimat(&tri_mat));
+            } else {
+                // Full Fock space: use the symbolic operator
+                // This is more complex, so keep it as-is for now
+                adag_a_ops.push(self.photon.get_adag_a(i));
+            }
         }
         
         self.cached_a_ops = Some(a_ops);
@@ -435,31 +451,40 @@ impl<M: MatrixOps, B: Boson<M>>  LMHamiltonian<M,B> {
         let total_pairs = n_modes * n_modes;
         timed_println!("        Building interaction for {} modes ({} pairs)", n_modes, total_pairs);
         
-        let mut terms: Vec<M> = Vec::new();
-        
         let n_ex = self.exciton.e_vals.as_ref().unwrap().len();
-        let ex_eye:M = M::eye(n_ex);
+        let n_ph: usize = self.photon.boson.dimension();
+        let ex_eye: M = M::eye(n_ex);
+        
+        // Collect (exciton_op, photon_op) pairs for KronSum optimization
+        let mut kron_pairs: Vec<(M, M)> = Vec::new();
         
         // Iterate over photon mode to build interaction terms
         self.photon.boson.get_modes().iter().enumerate().for_each(|(i_ph, mode_i)| {
 
             // p.A terms
             let a_i = &cached_a[i_ph];
-            let p_c_sin = &self.p_c_sin.as_ref().unwrap()[i_ph].scale( 2.0 / self.exciton.exciton_ham.m * self.coupling);
-            let p_q = &self.p_q.as_ref().unwrap()[i_ph].scale(1.0 / 2.0 / self.exciton.exciton_ham.m);
+            let p_c_sin = &self.p_c_sin.as_ref().unwrap()[i_ph].scale(
+                2.0 / self.exciton.exciton_ham.m * self.coupling
+            );
+            let p_q = &self.p_q.as_ref().unwrap()[i_ph].scale(
+                1.0 / 2.0 / self.exciton.exciton_ham.m
+            );
 
-            let p_cos = &M::from_dense(&(self.matrix_elements.p_cos_mat.get(&vec![i_ph as i32]).unwrap() * (self.coupling / self.exciton.exciton_ham.rel_ham.mu)));
+            let p_cos = &M::from_dense(&(
+                self.matrix_elements.p_cos_mat.get(&vec![i_ph as i32]).unwrap() * 
+                (self.coupling / self.exciton.exciton_ham.rel_ham.mu)
+            ));
             
-            // P•A sin(x) term
-            terms.push(M::kron(p_c_sin, a_i));
-            terms.push(M::kron(p_c_sin, &a_i.transpose()));
+            // P•A sin(x) terms - these are perfect KronSum candidates
+            kron_pairs.push((p_c_sin.clone(), a_i.clone()));
+            kron_pairs.push((p_c_sin.clone(), a_i.transpose()));
 
-            // p•A cos(x) term
-            terms.push(M::kron(p_cos, &(a_i.scale(-1.0))));
-            terms.push(M::kron(p_cos, &a_i.transpose()));
+            // p•A cos(x) terms
+            kron_pairs.push((p_cos.clone(), a_i.scale(-1.0)));
+            kron_pairs.push((p_cos.clone(), a_i.transpose()));
 
             // P•q a†a term
-            terms.push(M::kron(p_q, &cached_adag_a[i_ph]));
+            kron_pairs.push((p_q.clone(), cached_adag_a[i_ph].clone()));
             
             // A² terms
             self.photon.boson.get_modes().iter().enumerate().for_each(|(j_ph, mode_j)| {
@@ -470,7 +495,8 @@ impl<M: MatrixOps, B: Boson<M>>  LMHamiltonian<M,B> {
 
                 let a_j = &cached_a[j_ph];
 
-                let coupling_2 = self.coupling * self.coupling * mode_i.eps.dot(&mode_j.eps) / 2. / self.exciton.exciton_ham.rel_ham.mu;
+                let coupling_2 = self.coupling * self.coupling * 
+                    mode_i.eps.dot(&mode_j.eps) / 2. / self.exciton.exciton_ham.rel_ham.mu;
 
                 let eye = Array2::eye(n_ex);
                 let cos_diff = &M::from_dense(self.matrix_elements.cos_mat.get(&q_diff_key).unwrap_or_else(|| {
@@ -478,22 +504,23 @@ impl<M: MatrixOps, B: Boson<M>>  LMHamiltonian<M,B> {
                     &eye
                 }));
 
-                let a_diff = &( a_i.dot(&a_j.transpose()).add(&a_i.transpose().dot(a_j)) );
+                // let a_diff = &(a_i.dot(&a_j.transpose()).add(&a_i.transpose().dot(a_j)));
 
                 // cos(q - q') term
-                terms.push(M::kron(cos_diff, a_diff).scale(coupling_2));
+                kron_pairs.push((cos_diff.scale(coupling_2), a_i.dot(&a_j.transpose())));
+                kron_pairs.push((cos_diff.scale(coupling_2), a_i.transpose().dot(a_j)));
 
                 // (q a†a)^2 term
                 let q_q = mode_i.q.dot(&mode_j.q) / 2.0 / self.exciton.exciton_ham.m;
-                terms.push(M::kron(&ex_eye, &(cached_adag_a[i_ph].dot(&cached_adag_a[j_ph])) ).scale(q_q));
+                kron_pairs.push((ex_eye.scale(q_q), cached_adag_a[i_ph].dot(&cached_adag_a[j_ph])));
             });
         });
         
-        // Sum all terms at once using the efficient Sum operator
-        timed_println!("        Summing {} interaction terms...", terms.len());
+        // Use the optimized builder - will automatically detect and optimize KronSum patterns
+        timed_println!("        Building KronSum from {} term pairs...", kron_pairs.len());
         let sum_time = Instant::now();
-        let interaction = M::sum(terms);
-        timed_println!("        Summed terms in {:?}", sum_time.elapsed());
+        let interaction = M::build_kron_sum(kron_pairs, n_ex, n_ph);
+        timed_println!("        Built interaction in {:?}", sum_time.elapsed());
         
         interaction
     }

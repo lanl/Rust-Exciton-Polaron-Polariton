@@ -11,7 +11,7 @@
 #SBATCH --nodes=3  
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=64           # 64 cores per rank
-#SBATCH --mem-per-cpu=3G             # 3GB per CPU (192GB total per node)
+#SBATCH --mem=0                       # Request all available memory on each node
 #SBATCH --qos=long
 
 ulimit -c 0  # Disable core dumps

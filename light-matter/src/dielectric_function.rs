@@ -2,7 +2,7 @@ use ndarray::{Array1, Array2, s};
 use num_traits::Zero;
 use std::f64::consts::PI;
 use ndarray_linalg::c64;
-use crate::timed_println;
+use crate::{band_structure, timed_println};
 use std::iter::Sum;
 
 use crate::utils::{ConvertFrom, HermitianConjugate, MatrixOps, Norm, PPConfig, PrettyArray2, SolverOperator, Sqrt};
@@ -74,6 +74,7 @@ pub fn save_dielectric_cache(
     x_pp: &Array1<f64>,
     photonic_chars: &Vec<f64>,
     phonon_numbers: &Vec<f64>,
+    ground_state_index: usize,
 ) -> std::io::Result<()> {
     use std::fs::File;
     use std::io::Write;
@@ -101,13 +102,17 @@ pub fn save_dielectric_cache(
         file.write_all(&val.to_le_bytes())?;
     }
 
+    // Write ground state index (usize stored as u64 for consistency)
+    let gs_idx = ground_state_index as u64;
+    file.write_all(&gs_idx.to_le_bytes())?;
+
     Ok(())
 }
 
 /// Load the cached diagonalization data (pp_vals, x_pp, photonic_chars, phonon_numbers)
 pub fn load_dielectric_cache(
     filename: &str
-) -> std::io::Result<(Array1<f64>, Array1<f64>, Vec<f64>, Vec<f64>)> {
+) -> std::io::Result<(Array1<f64>, Array1<f64>, Vec<f64>, Vec<f64>, usize)> {
     use std::fs::File;
     use std::io::Read;
 
@@ -130,20 +135,51 @@ pub fn load_dielectric_cache(
         file.read_exact(&mut buf)?;
         x_pp[i] = f64::from_le_bytes(buf);
     }
-    // Read photonic_chars
+    // ---------------------------------------------------------------------
+    // Read photonic_chars – if the file ends early we fall back to zeros.
+    // This makes the loader compatible with caches created before the
+    // composition vectors were added (older two‑vector format).
+    // ---------------------------------------------------------------------
     let mut photonic_chars = Vec::with_capacity(n_eig);
     for _ in 0..n_eig {
-        file.read_exact(&mut buf)?;
-        photonic_chars.push(f64::from_le_bytes(buf));
-    }
-    // Read phonon_numbers
-    let mut phonon_numbers = Vec::with_capacity(n_eig);
-    for _ in 0..n_eig {
-        file.read_exact(&mut buf)?;
-        phonon_numbers.push(f64::from_le_bytes(buf));
+        match file.read_exact(&mut buf) {
+            Ok(_) => photonic_chars.push(f64::from_le_bytes(buf)),
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                // Old cache – fill the rest with zeros and break.
+                photonic_chars.resize(n_eig, 0.0);
+                break;
+            }
+            Err(e) => return Err(e),
+        }
     }
 
-    Ok((pp_vals, x_pp, photonic_chars, phonon_numbers))
+    // ---------------------------------------------------------------------
+    // Read phonon_numbers – same fallback logic as above.
+    // ---------------------------------------------------------------------
+    let mut phonon_numbers = Vec::with_capacity(n_eig);
+    for _ in 0..n_eig {
+        match file.read_exact(&mut buf) {
+            Ok(_) => phonon_numbers.push(f64::from_le_bytes(buf)),
+            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+                phonon_numbers.resize(n_eig, 0.0);
+                break;
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
+    // Finally, read the ground state index (stored as u64)
+    let mut gs_buf = [0u8; 8];
+    let ground_state_index = match file.read_exact(&mut gs_buf) {
+        Ok(_) => u64::from_le_bytes(gs_buf) as usize,
+        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+            // Older cache without index – default to 0
+            0
+        }
+        Err(e) => return Err(e),
+    };
+
+    Ok((pp_vals, x_pp, photonic_chars, phonon_numbers, ground_state_index))
 }
 
 /// Calculate the dielectric function from cached or newly computed pp_vals and x_pp
@@ -164,12 +200,12 @@ where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum + ConvertF
     
     // Try to load cached data if requested
     // Load cached eigenvalues/x_pp if possible, otherwise compute everything
-    let (pp_vals, x_pp, photonic_chars, phonon_numbers) = if use_cached && std::path::Path::new(&cache_filename).exists() {
+    let (pp_vals, x_pp, photonic_chars, phonon_numbers, ground_state_index) = if use_cached && std::path::Path::new(&cache_filename).exists() {
         timed_println!("Loading cached diagonalization data from {}", cache_filename);
         match load_dielectric_cache(&cache_filename) {
-            Ok((vals, x,photonic_chars, phonon_numbers)) => {
+            Ok((vals, x, photonic_chars, phonon_numbers, gs_idx)) => {
                 timed_println!("Successfully loaded cached data");
-                (vals, x, photonic_chars, phonon_numbers)
+                (vals, x, photonic_chars, phonon_numbers, gs_idx)
             },
             Err(e) => {
                 timed_println!("Failed to load cache ({}), recalculating...", e);
@@ -178,17 +214,34 @@ where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum + ConvertF
         }
     } else {
         timed_println!("Computing diagonalization data...");
-        compute_dielectric_cache(pp_config, pp, n_eig)
+        let cache_data = compute_dielectric_cache(pp_config, pp, n_eig);
+        
+        // Save the computed cache for future use
+        timed_println!("Saving cache to {}", cache_filename);
+        if let Err(e) = save_dielectric_cache(
+            &cache_filename,
+            &cache_data.0,
+            &cache_data.1,
+            &cache_data.2,
+            &cache_data.3,
+            cache_data.4
+        ) {
+            timed_println!("Warning: Failed to save cache: {}", e);
+        } else {
+            timed_println!("Successfully saved cache");
+        }
+        
+        cache_data
     };
 
-    timed_println!("Relative energies = {:?}", pp_vals.slice(s![0..50.min(pp_vals.len())]).to_owned() - pp_vals[0]);
+    timed_println!("Relative energies = {:?}", pp_vals.slice(s![0..50.min(pp_vals.len())]).to_owned() - pp_vals[ground_state_index]);
 
     // Compute dielectric function from cached data
     let dielectric_function: Array1<c64> = Array1::from_shape_fn(omegas.len(), |idx| {
         let omega = omegas[idx];
 
         let result: c64 = x_pp.iter().enumerate().map(|(pp_ind, x_pp_val)| {
-            x_pp_val * x_pp_val / (omega - (pp_vals[pp_ind] - pp_vals[0]) + c64::i() * gamma)
+            x_pp_val * x_pp_val / (omega - (pp_vals[pp_ind] - pp_vals[ground_state_index]) + c64::i() * gamma)
         }).sum();
 
         1.0 + 4.0 * PI * result
@@ -207,7 +260,7 @@ fn compute_dielectric_cache<M,B>(
     pp_config: &PPConfig,
     pp: &mut PPHamiltonian<M,B>,
     n_eig: usize,
-) -> (Array1<f64>, Array1<f64>, Vec<f64>, Vec<f64>) 
+) -> (Array1<f64>, Array1<f64>, Vec<f64>, Vec<f64>, usize) 
 where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum + ConvertFrom<f64> + ConvertFrom<c64> , B: Boson<M>, M::Scalar: ConvertFrom<f64> + ConvertFrom<c64> + HermitianConjugate + Norm
 {
 
@@ -290,7 +343,7 @@ where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum + ConvertF
     // Sanity check: the size of the ground‑state vector must equal
     // n_ex_eig * n_ph * n_pn (or be a multiple thereof if extra blocks are
     // present). If it does not, abort with a clear message.
-    let vec0 = pp_vecs.column(0);
+    let mut vec0 = pp_vecs.column(0);
     let expected_len = n_ex_eig * n_ph * n_pn;
     if vec0.len() != expected_len {
         panic!(
@@ -301,6 +354,18 @@ where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum + ConvertF
             n_ph,
             n_pn
         );
+    }
+
+    let mut photon_character = band_structure::calculate_photonic_character(&pp, &vec0.to_owned());
+    let mut ground_state_index = 0;
+
+    while photon_character > 0.1 {
+        ground_state_index += 1;
+        if ground_state_index >= pp_vals.len() {
+            panic!("No ground state with photonic character <= 0.1 found among the computed eigenstates");
+        }
+        vec0 = pp_vecs.column(ground_state_index);
+        photon_character = band_structure::calculate_photonic_character(&pp, &vec0.to_owned());
     }
 
     let x_pp = Array1::from_shape_fn(n_eig, |idx| {
@@ -322,13 +387,9 @@ where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum + ConvertF
     // -----------------------------------------------------------------
     // Compute composition data: photonic character and average phonon number
     // -----------------------------------------------------------------
-    let n_photon_modes = pp.polariton.photon.boson.get_modes().len();
 
     let mut photonic_chars: Vec<f64> = Vec::with_capacity(n_eig);
     let mut phonon_numbers: Vec<f64> = Vec::with_capacity(n_eig);
-    
-    let ex_eye = M::eye(n_ex_eig);
-    let pn_eye = M::eye(n_pn);
 
     let lm_eye = M::eye(n_ex_eig * n_ph);
 
@@ -342,15 +403,15 @@ where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum + ConvertF
         let vec_dag = vec.mapv(|x| x.dag());
 
         // Photonic character: sum_i <ψ|a_i† a_i|ψ>
-        let mut photon_sum = 0.0f64;
-        for mode_i in 0..n_photon_modes {
-            let adag_a = ex_eye.kron(&pp.polariton.photon.get_adag_a(mode_i)).kron(&pn_eye);
-            let mut tmp = Array1::zeros(vec.len()); // zero vector of same shape
-            adag_a.apply(vec.as_slice().unwrap(), tmp.as_slice_mut().unwrap());
-            let val: M::Scalar = vec_dag.dot(&tmp);
-            photon_sum += <M as MatrixOps>::Scalar::norm(val);
-        }
-        photonic_chars.push(photon_sum);
+        // let mut photon_sum = 0.0f64;
+        // for mode_i in 0..n_photon_modes {
+        //     let adag_a = ex_eye.kron(&pp.polariton.photon.get_adag_a(mode_i)).kron(&pn_eye);
+        //     let mut tmp = Array1::zeros(vec.len()); // zero vector of same shape
+        //     adag_a.apply(vec.as_slice().unwrap(), tmp.as_slice_mut().unwrap());
+        //     let val: M::Scalar = vec_dag.dot(&tmp);
+        //     photon_sum += <M as MatrixOps>::Scalar::norm(val);
+        // }
+        photonic_chars.push(band_structure::calculate_photonic_character(&pp, &pp_vecs.column(idx).to_owned()));
 
         // Phonon number expectation
         let mut tmp = Array1::zeros(vec.len()); // zero vector of same shape
@@ -359,5 +420,5 @@ where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum + ConvertF
         phonon_numbers.push(<M as MatrixOps>::Scalar::norm(val));
     }
 
-    (pp_vals, x_pp, photonic_chars, phonon_numbers)
+    (pp_vals, x_pp, photonic_chars, phonon_numbers, ground_state_index)
 }
