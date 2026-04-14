@@ -212,16 +212,46 @@ pub fn plot_dielectric_stacked_photonic(
     pp_vals: &Array1<f64>,
     x_pp: &Array1<f64>,
     photonic_chars: &[f64],
+    ground_state_index: usize,
     gamma: f64,
     save_path: &str,
     zoomed: bool,
+    omega_range: Option<(f64, f64)>,
     q_values: Option<&Vec<Vector3D>>,
+    zero_coupling_imag: Option<&Array1<f64>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     
     // Compute the imaginary part of the dielectric function at each frequency
-    let ground_state_energy = pp_vals[0];
+    let ground_state_energy = pp_vals[ground_state_index];
     let mut im_eps = Array1::<f64>::zeros(omegas.len());
     let mut photonic_weighted = Array1::<f64>::zeros(omegas.len());
+    
+    // Debug: Find states with highest contributions to dielectric function
+    // Calculate total contribution strength for each state across all frequencies
+    let mut state_contributions: Vec<(usize, f64, f64, f64)> = Vec::new(); // (index, energy, photonic_char, total_contribution)
+    for i in 0..pp_vals.len() {
+        let delta_e = pp_vals[i] - ground_state_energy;
+        let x_sq = x_pp[i] * x_pp[i];
+        // Sum |Im[contrib]| across frequency range of interest (0.17-0.18)
+        let mut total_contrib = 0.0;
+        for &omega in omegas.iter() {
+            if omega >= 0.17 && omega <= 0.18 {
+                let contrib = x_sq / (omega - delta_e + c64::i() * gamma);
+                total_contrib += contrib.im.abs();
+            }
+        }
+        state_contributions.push((i, delta_e, photonic_chars[i], total_contrib));
+    }
+    
+    // Sort by total contribution (descending)
+    state_contributions.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap());
+    
+    println!("Ground state index: {}", ground_state_index);
+    println!("Top 10 states contributing to Im[ε] (in frequency range 0.17-0.18):");
+    for (rank, (idx, energy, phot_char, contrib)) in state_contributions.iter().take(10).enumerate() {
+        println!("  Rank {}: State {} | E = {:.6} | x_pp² = {:.6} | photonic = {:.4} | contrib = {:.2e}", 
+                 rank + 1, idx, energy, x_pp[*idx] * x_pp[*idx], phot_char, contrib);
+    }
     
     for (w_idx, &omega) in omegas.iter().enumerate() {
         let mut eps_contrib = c64::new(0.0, 0.0);
@@ -233,13 +263,13 @@ pub fn plot_dielectric_stacked_photonic(
             let contrib = x_pp[i] * x_pp[i] / (omega - delta_e + c64::i() * gamma);
             eps_contrib += contrib;
             
-            // Weight by the imaginary part of the contribution (absorption)
+            // Weight by the absolute value of the imaginary part of the contribution (absorption)
             let weight = contrib.im.abs();
             weight_sum += weight;
             photonic_sum += weight * photonic_chars[i];
         }
         
-        im_eps[w_idx] = (1.0 + 4.0 * PI * eps_contrib).im;
+        im_eps[w_idx] = (1.0 + 4.0 * PI * eps_contrib).im.abs();
         
         if weight_sum > 1e-12 {
             photonic_weighted[w_idx] = photonic_sum / weight_sum;
@@ -251,10 +281,17 @@ pub fn plot_dielectric_stacked_photonic(
     let root = SVGBackend::new(save_path, resolution).into_drawing_area();
     root.fill(&WHITE)?;
     
-    let x_min = omegas[0];
-    let x_max = omegas[omegas.len() - 1];
+    let (x_min, x_max) = omega_range.unwrap_or((omegas[0], omegas[omegas.len() - 1]));
     let y_min = 0.0;
-    let y_max = im_eps.iter().cloned().fold(f64::NEG_INFINITY, f64::max) * 1.05;
+    let mut y_max = im_eps.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    
+    // Include zero-coupling data in y-axis scaling if available
+    if let Some(zero_im) = zero_coupling_imag {
+        let zero_max = zero_im.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        y_max = y_max.max(zero_max);
+    }
+    
+    let y_max = y_max * 1.05;
     
     let mut chart = ChartBuilder::on(&root)
         .caption("Im[ε(ω)] - Photonic vs Non-Photonic Contributions", ("sans-serif", 30))
@@ -305,6 +342,16 @@ pub fn plot_dielectric_stacked_photonic(
         .label("Photonic")
         .legend(move |(x, y)| Rectangle::new([(x, y - 5), (x + 20, y + 5)], photonic_color.filled()));
     
+    // Draw zero-coupling dielectric function as black dashed line if provided
+    if let Some(zero_im) = zero_coupling_imag {
+        chart.draw_series(LineSeries::new(
+            omegas.iter().zip(zero_im.iter()).map(|(&x, &y)| (x, y)),
+            &BLACK,
+        ))?
+        .label("Zero Coupling")
+        .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &BLACK));
+    }
+    
     // Draw photon frequencies if provided
     if let Some(qs) = q_values {
         plot_photon_freqs!(chart, y_min, y_max, qs);
@@ -334,15 +381,18 @@ pub fn plot_dielectric_stacked_phonon(
     pp_vals: &Array1<f64>,
     x_pp: &Array1<f64>,
     phonon_numbers: &[f64],
+    ground_state_index: usize,
     n_fock: usize,
     gamma: f64,
     save_path: &str,
     zoomed: bool,
+    omega_range: Option<(f64, f64)>,
     q_values: Option<&Vec<Vector3D>>,
+    zero_coupling_imag: Option<&Array1<f64>>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     
     // Compute the imaginary part and contributions from each Fock state
-    let ground_state_energy = pp_vals[0];
+    let ground_state_energy = pp_vals[ground_state_index];
     let mut im_eps = Array1::<f64>::zeros(omegas.len());
     
     // For each Fock state, compute its weighted contribution at each frequency
@@ -358,7 +408,7 @@ pub fn plot_dielectric_stacked_phonon(
             let contrib = x_pp[i] * x_pp[i] / (omega - delta_e + c64::i() * gamma);
             eps_contrib += contrib;
             
-            // Weight by the imaginary part of the contribution (absorption)
+            // Weight by the absolute value of the imaginary part of the contribution (absorption)
             let weight = contrib.im.abs();
             total_weight += weight;
             
@@ -368,7 +418,7 @@ pub fn plot_dielectric_stacked_phonon(
             fock_weights[fock_idx] += weight;
         }
         
-        im_eps[w_idx] = (1.0 + 4.0 * PI * eps_contrib).im;
+        im_eps[w_idx] = (1.0 + 4.0 * PI * eps_contrib).im.abs();
         
         // Normalize the Fock contributions to sum to im_eps[w_idx]
         if total_weight > 1e-12 {
@@ -383,10 +433,17 @@ pub fn plot_dielectric_stacked_phonon(
     let root = SVGBackend::new(save_path, resolution).into_drawing_area();
     root.fill(&WHITE)?;
     
-    let x_min = omegas[0];
-    let x_max = omegas[omegas.len() - 1];
+    let (x_min, x_max) = omega_range.unwrap_or((omegas[0], omegas[omegas.len() - 1]));
     let y_min = 0.0;
-    let y_max = im_eps.iter().cloned().fold(f64::NEG_INFINITY, f64::max) * 1.05;
+    let mut y_max = im_eps.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+    
+    // Include zero-coupling data in y-axis scaling if available
+    if let Some(zero_im) = zero_coupling_imag {
+        let zero_max = zero_im.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+        y_max = y_max.max(zero_max);
+    }
+    
+    let y_max = y_max * 1.05;
     
     let mut chart = ChartBuilder::on(&root)
         .caption("Im[ε(ω)] - Phonon Fock State Contributions", ("sans-serif", 30))
@@ -445,6 +502,16 @@ pub fn plot_dielectric_stacked_phonon(
         chart.draw_series(std::iter::once(Polygon::new(layer_polygon, color.filled())))?
             .label(format!("n = {}", fock_idx))
             .legend(move |(x, y)| Rectangle::new([(x, y - 5), (x + 20, y + 5)], color.filled()));
+    }
+    
+    // Draw zero-coupling dielectric function as black dashed line if provided
+    if let Some(zero_im) = zero_coupling_imag {
+        chart.draw_series(LineSeries::new(
+            omegas.iter().zip(zero_im.iter()).map(|(&x, &y)| (x, y)),
+            &BLACK,
+        ))?
+        .label("Zero Coupling")
+        .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &BLACK));
     }
     
     // Draw photon frequencies if provided

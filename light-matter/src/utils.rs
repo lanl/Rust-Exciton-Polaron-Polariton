@@ -313,6 +313,9 @@ pub struct PPConfig {
     // Band Parameters
     pub n_k_points: usize,
     pub n_bands: usize,
+    
+    // Cache directory for matrix elements
+    pub cache_dir: Option<String>,
 }
 
 impl PPConfig {
@@ -350,7 +353,44 @@ impl PPConfig {
             pn_n_fock,
             n_k_points,
             n_bands,
+            cache_dir: Some("saved_data_lm/matrix_element_cache".to_string()),
         }
+    }
+    
+    /// Generate a deterministic hash from configuration parameters
+    /// This hash uniquely identifies the physical system and can be used for caching
+    pub fn get_config_hash(&self) -> u64 {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+        
+        let mut hasher = DefaultHasher::new();
+        
+        // Hash exciton parameters
+        self.e_config.a0.to_bits().hash(&mut hasher);
+        self.e_config.v0.to_bits().hash(&mut hasher);
+        self.e_config.m_e.to_bits().hash(&mut hasher);
+        self.e_config.m_h.to_bits().hash(&mut hasher);
+        self.n_rel.hash(&mut hasher);
+        self.n_ex_eig.hash(&mut hasher);
+        
+        // Hash polariton parameters
+        self.lm_coupling.to_bits().hash(&mut hasher);
+        self.omega_0.to_bits().hash(&mut hasher);
+        for q in &self.q_values {
+            q.x.to_bits().hash(&mut hasher);
+            q.y.to_bits().hash(&mut hasher);
+            q.z.to_bits().hash(&mut hasher);
+        }
+        
+        // Hash polaron parameters
+        self.pn_coupling.to_bits().hash(&mut hasher);
+        self.pn_omega.to_bits().hash(&mut hasher);
+        for &val in self.pn_k.iter() {
+            val.to_bits().hash(&mut hasher);
+        }
+        self.pn_n_fock.hash(&mut hasher);
+        
+        hasher.finish()
     }
 }
 
@@ -1015,6 +1055,24 @@ pub enum ComposedOperator<T: Clone> {
     },
 }
 
+/// Result of photon transition extraction
+enum PhotonTransitionResult<T> {
+    /// Single transition: (from_state, to_state, value)
+    SingleTransition(usize, usize, T),
+    /// Zero operator (no transitions)
+    Zero,
+    /// Complex operator (multiple transitions or not parseable)
+    Complex,
+}
+
+impl<T> PhotonTransitionResult<T> {
+    fn into_option(self) -> Option<(usize, usize, T)> {
+        match self {
+            PhotonTransitionResult::SingleTransition(from, to, value) => Some((from, to, value)),
+            _ => None,
+        }
+    }
+}
 
 impl<T: Clone + num_traits::Zero + LinalgScalar + std::ops::Add<Output = T> + std::ops::Mul<Output = T> + Send + Sync + PartialEq> ComposedOperator<T> {
     /// Create from a base operator
@@ -1061,51 +1119,69 @@ impl<T: Clone + num_traits::Zero + LinalgScalar + std::ops::Add<Output = T> + st
     }
     
     /// Extract photon transition from a sparse operator that represents |to⟩⟨from|
-    /// Returns Some((from, to)) if the operator is a single-element transition, None otherwise
+    /// Returns Some((from, to, value)) if single transition, None if zero or complex
     /// Optimized for single-excitation operators where only vacuum->mode transitions exist
     fn extract_photon_transition(op: &ComposedOperator<T>) -> Option<(usize, usize, T)>
     where
         T: Copy + Zero + One,
     {
+        Self::extract_photon_transition_detailed(op).into_option()
+    }
+    
+    /// Detailed extraction that distinguishes between zero and complex operators
+    fn extract_photon_transition_detailed(op: &ComposedOperator<T>) -> PhotonTransitionResult<T>
+    where
+        T: Copy + Zero + One,
+    {
+        use PhotonTransitionResult::*;
+        
         match op {
-            ComposedOperator::SingTrans { from, to, value, .. } => Some((*from, *to, *value)),
+            ComposedOperator::SingTrans { from, to, value, .. } => {
+                if value.is_zero() {
+                    Zero
+                } else {
+                    SingleTransition(*from, *to, *value)
+                }
+            }
 
             ComposedOperator::Transpose(inner) => {
                 // For transpose, swap from and to
-                if let Some((from, to, value)) = Self::extract_photon_transition(inner) {
-                    // For complex conjugate transpose, we'd need value.conj()
-                    // For now, assuming real or just transpose without conjugate
-                    Some((to, from, value))
-                } else {
-                    None
+                match Self::extract_photon_transition_detailed(inner) {
+                    SingleTransition(from, to, value) => SingleTransition(to, from, value),
+                    Zero => Zero,
+                    Complex => Complex,
                 }
             }
             
             ComposedOperator::ScalarMul(scalar, inner) => {
                 // Scalar multiplication multiplies the value
-                if let Some((from, to, value)) = Self::extract_photon_transition(inner) {
-                    Some((from, to, *scalar * value))
-                } else {
-                    None
+                if scalar.is_zero() {
+                    return Zero;
+                }
+                match Self::extract_photon_transition_detailed(inner) {
+                    SingleTransition(from, to, value) => SingleTransition(from, to, *scalar * value),
+                    Zero => Zero,
+                    Complex => Complex,
                 }
             }
             
             ComposedOperator::Dot(left, right) => {
                 // Matrix multiplication is right-to-left: Dot(A, B)x = A(Bx)
-                // Check if Dot results in a single-element operator
-                if let (Some((from_l, to_l, val_l)), Some((from_r, to_r, val_r))) = 
-                    (Self::extract_photon_transition(left), Self::extract_photon_transition(right)) {
-                    
-                    if to_r == from_l {
-                        // Valid composition: right's output feeds into left's input
-                        // Overall transition: from_r → to_l with multiplied values
-                        Some((from_r, to_l, val_l * val_r))
-                    } else {
-                        // The operators don't compose to a single element
-                        None
+                let left_result = Self::extract_photon_transition_detailed(left);
+                let right_result = Self::extract_photon_transition_detailed(right);
+                
+                match (left_result, right_result) {
+                    (Zero, _) | (_, Zero) => Zero,
+                    (SingleTransition(from_l, to_l, val_l), SingleTransition(from_r, to_r, val_r)) => {
+                        if to_r == from_l {
+                            // Valid composition
+                            SingleTransition(from_r, to_l, val_l * val_r)
+                        } else {
+                            // Incompatible transitions = zero operator
+                            Zero
+                        }
                     }
-                } else {
-                    None
+                    _ => Complex,
                 }
             }
             
@@ -1122,27 +1198,33 @@ impl<T: Clone + num_traits::Zero + LinalgScalar + std::ops::Add<Output = T> + st
                         non_zero_val = val;
                         count += 1;
                         if count > 1 {
-                            return None; // Multiple non-zero elements
+                            return Complex; // Multiple non-zero elements
                         }
                     }
                 }
                 
                 if count == 1 {
                     let idx = non_zero_idx.unwrap();
-                    Some((idx, idx, non_zero_val))
+                    SingleTransition(idx, idx, non_zero_val)
                 } else {
-                    None // All zeros or multiple non-zeros
+                    Zero // All zeros
                 }
             }
             
             ComposedOperator::Identity(_) => {
                 // Identity cannot be represented as a single transition
-                None
+                Complex
             }
             
             ComposedOperator::Zero(_) => {
                 // Zero operator has no transitions
-                None
+                Zero
+            }
+            
+            ComposedOperator::Add(_,_) | ComposedOperator::Sum(_) | 
+            ComposedOperator::Kron(_, _) | ComposedOperator::KronSum { .. } => {
+                // These are complex operators
+                Complex
             }
             
             ComposedOperator::Base(base_op) => {
@@ -1173,7 +1255,7 @@ impl<T: Clone + num_traits::Zero + LinalgScalar + std::ops::Add<Output = T> + st
                 
                 if count == 1 {
                     // This is a vacuum -> mode transition
-                    return Some((0, to_idx.unwrap(), element));
+                    return SingleTransition(0, to_idx.unwrap(), element);
                 }
                 
                 // If not from vacuum, test each photon mode state
@@ -1190,7 +1272,7 @@ impl<T: Clone + num_traits::Zero + LinalgScalar + std::ops::Add<Output = T> + st
                     for (j, &val) in y.iter().enumerate() {
                         if !val.is_zero() {
                             if transition_found {
-                                return None; // Multiple transitions
+                                return Complex; // Multiple transitions
                             }
                             transition_found = true;
                             target = Some(j);
@@ -1215,16 +1297,16 @@ impl<T: Clone + num_traits::Zero + LinalgScalar + std::ops::Add<Output = T> + st
                         }
                         
                         if !other_transitions {
-                            return Some((i, target.unwrap(), element));
+                            return SingleTransition(i, target.unwrap(), element);
                         } else {
-                            return None; // Multiple independent transitions
+                            return Complex; // Multiple independent transitions
                         }
                     }
                 }
                 
-                None // No single-element transition found
+                // No transitions found = zero operator
+                Zero
             }
-            _ => None,
         }
     }
     
@@ -2404,15 +2486,28 @@ where
         // Try to extract photon transitions from all terms
         let mut kron_sum_terms = Vec::new();
         let mut fallback_terms = Vec::new();
+        let mut n_zero = 0;
         
         for (ex_op, ph_op) in terms {
-            if let Some((from, to, value)) = Self::extract_photon_transition(&ph_op) {
-                // This term can be optimized into KronSum
-                kron_sum_terms.push((ex_op, from, to, value));
-            } else {
-                // Fall back to normal kron for this term
-                fallback_terms.push(ex_op.kron(&ph_op));
+            let result = Self::extract_photon_transition_detailed(&ph_op);
+            match result {
+                PhotonTransitionResult::SingleTransition(from, to, value) => {
+                    // This term can be optimized into KronSum
+                    kron_sum_terms.push((ex_op, from, to, value));
+                }
+                PhotonTransitionResult::Zero => {
+                    // Skip zero operators - they don't contribute
+                    n_zero += 1;
+                }
+                PhotonTransitionResult::Complex => {
+                    // Fall back to normal kron for this term
+                    fallback_terms.push(ex_op.kron(&ph_op));
+                }
             }
+        }
+        
+        if n_zero > 0 {
+            timed_println!("Skipped {} zero operators", n_zero);
         }
         
         // If we can optimize at least some terms, use KronSum

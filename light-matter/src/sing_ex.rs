@@ -300,6 +300,8 @@ pub struct PPOffHamiltonian {
     pub matrix_element_arrays: Option<LMMatrixElementArray>,
     pub p_c_sin: Option<Vec<Array2<c64>>>,
     pub p_q: Option<Vec<Array2<c64>>>,
+    pub cache_dir: Option<String>,  // Cache directory for matrix elements
+    pub config_hash: u64,  // Hash of configuration parameters for caching
 }
 
 impl PPOffHamiltonian {
@@ -320,6 +322,32 @@ impl PPOffHamiltonian {
             matrix_element_arrays,
             p_c_sin: None,
             p_q: None,
+            cache_dir: None,
+            config_hash: 0,
+        }
+    }
+    
+    pub fn new_with_cache(
+        exciton: Arc<ExcitonicHamiltonian>, 
+        photon: Arc<PhotonicHamiltonian>,
+        phonon: Option<Arc<PhononHamiltonian>>, 
+        lm_coupling: f64,
+        pn_coupling: f64,
+        matrix_element_arrays: Option<LMMatrixElementArray>,
+        cache_dir: Option<String>,
+        config_hash: u64,
+    ) -> Self {
+        Self { 
+            exciton, 
+            photon, 
+            phonon, 
+            lm_coupling,
+            pn_coupling,
+            matrix_element_arrays,
+            p_c_sin: None,
+            p_q: None,
+            cache_dir,
+            config_hash,
         }
     }
 
@@ -393,12 +421,15 @@ impl PPOffHamiltonian {
             }
 
             let mut matrix_element_arrays = LMMatrixElementArray::new();
-            matrix_element_arrays.populate_tay_mat_elements(
+            matrix_element_arrays.populate_tay_mat_elements_with_cache(
                 &all_q_ind, 
                 self.exciton.e_vecs.as_ref().unwrap(), 
                 &bosonic_modes, 
                 self.exciton.exciton_ham.kappa_vectors.len(),
-                self.exciton.exciton_ham.rel_ham.mu
+                self.exciton.exciton_ham.rel_ham.mu,
+                self.cache_dir.as_deref(),
+                false,  // don't force recompute
+                self.config_hash
             );
 
             self.matrix_element_arrays = Some(matrix_element_arrays);

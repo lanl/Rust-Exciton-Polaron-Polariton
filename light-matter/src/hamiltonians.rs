@@ -309,6 +309,8 @@ pub struct LMHamiltonian <M: MatrixOps, B: Boson<M>> {
     is_initialized: bool,
     cached_a_ops: Option<Vec<M>>,  // Cache annihilation operators
     cached_adag_a_ops: Option<Vec<M>>,  // Cache number operators
+    pub cache_dir: Option<String>,  // Cache directory for matrix elements
+    pub config_hash: u64,  // Hash of configuration parameters for caching
 }
 
 impl<M: MatrixOps, B: Boson<M>>  LMHamiltonian<M,B> {
@@ -319,7 +321,19 @@ impl<M: MatrixOps, B: Boson<M>>  LMHamiltonian<M,B> {
 
         let matrix_elements = LMMatrixElementArray::new();
 
-        Self { exciton, photon, matrix_elements, coupling, p_c_sin: None, p_q: None, is_initialized: false, cached_a_ops: None, cached_adag_a_ops: None}
+        Self { exciton, photon, matrix_elements, coupling, p_c_sin: None, p_q: None, is_initialized: false, cached_a_ops: None, cached_adag_a_ops: None, cache_dir: None, config_hash: 0}
+    }
+    
+    pub fn new_with_cache( 
+            exciton: ExcitonicHamiltonian<M>, 
+            photon: BosonicHamiltonian<M,B>, 
+            coupling: f64,
+            cache_dir: Option<String>,
+            config_hash: u64) -> Self {
+
+        let matrix_elements = LMMatrixElementArray::new();
+
+        Self { exciton, photon, matrix_elements, coupling, p_c_sin: None, p_q: None, is_initialized: false, cached_a_ops: None, cached_adag_a_ops: None, cache_dir, config_hash}
     }
 
     pub fn initialize(&mut self, k: Option<Vec<f64>>)  
@@ -349,12 +363,15 @@ impl<M: MatrixOps, B: Boson<M>>  LMHamiltonian<M,B> {
 
             let time_mat = Instant::now();
             let all_q_ind = self.photon.get_all_q_ind();
-            self.matrix_elements.populate_tay_mat_elements(
+            self.matrix_elements.populate_tay_mat_elements_with_cache(
                 &all_q_ind, 
                 self.exciton.e_vecs.as_ref().unwrap(), 
                 self.photon.boson.get_modes(), 
                 self.exciton.exciton_ham.kappa_vectors.len(),
-                self.exciton.exciton_ham.rel_ham.mu
+                self.exciton.exciton_ham.rel_ham.mu,
+                self.cache_dir.as_deref(),
+                false,  // don't force recompute
+                self.config_hash
             );
             timed_println!("    Matrix elements calculation: {:?}", time_mat.elapsed());
 
@@ -713,8 +730,9 @@ impl<M: MatrixOps, B: Boson<M>>  PPHamiltonian<M,B> {
         }).collect();
         let photon: BosonicHamiltonian<M,B> = BosonicHamiltonian::new(photon_modes);
 
-        // Create Polariton
-        let polariton = LMHamiltonian::new(exciton, photon, pp_config.lm_coupling);
+        // Create Polariton with cache support
+        let config_hash = pp_config.get_config_hash();
+        let polariton = LMHamiltonian::new_with_cache(exciton, photon, pp_config.lm_coupling, pp_config.cache_dir.clone(), config_hash);
 
         // Create Phonon
         let phonon_mode = BosonMode { eps: arr1(&[0.0,0.0]), q: pp_config.pn_k.clone(), 

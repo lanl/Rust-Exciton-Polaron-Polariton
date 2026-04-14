@@ -469,7 +469,7 @@ pub fn plot_dielectric_function(
             .x_label_area_size(40)
             .y_label_area_size(60)
             // .build_cartesian_2d(omega_min..omega_max, 2.0*eps_min.1..eps_max.0 * 0.05)?;
-            .build_cartesian_2d(omega_min..omega_max, (e_min..e_max).log_scale())?;
+            .build_cartesian_2d(omega_min..omega_max, (e_min..e_max))?;
 
         println!("Built mesh");
         

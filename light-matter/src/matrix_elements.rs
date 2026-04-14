@@ -3,11 +3,26 @@ use num_traits::{One, Zero};
 use scilib::math::basic::factorial;
 use std::{collections::HashMap, f64::consts::PI};
 use rayon::prelude::*;
-use log::warn;
+use log::{warn, info};
 use ndarray::{Array1, Array2};
 use crate::utils::{BosonMode, HermitianConjugate, MatrixOps};
+use std::fs::{self, File};
+use std::io::{Write, Read};
+use std::path::Path;
+use serde::{Serialize, Deserialize};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 use crate::timed_println;
+
+/// Serializable version of matrix element arrays for caching
+#[derive(Serialize, Deserialize)]
+struct SerializableMatrixElements {
+    cos_mat: Vec<(Vec<i32>, Vec<c64>)>,
+    sin_mat: Vec<(Vec<i32>, Vec<c64>)>,
+    p_cos_mat: Vec<(Vec<i32>, Vec<c64>)>,
+    matrix_shape: (usize, usize),
+}
 
 #[derive(Clone)]
 pub struct LMMatrixElementArray {
@@ -39,6 +54,215 @@ impl LMMatrixElementArray {
         self.cos_mat.is_empty() && self.sin_mat.is_empty() && self.p_cos_mat.is_empty()
     }
 
+    /// Generate a cache filename based on parameters
+    /// Uses config_hash which includes all mode information from PPConfig
+    pub fn get_cache_filename(
+        cache_dir: &str,
+        mu: f64,
+        n_com: usize,
+        n_rel: usize,
+        config_hash: u64,
+    ) -> String {
+        format!(
+            "{}/matrix_elements_mu{:.6}_ncom{}_nrel{}_confighash{:016x}.bin",
+            cache_dir, mu, n_com, n_rel, config_hash
+        )
+    }
+
+    /// Generate a cache filename for relative basis matrices (independent of eigenvectors)
+    /// Uses config_hash which includes all mode information from PPConfig
+    pub fn get_cache_filename_rel(
+        cache_dir: &str,
+        mu: f64,
+        n_rel: usize,
+        config_hash: u64,
+    ) -> String {
+        format!(
+            "{}/matrix_elements_rel_mu{:.6}_nrel{}_confighash{:016x}.bin",
+            cache_dir, mu, n_rel, config_hash
+        )
+    }
+
+
+
+    /// Create a deterministic hash from exciton configuration parameters
+    /// This hashes the physical parameters that determine the eigenvectors,
+    /// avoiding issues with gauge freedom (global phases) in the eigenvectors themselves
+    pub fn hash_exciton_config(
+        a0: f64,
+        v0: f64,
+        mu: f64,
+        n_rel: usize,
+        n_ex_eig: usize,
+        n_com: usize,
+    ) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        
+        // Hash exciton parameters
+        a0.to_bits().hash(&mut hasher);
+        v0.to_bits().hash(&mut hasher);
+        mu.to_bits().hash(&mut hasher);
+        n_rel.hash(&mut hasher);
+        n_ex_eig.hash(&mut hasher);
+        n_com.hash(&mut hasher);
+        
+        hasher.finish()
+    }
+
+    /// Save matrix elements to cache file
+    pub fn save_to_file(&self, filename: &str) -> Result<(), Box<dyn std::error::Error>> {
+        // Create directory if it doesn't exist
+        if let Some(parent) = Path::new(filename).parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        // Convert HashMaps to serializable format
+        let mut cos_vec = Vec::new();
+        let mut sin_vec = Vec::new();
+        let mut p_cos_vec = Vec::new();
+        let mut shape = (0, 0);
+
+        for (key, mat) in &self.cos_mat {
+            shape = (mat.nrows(), mat.ncols());
+            cos_vec.push((key.clone(), mat.iter().cloned().collect::<Vec<_>>()));
+        }
+        for (key, mat) in &self.sin_mat {
+            sin_vec.push((key.clone(), mat.iter().cloned().collect::<Vec<_>>()));
+        }
+        for (key, mat) in &self.p_cos_mat {
+            p_cos_vec.push((key.clone(), mat.iter().cloned().collect::<Vec<_>>()));
+        }
+
+        let serializable = SerializableMatrixElements {
+            cos_mat: cos_vec,
+            sin_mat: sin_vec,
+            p_cos_mat: p_cos_vec,
+            matrix_shape: shape,
+        };
+
+        let encoded = bincode::serialize(&serializable)?;
+        let mut file = File::create(filename)?;
+        file.write_all(&encoded)?;
+        
+        info!("Saved matrix elements to cache: {}", filename);
+        Ok(())
+    }
+
+    /// Load matrix elements from cache file
+    pub fn load_from_file(filename: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut file = File::open(filename)?;
+        let mut buffer = Vec::new();
+        file.read_to_end(&mut buffer)?;
+        
+        let serializable: SerializableMatrixElements = bincode::deserialize(&buffer)?;
+        
+        let mut cos_mat = HashMap::new();
+        let mut sin_mat = HashMap::new();
+        let mut p_cos_mat = HashMap::new();
+        
+        let (nrows, ncols) = serializable.matrix_shape;
+        
+        for (key, data) in serializable.cos_mat {
+            let mat = Array2::from_shape_vec((nrows, ncols), data)?;
+            cos_mat.insert(key, mat);
+        }
+        for (key, data) in serializable.sin_mat {
+            let mat = Array2::from_shape_vec((nrows, ncols), data)?;
+            sin_mat.insert(key, mat);
+        }
+        for (key, data) in serializable.p_cos_mat {
+            let mat = Array2::from_shape_vec((nrows, ncols), data)?;
+            p_cos_mat.insert(key, mat);
+        }
+        
+        info!("Loaded matrix elements from cache: {}", filename);
+        Ok(Self {
+            cos_mat,
+            sin_mat,
+            p_cos_mat,
+            cos_mat_rel: None,
+            sin_mat_rel: None,
+            p_cos_mat_rel: None,
+        })
+    }
+
+    /// Save relative basis matrix elements to cache file
+    pub fn save_rel_to_file(&self, filename: &str) -> Result<(), Box<dyn std::error::Error>> {
+        if self.cos_mat_rel.is_none() || self.sin_mat_rel.is_none() || self.p_cos_mat_rel.is_none() {
+            return Err("Relative basis matrices not computed".into());
+        }
+
+        // Create directory if it doesn't exist
+        if let Some(parent) = Path::new(filename).parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let cos_mat_rel = self.cos_mat_rel.as_ref().unwrap();
+        let sin_mat_rel = self.sin_mat_rel.as_ref().unwrap();
+        let p_cos_mat_rel = self.p_cos_mat_rel.as_ref().unwrap();
+
+        let mut cos_vec = Vec::new();
+        let mut sin_vec = Vec::new();
+        let mut p_cos_vec = Vec::new();
+        let mut shape = (0, 0);
+
+        for (key, mat) in cos_mat_rel {
+            shape = (mat.nrows(), mat.ncols());
+            cos_vec.push((key.clone(), mat.iter().cloned().collect::<Vec<_>>()));
+        }
+        for (key, mat) in sin_mat_rel {
+            sin_vec.push((key.clone(), mat.iter().cloned().collect::<Vec<_>>()));
+        }
+        for (key, mat) in p_cos_mat_rel {
+            p_cos_vec.push((key.clone(), mat.iter().cloned().collect::<Vec<_>>()));
+        }
+
+        let serializable = SerializableMatrixElements {
+            cos_mat: cos_vec,
+            sin_mat: sin_vec,
+            p_cos_mat: p_cos_vec,
+            matrix_shape: shape,
+        };
+
+        let encoded = bincode::serialize(&serializable)?;
+        let mut file = File::create(filename)?;
+        file.write_all(&encoded)?;
+        
+        info!("Saved relative basis matrix elements to cache: {}", filename);
+        Ok(())
+    }
+
+    /// Load relative basis matrix elements from cache file
+    pub fn load_rel_from_file(filename: &str) -> Result<(HashMap<Vec<i32>, Array2<c64>>, HashMap<Vec<i32>, Array2<c64>>, HashMap<Vec<i32>, Array2<c64>>), Box<dyn std::error::Error>> {
+        let mut file = File::open(filename)?;
+        let mut buffer = Vec::new();
+        file.read_to_end(&mut buffer)?;
+        
+        let serializable: SerializableMatrixElements = bincode::deserialize(&buffer)?;
+        
+        let mut cos_mat = HashMap::new();
+        let mut sin_mat = HashMap::new();
+        let mut p_cos_mat = HashMap::new();
+        
+        let (nrows, ncols) = serializable.matrix_shape;
+        
+        for (key, data) in serializable.cos_mat {
+            let mat = Array2::from_shape_vec((nrows, ncols), data)?;
+            cos_mat.insert(key, mat);
+        }
+        for (key, data) in serializable.sin_mat {
+            let mat = Array2::from_shape_vec((nrows, ncols), data)?;
+            sin_mat.insert(key, mat);
+        }
+        for (key, data) in serializable.p_cos_mat {
+            let mat = Array2::from_shape_vec((nrows, ncols), data)?;
+            p_cos_mat.insert(key, mat);
+        }
+        
+        info!("Loaded relative basis matrix elements from cache: {}", filename);
+        Ok((cos_mat, sin_mat, p_cos_mat))
+    }
+
     pub fn populate_tay_mat_elements(
         &mut self,
         all_q_ind: &Vec<Vec<i32>>,
@@ -47,14 +271,94 @@ impl LMMatrixElementArray {
         n_com: usize,
         mu: f64,
     ) {
+        self.populate_tay_mat_elements_with_cache(all_q_ind, e_vecs, modes, n_com, mu, None, false, 0);
+    }
+
+    pub fn populate_tay_mat_elements_with_cache(
+        &mut self,
+        all_q_ind: &Vec<Vec<i32>>,
+        e_vecs: &Vec<Array1<c64>>,
+        modes: &Vec<BosonMode>,
+        n_com: usize,
+        mu: f64,
+        cache_dir: Option<&str>,
+        force_recompute: bool,
+        config_hash: u64,
+    ) {
         let n_rel = e_vecs[0].len() / n_com;
         
+        // Try to load from cache if cache_dir is provided and not forcing recompute
+        if let Some(dir) = cache_dir {
+            if !force_recompute {
+                let cache_file = Self::get_cache_filename(dir, mu, n_com, n_rel, config_hash);
+                
+                if Path::new(&cache_file).exists() {
+                    match Self::load_from_file(&cache_file) {
+                        Ok(cached) => {
+                            info!("Successfully loaded matrix elements from cache");
+                            self.cos_mat = cached.cos_mat;
+                            self.sin_mat = cached.sin_mat;
+                            self.p_cos_mat = cached.p_cos_mat;
+                            
+                            // Also try to load relative basis cache
+                            let cache_file_rel = Self::get_cache_filename_rel(dir, mu, n_rel, config_hash);
+                            if Path::new(&cache_file_rel).exists() {
+                                if let Ok((cos_rel, sin_rel, p_cos_rel)) = Self::load_rel_from_file(&cache_file_rel) {
+                                    self.cos_mat_rel = Some(cos_rel);
+                                    self.sin_mat_rel = Some(sin_rel);
+                                    self.p_cos_mat_rel = Some(p_cos_rel);
+                                }
+                            }
+                            return;
+                        }
+                        Err(e) => {
+                            warn!("Failed to load cache file {}: {}. Recomputing...", cache_file, e);
+                        }
+                    }
+                }
+            }
+        }
+        
+        // Compute relative basis matrices (with caching)
         if self.cos_mat_rel.is_none() || self.sin_mat_rel.is_none() || self.p_cos_mat_rel.is_none() {
-            let (cos_mat_rel, sin_mat_rel, p_cos_mat_rel) = self.compute_relative_tay_mat_elements(all_q_ind, modes, n_rel, mu);
+            // Try to load relative basis from cache first
+            let mut loaded_from_cache = false;
+            if let Some(dir) = cache_dir {
+                if !force_recompute {
+                    let cache_file_rel = Self::get_cache_filename_rel(dir, mu, n_rel, config_hash);
+                    if Path::new(&cache_file_rel).exists() {
+                        match Self::load_rel_from_file(&cache_file_rel) {
+                            Ok((cos_rel, sin_rel, p_cos_rel)) => {
+                                info!("Successfully loaded relative basis matrix elements from cache");
+                                self.cos_mat_rel = Some(cos_rel);
+                                self.sin_mat_rel = Some(sin_rel);
+                                self.p_cos_mat_rel = Some(p_cos_rel);
+                                loaded_from_cache = true;
+                            }
+                            Err(e) => {
+                                warn!("Failed to load relative basis cache: {}. Recomputing...", e);
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Compute if not loaded from cache
+            if !loaded_from_cache {
+                let (cos_mat_rel, sin_mat_rel, p_cos_mat_rel) = self.compute_relative_tay_mat_elements(all_q_ind, modes, n_rel, mu);
 
-            self.cos_mat_rel = Some(cos_mat_rel);
-            self.sin_mat_rel = Some(sin_mat_rel);
-            self.p_cos_mat_rel = Some(p_cos_mat_rel);
+                self.cos_mat_rel = Some(cos_mat_rel);
+                self.sin_mat_rel = Some(sin_mat_rel);
+                self.p_cos_mat_rel = Some(p_cos_mat_rel);
+                
+                // Save relative basis to cache
+                if let Some(dir) = cache_dir {
+                    let cache_file_rel = Self::get_cache_filename_rel(dir, mu, n_rel, config_hash);
+                    if let Err(e) = self.save_rel_to_file(&cache_file_rel) {
+                        warn!("Failed to save relative basis cache: {}", e);
+                    }
+                }
+            }
         }
 
                 // Parallel computation over all q‑index vectors
@@ -108,6 +412,14 @@ impl LMMatrixElementArray {
                 self.cos_mat.insert(vec![q_ind1,  q_ind2], mat_2.clone()); // q₁+q₂
             }
         });
+        
+        // Save to cache if cache_dir is provided
+        if let Some(dir) = cache_dir {
+            let cache_file = Self::get_cache_filename(dir, mu, n_com, n_rel, config_hash);
+            if let Err(e) = self.save_to_file(&cache_file) {
+                warn!("Failed to save matrix elements to cache: {}", e);
+            }
+        }
     }
 
     /// Old matrix element population
