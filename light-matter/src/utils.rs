@@ -316,6 +316,12 @@ pub struct PPConfig {
     
     // Cache directory for matrix elements
     pub cache_dir: Option<String>,
+    
+    // Effective mode parameters (for cache filename generation)
+    // These are the hand-entered parameters that define the mode structure
+    pub d_omega: Option<f64>,
+    pub omega_max: Option<f64>,
+    pub reflectivity: Option<f64>,
 }
 
 impl PPConfig {
@@ -354,6 +360,56 @@ impl PPConfig {
             n_k_points,
             n_bands,
             cache_dir: Some("saved_data_lm/matrix_element_cache".to_string()),
+            d_omega: None,
+            omega_max: None,
+            reflectivity: None,
+        }
+    }
+    
+    /// Create a new PPConfig with effective mode parameters for better cache identification
+    pub fn new_with_effective_modes(
+        // Exciton Parameters
+        e_config: ExcitonConfig,
+        n_rel: usize,
+        n_ex_eig: usize,
+
+        // Polariton Parameters
+        lm_couplings: Vec<f64>,
+        omega_0: f64,
+        q_values: Vec<Vector3D>,
+
+        // Polaron Parameters
+        pn_coupling: f64,
+        pn_omega: f64,
+        pn_k: Array1<f64>,
+        pn_n_fock: usize,
+
+        // Band Parameters
+        n_k_points: usize,
+        n_bands: usize,
+        
+        // Effective mode parameters
+        d_omega: f64,
+        omega_max: f64,
+        reflectivity: f64,
+    ) -> Self {
+        Self {
+            e_config,
+            n_rel,
+            n_ex_eig,
+            lm_couplings,
+            omega_0,
+            q_values,
+            pn_coupling,
+            pn_omega,
+            pn_k,
+            pn_n_fock,
+            n_k_points,
+            n_bands,
+            cache_dir: Some("saved_data_lm/matrix_element_cache".to_string()),
+            d_omega: Some(d_omega),
+            omega_max: Some(omega_max),
+            reflectivity: Some(reflectivity),
         }
     }
     

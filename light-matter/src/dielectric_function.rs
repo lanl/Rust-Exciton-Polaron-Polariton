@@ -20,6 +20,7 @@ pub struct DielectricResult {
 }
 
 /// Generates a filename for the cached diagonalization data (pp_vals and x_pp)
+/// Prefers using hand-entered effective mode parameters if available, otherwise falls back to coupling sum
 pub fn get_dielectric_cache_filename<M,B>(
     pp: &PPHamiltonian<M,B>,
     pp_config: &PPConfig,
@@ -28,21 +29,44 @@ pub fn get_dielectric_cache_filename<M,B>(
 ) -> String 
 where M: MatrixOps, B: Boson<M>
 {
-    format!(
-        "{}/dielectric_cache_a0{}_V0{}_nrel{}_lmcoup{}_nmodes{}_pncoup{}_npn{}_neig{}.bin",
-        save_dir,
-        pp_config.e_config.a0,
-        pp_config.e_config.v0,
-        pp_config.n_rel,
-        pp_config.lm_couplings.iter().sum::<f64>(),
-        pp.polariton.photon.boson.get_modes().len(),
-        pp_config.pn_coupling,
-        pp_config.pn_n_fock,
-        n_eig
-    )
+    // Use effective mode parameters if available (hand-entered, no floating-point issues)
+    if let (Some(d_omega), Some(omega_max), Some(reflectivity)) = 
+        (pp_config.d_omega, pp_config.omega_max, pp_config.reflectivity) {
+        format!(
+            "{}/dielectric_cache_a0{}_V0{}_nrel{}_omega0{:.6}_domega{:.1e}_omegamax{:.6}_refl{:.7}_nmodes{}_pncoup{:.6}_npn{}_neig{}.bin",
+            save_dir,
+            pp_config.e_config.a0,
+            pp_config.e_config.v0,
+            pp_config.n_rel,
+            pp_config.omega_0,
+            d_omega,
+            omega_max,
+            reflectivity,
+            pp.polariton.photon.boson.get_modes().len(),
+            pp_config.pn_coupling,
+            pp_config.pn_n_fock,
+            n_eig
+        )
+    } else {
+        // Fallback to coupling sum (for backward compatibility or non-effective-mode cases)
+        let total_coupling = pp_config.lm_couplings.iter().sum::<f64>();
+        format!(
+            "{}/dielectric_cache_a0{}_V0{}_nrel{}_lmcoup{:.6}_nmodes{}_pncoup{:.6}_npn{}_neig{}.bin",
+            save_dir,
+            pp_config.e_config.a0,
+            pp_config.e_config.v0,
+            pp_config.n_rel,
+            total_coupling,
+            pp.polariton.photon.boson.get_modes().len(),
+            pp_config.pn_coupling,
+            pp_config.pn_n_fock,
+            n_eig
+        )
+    }
 }
 
 /// Generates a filename for the dielectric function data
+/// Prefers using hand-entered effective mode parameters if available, otherwise falls back to coupling sum
 pub fn get_dielectric_function_filename<M,B>(
     pp: &PPHamiltonian<M,B>,
     pp_config: &PPConfig,
@@ -52,19 +76,42 @@ pub fn get_dielectric_function_filename<M,B>(
 ) -> String 
 where M: MatrixOps, B: Boson<M>
 {
-    format!(
-        "{}/dielectric_a0{}_V0{}_nrel{}_lmcoup{}_nmodes{}_pncoup{}_npn{}_neig{}_gamma{:.1e}.dat",
-        save_dir,
-        pp_config.e_config.a0,
-        pp_config.e_config.v0,
-        pp_config.n_rel,
-        pp_config.lm_couplings.iter().sum::<f64>(),
-        pp.polariton.photon.boson.get_modes().len(),
-        pp_config.pn_coupling,
-        pp_config.pn_n_fock,
-        n_eig,
-        gamma
-    )
+    // Use effective mode parameters if available (hand-entered, no floating-point issues)
+    if let (Some(d_omega), Some(omega_max), Some(reflectivity)) = 
+        (pp_config.d_omega, pp_config.omega_max, pp_config.reflectivity) {
+        format!(
+            "{}/dielectric_a0{}_V0{}_nrel{}_omega0{:.6}_domega{:.1e}_omegamax{:.6}_refl{:.7}_nmodes{}_pncoup{:.6}_npn{}_neig{}_gamma{:.1e}.dat",
+            save_dir,
+            pp_config.e_config.a0,
+            pp_config.e_config.v0,
+            pp_config.n_rel,
+            pp_config.omega_0,
+            d_omega,
+            omega_max,
+            reflectivity,
+            pp.polariton.photon.boson.get_modes().len(),
+            pp_config.pn_coupling,
+            pp_config.pn_n_fock,
+            n_eig,
+            gamma
+        )
+    } else {
+        // Fallback to coupling sum (for backward compatibility or non-effective-mode cases)
+        let total_coupling = pp_config.lm_couplings.iter().sum::<f64>();
+        format!(
+            "{}/dielectric_a0{}_V0{}_nrel{}_lmcoup{:.6}_nmodes{}_pncoup{:.6}_npn{}_neig{}_gamma{:.1e}.dat",
+            save_dir,
+            pp_config.e_config.a0,
+            pp_config.e_config.v0,
+            pp_config.n_rel,
+            total_coupling,
+            pp.polariton.photon.boson.get_modes().len(),
+            pp_config.pn_coupling,
+            pp_config.pn_n_fock,
+            n_eig,
+            gamma
+        )
+    }
 }
 
 /// Save the cached diagonalization data (pp_vals, x_pp, photonic_chars, phonon_numbers)
@@ -197,11 +244,12 @@ where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum + ConvertF
     timed_println!("Calculating dielectric function with {} eigenstates, gamma={:.1e}", n_eig, gamma);
 
     let cache_filename = get_dielectric_cache_filename(pp, pp_config, save_dir, n_eig);
+    timed_println!("Cache filename: {}", cache_filename);
     
     // Try to load cached data if requested
     // Load cached eigenvalues/x_pp if possible, otherwise compute everything
     let (pp_vals, x_pp, photonic_chars, phonon_numbers, ground_state_index) = if use_cached && std::path::Path::new(&cache_filename).exists() {
-        timed_println!("Loading cached diagonalization data from {}", cache_filename);
+        timed_println!("Cache file exists, loading cached diagonalization data from {}", cache_filename);
         match load_dielectric_cache(&cache_filename) {
             Ok((vals, x, photonic_chars, phonon_numbers, gs_idx)) => {
                 timed_println!("Successfully loaded cached data");
@@ -213,7 +261,13 @@ where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum + ConvertF
             }
         }
     } else {
-        timed_println!("Computing diagonalization data...");
+        if !use_cached {
+            timed_println!("use_cached=false, computing diagonalization data...");
+        } else if !std::path::Path::new(&cache_filename).exists() {
+            timed_println!("Cache file does not exist, computing diagonalization data...");
+        } else {
+            timed_println!("Computing diagonalization data...");
+        }
         let cache_data = compute_dielectric_cache(pp_config, pp, n_eig);
         
         // Save the computed cache for future use

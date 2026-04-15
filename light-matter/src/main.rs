@@ -483,7 +483,7 @@ fn generate_stacked_plots(
 fn run_dielectric_scan(e_config: ExcitonConfig) {
     // Check if we should calculate or just plot
     let calculate = true; // Set to false to skip calculation and just plot
-    let use_cached = false; // Set to true to use cached diagonalization results (allows testing different gamma values)
+    let use_cached = true; // Set to true to use cached diagonalization results (allows testing different gamma values)
 
     let zoomed = true;
 
@@ -515,7 +515,7 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
     // Define photon modes based on effective modes paper
     let omega_max = 0.2;
     let reflectivities = [0.0, 0.999999, 0.9999999];
-    let d_omega = 0.0003;
+    let d_omega = 1e-4;
 
     // Generate effective modes and their couplings for each reflectivity
     let mut all_q_values = Vec::new();
@@ -669,6 +669,7 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
     let my_couplings: Vec<f64> = total_coupling_values.slice(s![start_idx..end_idx]).to_owned().to_vec();
     let my_q_values: Vec<Vec<Vector3D>> = all_q_values[start_idx..end_idx].to_vec();
     let my_mode_couplings: Vec<Vec<f64>> = all_mode_couplings[start_idx..end_idx].to_vec();
+    let my_reflectivities: Vec<f64> = reflectivities[start_idx..end_idx].to_vec();
 
     // Create a unique temporary directory for this job
     let job_id = env::var("SLURM_JOB_ID")
@@ -685,6 +686,7 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
         let start_time = Instant::now();
         let q_values = &my_q_values[i];
         let mode_couplings = &my_mode_couplings[i];
+        let reflectivity = my_reflectivities[i];
         
         // Use the mode couplings directly from generate_modes
         // They already have the correct values based on the effective mode density
@@ -693,10 +695,11 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
         timed_println!("Processing reflectivity case with {} modes, total coupling = {:.6}", 
                       q_values.len(), total_coupling);
         
-        // Create PP config
-        let pp_config = PPConfig::new(
+        // Create PP config with effective mode parameters for better cache identification
+        let pp_config = PPConfig::new_with_effective_modes(
             e_config.clone(), n_rel, n_ex_eig, scaled_couplings, omega_0, q_values.clone(),
-            pn_coupling, pn_omega, pn_k.clone(), pn_n_fock, 1, 1
+            pn_coupling, pn_omega, pn_k.clone(), pn_n_fock, 1, 1,
+            d_omega, omega_max, reflectivity
         );
 
 
