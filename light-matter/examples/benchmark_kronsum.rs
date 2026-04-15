@@ -47,6 +47,8 @@ fn main() {
     println!("  Total Hilbert space dimension: {}\n", 
         n_exciton_states * (n_photon_modes + 1));
 
+    let lm_couplings = vec![lm_coupling; n_photon_modes];
+
     // Create exciton configuration
     let e_config = ExcitonConfig {
         n_kappa: 5,
@@ -87,7 +89,7 @@ fn main() {
         e_config.clone(),
         n_rel,
         n_exciton_states,
-        lm_coupling,
+        lm_couplings.clone(),
         0.1, // omega_0 (not used in single excitation)
         q_values.clone(),
         0.0, // No phonon coupling for this benchmark
@@ -140,7 +142,7 @@ fn main() {
         BosonicHamiltonian::new(photon_modes);
     
     // Create light-matter Hamiltonian
-    let mut lm_hamiltonian = LMHamiltonian::new(exciton, photon, lm_coupling);
+    let mut lm_hamiltonian = LMHamiltonian::new(exciton, photon, lm_couplings.clone());
     let ham_composed = lm_hamiltonian.build_lm_hamiltonian(None);
     
     let build_time_composed = start.elapsed();

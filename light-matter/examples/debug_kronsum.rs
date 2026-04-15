@@ -20,6 +20,8 @@ fn main() {
     let n_rel = 9;
     let lm_coupling = 0.01;
 
+    let lm_couplings = vec![lm_coupling; n_photon_modes];
+
     let e_config = ExcitonConfig {
         n_kappa: 5,
         a0: 1.0,
@@ -54,7 +56,7 @@ fn main() {
     let photon: BosonicHamiltonian<ComposedOperator<c64>, SingExBosons<ComposedOperator<c64>>> = 
         BosonicHamiltonian::new(photon_modes);
     
-    let mut lm_hamiltonian = LMHamiltonian::new(exciton, photon, lm_coupling);
+    let mut lm_hamiltonian = LMHamiltonian::new(exciton, photon, lm_couplings);
     
     // Debug: Check matrix elements before building Hamiltonian
     println!("\nChecking matrix elements...");

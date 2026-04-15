@@ -82,7 +82,7 @@ impl<B: Boson<CsMat<c64>>> BandStructureCalculatorLM<B> {
             self.light_matter.exciton.n_rel,
             self.light_matter.exciton.exciton_ham.kappa_vectors.len(),
             n_points,
-            self.light_matter.coupling,
+            self.light_matter.couplings.iter().sum::<f64>(),
             self.light_matter.photon.boson.get_modes().len(),
         )
     }

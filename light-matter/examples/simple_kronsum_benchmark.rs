@@ -32,6 +32,8 @@ fn main() {
     let n_exciton_states = 8;
     let n_rel = 9;
     let lm_coupling = 0.1;
+    
+    let lm_couplings = vec![lm_coupling; n_photon_modes];
 
     println!("System: {} photon modes, {} exciton states", n_photon_modes, n_exciton_states);
     println!("Total dimension: {}\n", n_exciton_states * (n_photon_modes + 1));
@@ -70,7 +72,7 @@ fn main() {
         e_config.clone(),
         n_rel,
         n_exciton_states,
-        lm_coupling,
+        lm_couplings.clone(),
         0.1,
         q_values.clone(),
         0.0, // No phonons
@@ -104,7 +106,7 @@ fn main() {
     let photon: BosonicHamiltonian<Array2<c64>, SingExBosons<Array2<c64>>> = 
         BosonicHamiltonian::new(photon_modes);
     
-    let mut lm_hamiltonian = LMHamiltonian::new(exciton, photon, lm_coupling);
+    let mut lm_hamiltonian = LMHamiltonian::new(exciton, photon, lm_couplings.clone());
     let ham_dense = lm_hamiltonian.build_lm_hamiltonian(None);
     println!("  Time: {:?}", start.elapsed());
 
@@ -123,7 +125,7 @@ fn main() {
     let photon: BosonicHamiltonian<CsMat<c64>, SingExBosons<CsMat<c64>>> = 
         BosonicHamiltonian::new(photon_modes);
     
-    let mut lm_hamiltonian = LMHamiltonian::new(exciton, photon, lm_coupling);
+    let mut lm_hamiltonian = LMHamiltonian::new(exciton, photon, lm_couplings.clone());
     let ham_sparse = lm_hamiltonian.build_lm_hamiltonian(None);
     println!("  Time: {:?}", start.elapsed());
 
@@ -142,7 +144,7 @@ fn main() {
     let photon: BosonicHamiltonian<ComposedOperator<c64>, SingExBosons<ComposedOperator<c64>>> = 
         BosonicHamiltonian::new(photon_modes);
     
-    let mut lm_hamiltonian = LMHamiltonian::new(exciton, photon, lm_coupling);
+    let mut lm_hamiltonian = LMHamiltonian::new(exciton, photon, lm_couplings.clone());
     let ham_composed = lm_hamiltonian.build_lm_hamiltonian(None);
     println!("  Time: {:?}", start.elapsed());
 

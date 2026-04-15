@@ -180,7 +180,7 @@ pub struct PPDiagHamiltonian {
     pub phonon: Option<Arc<PhononHamiltonian>>,
     pub k: Vec<f64>,
     pub int_array: Option<Array1<c64>>,
-    pub lm_coupling: f64
+    pub lm_couplings: Vec<f64>
 }
 
 impl PPDiagHamiltonian{
@@ -189,7 +189,7 @@ impl PPDiagHamiltonian{
         photon: Arc<PhotonicHamiltonian>,
         phonon: Option<Arc<PhononHamiltonian>>, 
         k: Vec<f64>,
-        lm_coupling: f64
+        lm_couplings: Vec<f64>
     ) -> Self {
         Self { 
             exciton, 
@@ -197,7 +197,7 @@ impl PPDiagHamiltonian{
             phonon, 
             k, 
             int_array: None,
-            lm_coupling
+            lm_couplings
         }
     }
 
@@ -210,9 +210,11 @@ impl PPDiagHamiltonian{
             let ph_ind = i % (n_ph + 1);    
             let ex_ind = i / (n_ph + 1);
 
-            // Diamagnetic A² contribution: g²/(2μ) for all states (including ground state)
+            // Diamagnetic A² contribution: Σ_i g_i²/(2μ) for all states (including ground state)
             // This comes from the constant term in (a + a†)² = a² + 2a†a + 1 + a†²
-            let a2_ground_shift = (n_ph as f64) * self.lm_coupling * self.lm_coupling / 2.0 / self.exciton.exciton_ham.rel_ham.mu;
+            let a2_ground_shift: f64 = self.lm_couplings.iter()
+                .map(|&g| g * g / (2.0 * self.exciton.exciton_ham.rel_ham.mu))
+                .sum();
             
             if ph_ind == 0 {
                 // Ground state gets contribution from all N_modes identity terms
@@ -221,10 +223,12 @@ impl PPDiagHamiltonian{
                 // P·q (a† a) / 2 M term (diagonal terms only)
                 let q = &self.photon.photon_modes[ph_ind - 1].q;
                 let p_com = self.exciton.get_p_com(q, true);
+                let coupling_i = self.lm_couplings[ph_ind - 1];
+                
                 p_com[[ex_ind,0]] / 2.0 / self.exciton.exciton_ham.m // (a† a) = 1 for single photon states
 
-                // Diamagnetic A^2 term (diagonal terms only)
-                + self.lm_coupling * self.lm_coupling / 2.0 / self.exciton.exciton_ham.rel_ham.mu  // A^2 term scales with coupling squared
+                // Diamagnetic A^2 term (diagonal terms only) - only for this mode
+                + coupling_i * coupling_i / 2.0 / self.exciton.exciton_ham.rel_ham.mu  // A^2 term scales with coupling squared
 
                 // q^2 (a† a)^2 term
                 + q.dot(q) / 2.0 / self.exciton.exciton_ham.m   // (a† a)^2 = 1 for single photon states
@@ -294,8 +298,8 @@ impl ArrayOperator<c64> for PPDiagHamiltonian {
 pub struct PPOffHamiltonian {
     pub exciton: Arc<ExcitonicHamiltonian>,
     pub photon: Arc<PhotonicHamiltonian>,
-    pub phonon: Option<Arc<PhononHamiltonian>>, 
-    pub lm_coupling: f64,
+    pub phonon: Option<Arc<PhononHamiltonian>>,
+    pub lm_couplings: Vec<f64>,
     pub pn_coupling: f64,
     pub matrix_element_arrays: Option<LMMatrixElementArray>,
     pub p_c_sin: Option<Vec<Array2<c64>>>,
@@ -309,7 +313,7 @@ impl PPOffHamiltonian {
         exciton: Arc<ExcitonicHamiltonian>, 
         photon: Arc<PhotonicHamiltonian>,
         phonon: Option<Arc<PhononHamiltonian>>, 
-        lm_coupling: f64,
+        lm_couplings: Vec<f64>,
         pn_coupling: f64,
         matrix_element_arrays: Option<LMMatrixElementArray>,
     ) -> Self {
@@ -317,7 +321,7 @@ impl PPOffHamiltonian {
             exciton, 
             photon, 
             phonon, 
-            lm_coupling,
+            lm_couplings,
             pn_coupling,
             matrix_element_arrays,
             p_c_sin: None,
@@ -331,7 +335,7 @@ impl PPOffHamiltonian {
         exciton: Arc<ExcitonicHamiltonian>, 
         photon: Arc<PhotonicHamiltonian>,
         phonon: Option<Arc<PhononHamiltonian>>, 
-        lm_coupling: f64,
+        lm_couplings: Vec<f64>,
         pn_coupling: f64,
         matrix_element_arrays: Option<LMMatrixElementArray>,
         cache_dir: Option<String>,
@@ -341,7 +345,7 @@ impl PPOffHamiltonian {
             exciton, 
             photon, 
             phonon, 
-            lm_coupling,
+            lm_couplings,
             pn_coupling,
             matrix_element_arrays,
             p_c_sin: None,
@@ -458,15 +462,18 @@ impl Operator<c64> for PPOffHamiltonian {
         let stride = n_ph * n_pn;
         
         // Pre-compute some constants to avoid repeated calculations
-        let lm_coupling_2_over_m = self.lm_coupling * 2.0 / self.exciton.exciton_ham.m;
-        let lm_coupling_over_mu = self.lm_coupling / self.exciton.exciton_ham.rel_ham.mu;
+        let one_over_mu = 1.0 / self.exciton.exciton_ham.rel_ham.mu;
         let one_over_2m = 1.0 / (2.0 * self.exciton.exciton_ham.m);
+        let two_over_m = 2.0 / self.exciton.exciton_ham.m;
 
         // Implement all a and a† terms
         let y_ph_list: Vec<(usize, c64)> = self.photon.photon_modes.par_iter().enumerate().flat_map(|(mode_i, photon_mode_i)| {
             let p_c_sin = &p_c_sin_ref[mode_i];
             let p_cos = matrix_element_arrays_ref.p_cos_mat.get(&vec![mode_i as i32]).unwrap();
             let p_q = &p_q_ref[mode_i];
+            let coupling_i = self.lm_couplings[mode_i];
+            let lm_coupling_2_over_m = coupling_i * two_over_m;
+            let lm_coupling_over_mu = coupling_i * one_over_mu;
 
             let mut a_term: Array1<c64>;
             let mut a_dag_term: Array1<c64>;
@@ -528,7 +535,9 @@ impl Operator<c64> for PPOffHamiltonian {
                     
                     // Calculate dot product directly
                     let eps_dot = eps_j[0] * eps_i[0] + eps_j[1] * eps_i[1];
-                    let coupling_factor: f64 = self.lm_coupling * self.lm_coupling * eps_dot / 2.0 / self.exciton.exciton_ham.rel_ham.mu;
+                    let coupling_i = self.lm_couplings[mode_i];
+                    let coupling_j = self.lm_couplings[mode_j];
+                    let coupling_factor: f64 = coupling_i * coupling_j * eps_dot / 2.0 / self.exciton.exciton_ham.rel_ham.mu;
 
                     for pn_ind in 0..n_pn {
                         let mode_j_start = (mode_j + 1) * n_pn + pn_ind;
@@ -635,7 +644,7 @@ impl PolaronPolariton {
         photon: Arc<PhotonicHamiltonian>,
         phonon: Option<Arc<PhononHamiltonian>>, 
         k: Vec<f64>,
-        lm_coupling: f64,
+        lm_couplings: Vec<f64>,
         pn_coupling: f64,
     ) -> Self {
 
@@ -643,19 +652,19 @@ impl PolaronPolariton {
         let mut pp_diag_ham:PPDiagHamiltonian;  
 
         if let Some(pn) = phonon{
-            pp_off_ham = PPOffHamiltonian::new(Arc::clone(&exciton), photon.clone(), Some(pn.clone()), lm_coupling, pn_coupling, None);
+            pp_off_ham = PPOffHamiltonian::new(Arc::clone(&exciton), photon.clone(), Some(pn.clone()), lm_couplings.clone(), pn_coupling, None);
             pp_off_ham.calc_matrix_element_arrays();
             pp_off_ham.calc_p_c_sin_matrix();
 
-            pp_diag_ham = PPDiagHamiltonian::new(Arc::clone(&exciton), photon, Some(pn), k.clone(), lm_coupling);
+            pp_diag_ham = PPDiagHamiltonian::new(Arc::clone(&exciton), photon, Some(pn), k.clone(), lm_couplings);
             pp_diag_ham.calculate_interaction_array();
         }
         else {
-            pp_off_ham = PPOffHamiltonian::new(Arc::clone(&exciton), photon.clone(), None, lm_coupling, pn_coupling, None);
+            pp_off_ham = PPOffHamiltonian::new(Arc::clone(&exciton), photon.clone(), None, lm_couplings.clone(), pn_coupling, None);
             pp_off_ham.calc_matrix_element_arrays();
             pp_off_ham.calc_p_c_sin_matrix();
 
-            pp_diag_ham = PPDiagHamiltonian::new(Arc::clone(&exciton), photon, None, k.clone(), lm_coupling);
+            pp_diag_ham = PPDiagHamiltonian::new(Arc::clone(&exciton), photon, None, k.clone(), lm_couplings);
             pp_diag_ham.calculate_interaction_array();
         }
 
@@ -833,11 +842,11 @@ impl SingExWrapper {
             let phonon = PhononHamiltonian::new(phonon_mode);
 
             self.polaron_polariton = Some(PolaronPolariton::new(Arc::new(exciton), Arc::new(photon), Some(Arc::new(phonon)), vec![0.,0.], 
-                config.lm_coupling, config.pn_coupling));
+                config.lm_couplings.clone(), config.pn_coupling));
         }
         else {
             self.polaron_polariton = Some(PolaronPolariton::new(Arc::new(exciton), Arc::new(photon), None, vec![0.,0.], 
-                config.lm_coupling, config.pn_coupling));
+                config.lm_couplings.clone(), config.pn_coupling));
         }
 
 
@@ -853,13 +862,15 @@ pub fn get_dielectric_cache_filename(
     save_dir: &str,
     n_eig: usize
 ) -> String {
+    // Use sum of couplings for filename (represents total coupling strength)
+    let total_coupling: f64 = pp_config.lm_couplings.iter().sum();
     format!(
         "{}/dielectric_cache_a0{}_V0{}_nrel{}_lmcoup{}_nmodes{}_pncoup{}_npn{}_neig{}.bin",
         save_dir,
         pp_config.e_config.a0,
         pp_config.e_config.v0,
         pp_config.n_rel,
-        pp_config.lm_coupling,
+        total_coupling,
         pp.pp_off_ham.photon.photon_modes.len(),
         pp_config.pn_coupling,
         pp_config.pn_n_fock,
@@ -875,13 +886,15 @@ pub fn get_dielectric_function_filename(
     n_eig: usize,
     gamma: f64
 ) -> String {
+    // Use sum of couplings for filename (represents total coupling strength)
+    let total_coupling: f64 = pp_config.lm_couplings.iter().sum();
     format!(
         "{}/dielectric_a0{}_V0{}_nrel{}_lmcoup{}_nmodes{}_pncoup{}_npn{}_neig{}_gamma{:.1e}.dat",
         save_dir,
         pp_config.e_config.a0,
         pp_config.e_config.v0,
         pp_config.n_rel,
-        pp_config.lm_coupling,
+        total_coupling,
         pp.pp_off_ham.photon.photon_modes.len(),
         pp_config.pn_coupling,
         pp_config.pn_n_fock,
@@ -1108,6 +1121,8 @@ pub fn get_lm_band_structure_filename(
     n_points: usize,
     n_eig: usize
 ) -> String {
+    // Use sum of couplings for filename (represents total coupling strength)
+    let total_coupling: f64 = pp_config.lm_couplings.iter().sum();
     format!(
         "{}/band_a0{}_V0{}_nrel{}_nbands{}_npoints{}_phcoup{}_nmodes{}_pncoup{}_npn{}_neig{}.bin",
         save_dir,
@@ -1116,7 +1131,7 @@ pub fn get_lm_band_structure_filename(
         pp_config.n_rel,
         pp_config.n_bands,
         n_points,
-        pp_config.lm_coupling,
+        total_coupling,
         pp.pp_off_ham.photon.photon_modes.len(),
         pp_config.pn_coupling,
         pp_config.pn_n_fock,

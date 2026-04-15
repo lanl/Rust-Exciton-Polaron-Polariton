@@ -34,6 +34,8 @@ pub mod dense_methods;
 
 pub mod slepc;
 
+pub mod effective_modes;
+
 pub mod slepc_instrumented;
 
 pub mod logging;
@@ -91,6 +93,9 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
             Vector3D { x: *qx, y: *qy, z: qz }
         })}).collect();
     
+    // Create uniform coupling vector (same coupling for all modes)
+    let lm_couplings = vec![coupling; q_values.len()];
+    
 
     // Define phonon parameters
     let pn_coupling = 0.0;
@@ -99,7 +104,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
     let pn_n_fock = 0;
 
     let pp_config = PPConfig::new(
-        e_config, n_rel, n_ex_eig, coupling, omega_0, q_values,
+        e_config, n_rel, n_ex_eig, lm_couplings.clone(), omega_0, q_values,
         pn_coupling, pn_omega, pn_k, pn_n_fock, n_k_points, n_bands
     );
 
@@ -188,7 +193,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
             // Create light-matter system
             let photon = BosonicHamiltonian::<Array2<c64>, FullBosons<Array2<c64>>>::new(photon_modes);
             let exciton = ExcitonicHamiltonian::new(exciton.full_ham, n_ex_eig, n_rel);
-            let light_matter = LMHamiltonian::new(exciton, photon, coupling);
+            let light_matter = LMHamiltonian::new(exciton, photon, lm_couplings.clone());
 
             // Start timing the band structure calculation
             let start_time = Instant::now();
@@ -208,7 +213,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
             // Plot the band structure
             plot_band_structure(
                 &k_points, sym_points, sym_labels, &eigvals_list, n_bands, a0, 
-                Some("disp_plot.png"), false, v0, coupling);
+                Some("disp_plot.png"), false, v0, total_coupling);
         },
 
         Method::LinOp => {
@@ -288,7 +293,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
             if !k_points_color.is_empty() {
                 if let Err(e) = band_structure::plot_color_band_structure(
                     &k_points_color, &sym_points, &sym_labels, &eigvals_list_color,
-                    &photonic_character_list, n_eig, a0, &save_path, v0, coupling, zoomed) {
+                    &photonic_character_list, n_eig, a0, &save_path, v0, total_coupling, zoomed) {
                     timed_println!("Error plotting color-coded band structure: {}", e);
                 }
             }
@@ -335,7 +340,7 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
             if !k_points_color.is_empty() {
                 if let Err(e) = color_band_plot::plot_color_band_structure(
                     &k_points_color, &sym_points, &sym_labels, &eigvals_list_color,
-                    &photonic_character_list, n_eig, a0, &save_path, v0, coupling, zoomed) {
+                    &photonic_character_list, n_eig, a0, &save_path, v0, total_coupling, zoomed) {
                     timed_println!("Error plotting color-coded band structure: {}", e);
                 }
             }
@@ -346,11 +351,12 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
 /// Helper function to generate stacked area plots for photonic and phonon contributions
 fn generate_stacked_plots(
     coupling_values: &Array1<f64>,
+    all_mode_couplings: &Vec<Vec<f64>>,
+    all_q_values: &Vec<Vec<Vector3D>>,
     e_config: &ExcitonConfig,
     n_rel: usize,
     n_ex_eig: usize,
     omega_0: f64,
-    q_values: &Vec<Vector3D>,
     pn_coupling: f64,
     pn_omega: f64,
     pn_k: &Array1<f64>,
@@ -364,10 +370,11 @@ fn generate_stacked_plots(
 ) {
     timed_println!("Generating stacked photonic character plots...");
     
-    // Load zero-coupling dielectric function for overlay
+    // Load zero-coupling dielectric function for overlay (use first q_values set)
     let zero_coupling_imag = {
+        let zero_couplings = vec![0.0; all_q_values[0].len()];
         let pp_config_zero = PPConfig::new(
-            e_config.clone(), n_rel, n_ex_eig, 0.0, omega_0, q_values.clone(),
+            e_config.clone(), n_rel, n_ex_eig, zero_couplings, omega_0, all_q_values[0].clone(),
             pn_coupling, pn_omega, pn_k.clone(), pn_n_fock, 1, 1
         );
         
@@ -405,14 +412,18 @@ fn generate_stacked_plots(
         }
     };
     
-    for &coupling in coupling_values.iter() {
-        if coupling.abs() < 1e-12 {
+    for (idx, &total_coupling) in coupling_values.iter().enumerate() {
+        if total_coupling.abs() < 1e-12 {
             continue; // Skip zero coupling
         }
         
+        // Use the actual mode couplings that were used during computation
+        let mode_couplings = &all_mode_couplings[idx];
+        let q_values = &all_q_values[idx];
+        
         // Create PP config for this coupling
         let pp_config_plot = PPConfig::new(
-            e_config.clone(), n_rel, n_ex_eig, coupling, omega_0, q_values.clone(),
+            e_config.clone(), n_rel, n_ex_eig, mode_couplings.clone(), omega_0, q_values.clone(),
             pn_coupling, pn_omega, pn_k.clone(), pn_n_fock, 1, 1
         );
         
@@ -431,7 +442,7 @@ fn generate_stacked_plots(
                 // Plot photonic character stacked area
                 let photonic_plot_name = format!(
                     "{}/dielectric_photonic_stacked_a0{}_V0{}_nrel{}_lmcoup{:.6}_nmodes{}_pncoup{}_npn{}_neig{}_gamma{:.1e}.svg",
-                    save_dir, e_config.a0, e_config.v0, n_rel, coupling, n_photon_modes, 
+                    save_dir, e_config.a0, e_config.v0, n_rel, total_coupling, n_photon_modes, 
                     pn_coupling, pn_n_fock, n_eig, gamma
                 );
                 
@@ -440,7 +451,7 @@ fn generate_stacked_plots(
                     &photonic_plot_name, zoomed, omega_range, Some(q_values),
                     zero_coupling_imag.as_ref()
                 ) {
-                    Ok(_) => timed_println!("Successfully plotted photonic stacked area for coupling {:.6}", coupling),
+                    Ok(_) => timed_println!("Successfully plotted photonic stacked area for coupling {:.6}", total_coupling),
                     Err(e) => timed_println!("Error plotting photonic stacked area: {}", e),
                 }
                 
@@ -448,7 +459,7 @@ fn generate_stacked_plots(
                 if pn_n_fock > 0 {
                     let phonon_plot_name = format!(
                         "{}/dielectric_phonon_stacked_a0{}_V0{}_nrel{}_lmcoup{:.6}_nmodes{}_pncoup{}_npn{}_neig{}_gamma{:.1e}.svg",
-                        save_dir, e_config.a0, e_config.v0, n_rel, coupling, n_photon_modes,
+                        save_dir, e_config.a0, e_config.v0, n_rel, total_coupling, n_photon_modes,
                         pn_coupling, pn_n_fock, n_eig, gamma
                     );
                     
@@ -457,12 +468,12 @@ fn generate_stacked_plots(
                         gamma, &phonon_plot_name, zoomed, omega_range, Some(q_values),
                         zero_coupling_imag.as_ref()
                     ) {
-                        Ok(_) => timed_println!("Successfully plotted phonon stacked area for coupling {:.6}", coupling),
+                        Ok(_) => timed_println!("Successfully plotted phonon stacked area for coupling {:.6}", total_coupling),
                         Err(e) => timed_println!("Error plotting phonon stacked area: {}", e),
                     }
                 }
             },
-            Err(e) => timed_println!("Could not load cached data for coupling {:.6}: {}", coupling, e),
+            Err(e) => timed_println!("Could not load cached data for coupling {:.6}: {}", total_coupling, e),
         }
     }
 }
@@ -472,7 +483,7 @@ fn generate_stacked_plots(
 fn run_dielectric_scan(e_config: ExcitonConfig) {
     // Check if we should calculate or just plot
     let calculate = true; // Set to false to skip calculation and just plot
-    let use_cached = true; // Set to true to use cached diagonalization results (allows testing different gamma values)
+    let use_cached = false; // Set to true to use cached diagonalization results (allows testing different gamma values)
 
     let zoomed = true;
 
@@ -484,46 +495,69 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
     // let coupling_values = Array1::linspace(0.00, 0.05, 1); // Scan from weak to strong coupling
     // let total_coupling_values = Array1::from_vec(vec![0.0, 0.0035, 0.006]); // Scan from weak to strong coupling
     // let total_coupling_values = Array1::from_vec(vec![0.0043, 0.0044, 0.0045, 0.0046, 0.0047, 0.0048]);
-    let total_coupling_values = Array1::from_vec(vec![0.0, 0.0035 / 4., 0.006 / 4.]);
+    // let total_coupling_values = Array1::from_vec(vec![0.0, 0.0035 / 4., 0.006 / 4.]);
 
     let omega_0 = 0.175;    // Photon frequency
     let n_modes = 32;
-    let coupling_values = total_coupling_values /( (n_modes) as f64);
-    let qz = omega_0 / C;
+    // let qz = omega_0 / C;
 
-    // Define photon modes
-    // let qx_values = Array1::linspace(-0.0008, 0.0008, n_modes); // Photon wavevectors along x
-    // let qy_values = Array1::linspace(-0.0008, 0.0008, n_modes);
-    let qx_values = Array1::linspace(-0.0002, 0.0002, n_modes); // Photon wavevectors along x
-    let qy_values = Array1::linspace(-0.0002, 0.0002, n_modes);
+    //////////// // Define photon modes on Cartesian grid in q-space
+    //////////// // let qx_values = Array1::linspace(-0.0008, 0.0008, n_modes); // Photon wavevectors along x
+    //////////// // let qy_values = Array1::linspace(-0.0008, 0.0008, n_modes);
+    //////////// let qx_values = Array1::linspace(-0.0002, 0.0002, n_modes); // Photon wavevectors along x
+    //////////// let qy_values = Array1::linspace(-0.0002, 0.0002, n_modes);
 
-    let q_values: Vec<Vector3D> = qx_values.iter().flat_map(|qx| {
-        qy_values.iter().map(|qy| {
-            Vector3D { x: *qx, y: *qy, z: qz }
-        })}).collect();
+    //////////// let q_values: Vec<Vector3D> = qx_values.iter().flat_map(|qx| {
+    ////////////     qy_values.iter().map(|qy| {
+    ////////////         Vector3D { x: *qx, y: *qy, z: qz }
+    ////////////     })}).collect();
 
-    // // 1D Array of q in x-direction
-    // let qx_values = Array1::linspace(-0.001, 0.001, n_modes*n_modes);
+    // Define photon modes based on effective modes paper
+    let omega_max = 0.2;
+    let reflectivities = [0.0, 0.999999, 0.9999999];
+    let d_omega = 0.0003;
 
-    // let q_values: Vec<Vector3D> = qx_values.iter().map(|qx| {
-    //         Vector3D { x: *qx, y: 0.0, z: qz }
-    //     }).collect();
+    // Generate effective modes and their couplings for each reflectivity
+    let mut all_q_values = Vec::new();
+    let mut all_mode_couplings = Vec::new();
+    let mut total_coupling_values = Vec::new();
+    for &reflectivity in reflectivities.iter() {
+        let (q_values, mode_couplings) = effective_modes::generate_modes(d_omega, n_modes, omega_0, omega_max, reflectivity);
+
+        let total_coupling: f64 = mode_couplings.iter().sum();
+        timed_println!("Reflectivity {}: generated {} modes with total coupling {:.6}", 
+                       reflectivity, q_values.len(), total_coupling);
+        all_q_values.push(q_values);
+        all_mode_couplings.push(mode_couplings);
+        total_coupling_values.push(total_coupling);
+    }
+    let total_coupling_values = Array1::from_vec(total_coupling_values);
     
+    // Validate that all reflectivities generate the same number of modes
+    let n_modes_first = all_q_values[0].len();
+    for (idx, q_vals) in all_q_values.iter().enumerate() {
+        if q_vals.len() != n_modes_first {
+            timed_println!("Warning: Reflectivity {} generated {} modes, but first generated {}. This may cause issues.",
+                          reflectivities[idx], q_vals.len(), n_modes_first);
+        }
+    }
+
     // Define phonon parameters
     // let pn_coupling = 0.01; // 114 cm^-1
     // let pn_coupling = 0.004385964912; // 50 cm^-1
     // let pn_coupling = 0.008771929825; // 100 cm^-1
-    // let pn_coupling = 0.0;
+    let pn_coupling = 0.0;
     let pn_omega = 0.0025; // 500 cm^-1
     // let pn_coupling = 0.001; // 11.4 cm^-1
-    let pn_coupling = 0.0005; // 11.4 cm^-1
+    // let pn_coupling = 0.0005; // 11.4 cm^-1
     let pn_k = arr1(&[0.,0.05]); // 1 nm^1
-    let pn_n_fock = 4;
+    let pn_n_fock = 1;
 
     // Parameters for dielectric function calculation
-    let n_eig = 4096;  // Number of eigenstates to use
+    let n_eig = 1024;  // Number of eigenstates to use
     let omegas = Array1::linspace(0.0, 0.5, 100000);  // Frequency range
-    let gamma = 5e-5;  // Broadening parameter ~0.9 meV
+    // let gamma = 5e-5;  // Broadening parameter ~0.9 meV
+    let gamma = d_omega;
 
     let omega_range;
     if !zoomed {
@@ -535,7 +569,7 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
     }
 
     // Create directory for saving results
-    let save_dir = "dielectric_scan";
+    let save_dir = "dielectric_scan/effective_modes/";
     std::fs::create_dir_all(save_dir).unwrap_or_else(|_| {
         timed_println!("Directory {} already exists or couldn't be created", save_dir);
     });
@@ -562,31 +596,32 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
     if !calculate {
         // Just plot the existing data
         timed_println!("Plotting dielectric function from existing data...");
-        
+        let q_values = &all_q_values[0];
+
         // Create reference parameters to match against
         let ref_params = visualization::DielectricParams {
             a0: e_config.a0,
             v0: e_config.v0,
             n_rel,
-            lm_coupling: 0.0, // This will be matched separately using coupling_values
-            n_modes: n_modes*n_modes,
+            lm_coupling: 0.0, // This will be matched separately using total_coupling_values
+            n_modes: q_values.len(),
             pn_coupling,
             pn_n_fock,
             n_eig,
             gamma,
         };
         
-        match plot_dielectric_function(save_dir, Some(&real_filename), DielectricPlotType::Real, omega_range, &coupling_values, Some(&ref_params), zoomed, Some(&q_values)) {
+        match plot_dielectric_function(save_dir, Some(&real_filename), DielectricPlotType::Real, omega_range, &total_coupling_values, Some(&ref_params), zoomed, Some(&q_values)) {
             Ok(_) => timed_println!("Successfully plotted real part of dielectric function"),
             Err(e) => timed_println!("Error plotting dielectric function: {}", e),
         }
         
-        match plot_dielectric_function(save_dir, Some(&imag_filename), DielectricPlotType::Imaginary, omega_range, &coupling_values, Some(&ref_params), zoomed, None) {
+        match plot_dielectric_function(save_dir, Some(&imag_filename), DielectricPlotType::Imaginary, omega_range, &total_coupling_values, Some(&ref_params), zoomed, None) {
             Ok(_) => timed_println!("Successfully plotted imaginary part of dielectric function"),
             Err(e) => timed_println!("Error plotting dielectric function: {}", e),
         }
         
-        match plot_dielectric_function(save_dir, Some(&both_filename), DielectricPlotType::Both, omega_range, &coupling_values, Some(&ref_params), zoomed, Some(&q_values)) {
+        match plot_dielectric_function(save_dir, Some(&both_filename), DielectricPlotType::Both, omega_range, &total_coupling_values, Some(&ref_params), zoomed, Some(&q_values)) {
             Ok(_) => timed_println!("Successfully plotted both parts of dielectric function"),
             Err(e) => timed_println!("Error plotting dielectric function: {}", e),
         }
@@ -594,7 +629,7 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
         return;
     }
 
-    timed_println!("Starting dielectric function scan for {} coupling values", coupling_values.len());
+    timed_println!("Starting dielectric function scan for {} total coupling values", total_coupling_values.len());
     
     // Get MPI rank and size from environment variables
     let world_size: usize = env::var("PMI_SIZE")
@@ -626,12 +661,14 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
     }
 
     // Distribute coupling values across ranks
-    let n_couplings = coupling_values.len();
+    let n_couplings = total_coupling_values.len();
     let couplings_per_rank = n_couplings / world_size;
     let start_idx = rank * couplings_per_rank;
     let end_idx = ((rank + 1) * couplings_per_rank).min(n_couplings);
     
-    let my_couplings: Vec<f64> = coupling_values.slice(s![start_idx..end_idx]).to_owned().to_vec();
+    let my_couplings: Vec<f64> = total_coupling_values.slice(s![start_idx..end_idx]).to_owned().to_vec();
+    let my_q_values: Vec<Vec<Vector3D>> = all_q_values[start_idx..end_idx].to_vec();
+    let my_mode_couplings: Vec<Vec<f64>> = all_mode_couplings[start_idx..end_idx].to_vec();
 
     // Create a unique temporary directory for this job
     let job_id = env::var("SLURM_JOB_ID")
@@ -644,12 +681,21 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
     });
 
     // For each coupling strength assigned to this rank
-    for (i, &coupling) in my_couplings.iter().enumerate() {
+    for (i, &total_coupling) in my_couplings.iter().enumerate() {
         let start_time = Instant::now();
+        let q_values = &my_q_values[i];
+        let mode_couplings = &my_mode_couplings[i];
+        
+        // Use the mode couplings directly from generate_modes
+        // They already have the correct values based on the effective mode density
+        let scaled_couplings: Vec<f64> = mode_couplings.clone();
+        
+        timed_println!("Processing reflectivity case with {} modes, total coupling = {:.6}", 
+                      q_values.len(), total_coupling);
         
         // Create PP config
         let pp_config = PPConfig::new(
-            e_config.clone(), n_rel, n_ex_eig, coupling, omega_0, q_values.clone(),
+            e_config.clone(), n_rel, n_ex_eig, scaled_couplings, omega_0, q_values.clone(),
             pn_coupling, pn_omega, pn_k.clone(), pn_n_fock, 1, 1
         );
 
@@ -691,7 +737,7 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
         let duration = end_time.duration_since(start_time);
         
         timed_println!("Completed coupling {:.3} ({}/{}) in {:?}", 
-                          coupling, i+1, my_couplings.len(), duration);
+                          total_coupling, i+1, my_couplings.len(), duration);
 
     }
     
@@ -725,25 +771,25 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
    
         // Plot the results
         timed_println!("Plotting dielectric function...");
-        timed_println!("Coupling values to plot: {:?}", coupling_values);
+        timed_println!("Coupling values to plot: {:?}", total_coupling_values);
         
         // Make a copy of coupling_values to ensure we're using the exact same values
-        let plot_coupling_values = coupling_values.clone();
+        let plot_coupling_values = total_coupling_values.clone();
         
         // Create reference parameters to match against
         let ref_params = visualization::DielectricParams {
             a0: e_config.a0,
             v0: e_config.v0,
             n_rel,
-            lm_coupling: 0.0, // This will be matched separately using coupling_values
-            n_modes: n_modes*n_modes,
+            lm_coupling: 0.0, // This will be matched separately using total_coupling_values
+            n_modes: all_q_values[0].len(),
             pn_coupling,
             pn_n_fock,
             n_eig,
             gamma,
         };
         
-        match plot_dielectric_function(save_dir, Some(&real_filename), DielectricPlotType::Real, omega_range, &plot_coupling_values, Some(&ref_params), zoomed, Some(&q_values)) {
+        match plot_dielectric_function(save_dir, Some(&real_filename), DielectricPlotType::Real, omega_range, &plot_coupling_values, Some(&ref_params), zoomed, Some(&all_q_values[0])) {
             Ok(_) => timed_println!("Successfully plotted real part of dielectric function to {}", real_filename),
             Err(e) => timed_println!("Error plotting dielectric function: {}", e),
         }
@@ -753,14 +799,15 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
             Err(e) => timed_println!("Error plotting dielectric function: {}", e),
         }
         
-        match plot_dielectric_function(save_dir, Some(&both_filename), DielectricPlotType::Both, omega_range, &plot_coupling_values, Some(&ref_params), zoomed, Some(&q_values)) {
+        match plot_dielectric_function(save_dir, Some(&both_filename), DielectricPlotType::Both, omega_range, &plot_coupling_values, Some(&ref_params), zoomed, Some(&all_q_values[0])) {
             Ok(_) => timed_println!("Successfully plotted both parts of dielectric function to {}", both_filename),
             Err(e) => timed_println!("Error plotting dielectric function: {}", e),
         }
 
         // Generate stacked photonic and phonon plots
         generate_stacked_plots(
-            &coupling_values, &e_config, n_rel, n_ex_eig, omega_0, &q_values,
+            &total_coupling_values, &all_mode_couplings, &all_q_values,
+            &e_config, n_rel, n_ex_eig, omega_0,
             pn_coupling, pn_omega, &pn_k, pn_n_fock, n_eig, &omegas, gamma,
             save_dir, zoomed, omega_range
         );

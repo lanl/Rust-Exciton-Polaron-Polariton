@@ -300,7 +300,7 @@ pub struct PPConfig {
     pub n_ex_eig: usize,
 
     // Polariton Parameters
-    pub lm_coupling: f64,
+    pub lm_couplings: Vec<f64>,
     pub omega_0: f64,
     pub q_values: Vec<Vector3D>,
 
@@ -326,7 +326,7 @@ impl PPConfig {
         n_ex_eig: usize,
 
         // Polariton Parameters
-        lm_coupling: f64,
+        lm_couplings: Vec<f64>,
         omega_0: f64,
         q_values: Vec<Vector3D>,
 
@@ -344,7 +344,7 @@ impl PPConfig {
             e_config,
             n_rel,
             n_ex_eig,
-            lm_coupling,
+            lm_couplings,
             omega_0,
             q_values,
             pn_coupling,
@@ -374,7 +374,9 @@ impl PPConfig {
         self.n_ex_eig.hash(&mut hasher);
         
         // Hash polariton parameters
-        self.lm_coupling.to_bits().hash(&mut hasher);
+        for &coupling in &self.lm_couplings {
+            coupling.to_bits().hash(&mut hasher);
+        }
         self.omega_0.to_bits().hash(&mut hasher);
         for q in &self.q_values {
             q.x.to_bits().hash(&mut hasher);

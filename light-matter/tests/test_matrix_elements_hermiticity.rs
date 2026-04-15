@@ -92,7 +92,7 @@ fn test_matrix_elements_hermiticity_single_mode() {
         BosonicHamiltonian::new(vec![mode.clone()]);
     
     // Create LM Hamiltonian with small coupling
-    let mut lm_ham = LMHamiltonian::new(exciton_ham, photon_ham, 0.01);
+    let mut lm_ham = LMHamiltonian::new(exciton_ham, photon_ham, vec![0.01]);
     
     // Initialize to compute matrix elements
     lm_ham.initialize(None);
@@ -184,7 +184,7 @@ fn test_matrix_elements_hermiticity_multiple_modes() {
         BosonicHamiltonian::new(vec![mode1, mode2]);
     
     // Create LM Hamiltonian
-    let mut lm_ham = LMHamiltonian::new(exciton_ham, photon_ham, 0.01);
+    let mut lm_ham = LMHamiltonian::new(exciton_ham, photon_ham, vec![0.01; 2]);
     
     // Initialize to compute matrix elements
     lm_ham.initialize(None);
@@ -258,7 +258,7 @@ fn test_matrix_elements_hermiticity_different_k() {
     let photon_ham: BosonicHamiltonian<Array2<f64>, FullBosons<Array2<f64>>> = 
         BosonicHamiltonian::new(vec![mode]);
     
-    let mut lm_ham = LMHamiltonian::new(exciton_ham, photon_ham, 0.01);
+    let mut lm_ham = LMHamiltonian::new(exciton_ham, photon_ham, vec![0.01]);
     
     // Test at k = (0.01, 0.01)
     lm_ham.initialize(Some(vec![0.01, 0.01]));
@@ -324,7 +324,7 @@ fn test_matrix_elements_diagonal_real() {
     let photon_ham: BosonicHamiltonian<Array2<f64>, FullBosons<Array2<f64>>> = 
         BosonicHamiltonian::new(vec![mode]);
     
-    let mut lm_ham = LMHamiltonian::new(exciton_ham, photon_ham, 0.01);
+    let mut lm_ham = LMHamiltonian::new(exciton_ham, photon_ham, vec![0.01]);
     lm_ham.initialize(None);
     
     let matrix_elements = &lm_ham.matrix_elements;
@@ -397,7 +397,7 @@ fn test_matrix_elements_size_consistency() {
     let photon_ham: BosonicHamiltonian<Array2<f64>, FullBosons<Array2<f64>>> = 
         BosonicHamiltonian::new(vec![mode]);
     
-    let mut lm_ham = LMHamiltonian::new(exciton_ham, photon_ham, 0.01);
+    let mut lm_ham = LMHamiltonian::new(exciton_ham, photon_ham, vec![0.01; 1]);
     lm_ham.initialize(None);
     
     let matrix_elements = &lm_ham.matrix_elements;

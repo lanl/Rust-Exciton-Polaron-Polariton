@@ -34,7 +34,7 @@ where M: MatrixOps, B: Boson<M>
         pp_config.e_config.a0,
         pp_config.e_config.v0,
         pp_config.n_rel,
-        pp_config.lm_coupling,
+        pp_config.lm_couplings.iter().sum::<f64>(),
         pp.polariton.photon.boson.get_modes().len(),
         pp_config.pn_coupling,
         pp_config.pn_n_fock,
@@ -58,7 +58,7 @@ where M: MatrixOps, B: Boson<M>
         pp_config.e_config.a0,
         pp_config.e_config.v0,
         pp_config.n_rel,
-        pp_config.lm_coupling,
+        pp_config.lm_couplings.iter().sum::<f64>(),
         pp.polariton.photon.boson.get_modes().len(),
         pp_config.pn_coupling,
         pp_config.pn_n_fock,
@@ -391,10 +391,17 @@ where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum + ConvertF
     let mut photonic_chars: Vec<f64> = Vec::with_capacity(n_eig);
     let mut phonon_numbers: Vec<f64> = Vec::with_capacity(n_eig);
 
-    let lm_eye = M::eye(n_ex_eig * n_ph);
-
-    // Single phonon mode number operator (mode index 0)
-    let phonon_number_op = lm_eye.kron(&pp.phonon.boson.adag_a(0));
+    // Check if the Hamiltonian actually includes phonon degrees of freedom
+    // When pn_coupling == 0, build_pp_hamiltonian returns early without phonon space
+    let has_phonon_dof = pp_config.pn_coupling.abs() >= f64::EPSILON && n_pn > 1;
+    
+    // Only create phonon number operator if phonons are actually present in the Hamiltonian
+    let phonon_number_op = if has_phonon_dof {
+        let lm_eye = M::eye(n_ex_eig * n_ph);
+        Some(lm_eye.kron(&pp.phonon.boson.adag_a(0)))
+    } else {
+        None
+    };
 
     for idx in 0..n_eig {
         let vec = pp_vecs.column(idx).iter()
@@ -414,10 +421,16 @@ where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum + ConvertF
         photonic_chars.push(band_structure::calculate_photonic_character(&pp, &pp_vecs.column(idx).to_owned()));
 
         // Phonon number expectation
-        let mut tmp = Array1::zeros(vec.len()); // zero vector of same shape
-        phonon_number_op.apply(vec.as_slice().unwrap(), tmp.as_slice_mut().unwrap());
-        let val: M::Scalar = vec_dag.dot(&tmp);
-        phonon_numbers.push(<M as MatrixOps>::Scalar::norm(val));
+        // Only compute if phonons are actually present in the Hamiltonian
+        if let Some(ref op) = phonon_number_op {
+            let mut tmp = Array1::zeros(vec.len()); // zero vector of same shape
+            op.apply(vec.as_slice().unwrap(), tmp.as_slice_mut().unwrap());
+            let val: M::Scalar = vec_dag.dot(&tmp);
+            phonon_numbers.push(<M as MatrixOps>::Scalar::norm(val));
+        } else {
+            // No phonon degrees of freedom, phonon number is always zero
+            phonon_numbers.push(0.0);
+        }
     }
 
     (pp_vals, x_pp, photonic_chars, phonon_numbers, ground_state_index)
