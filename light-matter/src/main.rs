@@ -353,10 +353,13 @@ fn generate_stacked_plots(
     coupling_values: &Array1<f64>,
     all_mode_couplings: &Vec<Vec<f64>>,
     all_q_values: &Vec<Vec<Vector3D>>,
+    reflectivities: &[f64],
     e_config: &ExcitonConfig,
     n_rel: usize,
     n_ex_eig: usize,
     omega_0: f64,
+    d_omega: f64,
+    omega_max: f64,
     pn_coupling: f64,
     pn_omega: f64,
     pn_k: &Array1<f64>,
@@ -373,9 +376,10 @@ fn generate_stacked_plots(
     // Load zero-coupling dielectric function for overlay (use first q_values set)
     let zero_coupling_imag = {
         let zero_couplings = vec![0.0; all_q_values[0].len()];
-        let pp_config_zero = PPConfig::new(
+        let pp_config_zero = PPConfig::new_with_effective_modes(
             e_config.clone(), n_rel, n_ex_eig, zero_couplings, omega_0, all_q_values[0].clone(),
-            pn_coupling, pn_omega, pn_k.clone(), pn_n_fock, 1, 1
+            pn_coupling, pn_omega, pn_k.clone(), pn_n_fock, 1, 1,
+            d_omega, omega_max, reflectivities[0]
         );
         
         let pp_zero: PPHamiltonian<ComposedOperator<c64>, SingExBosons<ComposedOperator<c64>>> = 
@@ -420,11 +424,13 @@ fn generate_stacked_plots(
         // Use the actual mode couplings that were used during computation
         let mode_couplings = &all_mode_couplings[idx];
         let q_values = &all_q_values[idx];
+        let reflectivity = reflectivities[idx];
         
-        // Create PP config for this coupling
-        let pp_config_plot = PPConfig::new(
+        // Create PP config for this coupling with effective mode parameters
+        let pp_config_plot = PPConfig::new_with_effective_modes(
             e_config.clone(), n_rel, n_ex_eig, mode_couplings.clone(), omega_0, q_values.clone(),
-            pn_coupling, pn_omega, pn_k.clone(), pn_n_fock, 1, 1
+            pn_coupling, pn_omega, pn_k.clone(), pn_n_fock, 1, 1,
+            d_omega, omega_max, reflectivity
         );
         
         let pp_plot: PPHamiltonian<ComposedOperator<c64>, SingExBosons<ComposedOperator<c64>>> = 
@@ -809,8 +815,8 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
 
         // Generate stacked photonic and phonon plots
         generate_stacked_plots(
-            &total_coupling_values, &all_mode_couplings, &all_q_values,
-            &e_config, n_rel, n_ex_eig, omega_0,
+            &total_coupling_values, &all_mode_couplings, &all_q_values, &reflectivities,
+            &e_config, n_rel, n_ex_eig, omega_0, d_omega, omega_max,
             pn_coupling, pn_omega, &pn_k, pn_n_fock, n_eig, &omegas, gamma,
             save_dir, zoomed, omega_range
         );
