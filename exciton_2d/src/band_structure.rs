@@ -6,11 +6,12 @@
 use crate::hamiltonian::FullHamiltonian;
 use crate::utils::apply_symmetry;
 use log::info;
-use ndarray::Array1;
+use matrix_ops::{MatrixOps, Diagonalize, ConvertFrom, MatrixOpsError};
+use num_complex::Complex64;
+use ndarray::{Array1, Array2};
 use core::panic;
 use std::collections::HashMap;
 use std::path::Path;
-use rayon::{prelude::*, ThreadPoolBuilder};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::time::Instant;
 use serde::{Serialize, Deserialize};
@@ -110,8 +111,8 @@ impl ColorBandData {
 /// relative coordinate state contributes most to the eigenstate.
 ///
 /// Note: Eigenvectors are complex due to -i*sin matrix elements.
-pub fn calculate_n_expectation(
-    full_ham: &FullHamiltonian,
+pub fn calculate_n_expectation<M: MatrixOps>(
+    full_ham: &FullHamiltonian<M>,
     eigenvector: &Array1<num_complex::Complex64>,
     n_rel_states: usize
 ) -> f64 {
@@ -164,8 +165,8 @@ pub fn calculate_n_expectation(
 /// bands to visualize their character.
 ///
 /// Note: With sine matrix elements, parity is not conserved. All states are included.
-pub fn calculate_n_colored_band_structure(
-    full_ham: &FullHamiltonian,
+pub fn calculate_n_colored_band_structure<M: MatrixOps>(
+    full_ham: &FullHamiltonian<M>,
     n_points: usize,
     n_rel_states: usize,
     n_bands: usize,
@@ -173,7 +174,11 @@ pub fn calculate_n_colored_band_structure(
     v0: f64,
     save_dir: &str,
     recalculate: bool
-) -> (Vec<Vec<f64>>, Vec<Array1<f64>>, Vec<Vec<f64>>) {
+) -> Result<(Vec<Vec<f64>>, Vec<Array1<f64>>, Vec<Vec<f64>>), MatrixOpsError> 
+where 
+    M::Scalar: ConvertFrom<Complex64>,
+    M: Diagonalize,
+{
     // Create save directory if it doesn't exist
     std::fs::create_dir_all(save_dir).unwrap_or_else(|_| {});
     
@@ -192,7 +197,7 @@ pub fn calculate_n_colored_band_structure(
     if !recalculate && Path::new(&filename).exists() {
         info!("Loading cached n-colored band structure data from {}", filename);
         match ColorBandData::load_from_file(&filename) {
-            Ok(data) => return data.to_results(),
+            Ok(data) => return Ok(data.to_results()),
             Err(e) => info!("Failed to load cached data: {}, recalculating...", e)
         }
     }
@@ -301,13 +306,13 @@ pub fn calculate_n_colored_band_structure(
         
         // Diagonalize the Hamiltonian
         let (eigvals, eigvecs, _,_) = 
-            full_ham_local.diagonalize_full_hamiltonian(n_rel_states, n_bands);
+            full_ham_local.diagonalize_full_hamiltonian(n_rel_states, n_bands)?;
         
         // Calculate n-expectation for each eigenstate
         let n_expectation: Vec<f64> = (0..eigvals.len())
             .map(|i| calculate_n_expectation(
                 &full_ham_local, 
-                &eigvecs[i],
+                &eigvecs.column(i).to_owned(),
                 n_rel_states
             ))
             .collect();
@@ -335,7 +340,7 @@ pub fn calculate_n_colored_band_structure(
         // Find the corresponding unique result
         for (idx, eigvals, n_expectation) in &unique_results {
             if *idx == unique_idx {
-                eigvals_list[i] = eigvals.clone();
+                eigvals_list[i] = eigvals.iter().map(|&val| val.re).collect();
                 n_expectation_list[i] = n_expectation.clone();
                 break;
             }
@@ -349,7 +354,7 @@ pub fn calculate_n_colored_band_structure(
         Err(e) => info!("Failed to save n-colored band structure data: {}", e)
     }
 
-    (k_points, eigvals_list, n_expectation_list)
+    Ok((k_points, eigvals_list, n_expectation_list))
 }
 
 /// Main calculator for band structure calculations
@@ -357,14 +362,18 @@ pub fn calculate_n_colored_band_structure(
 /// This struct provides methods for calculating band structures of excitons
 /// in 2D materials with periodic potentials. It handles the calculation of
 /// eigenvalues and eigenvectors at different k-points in the Brillouin zone.
-pub struct BandStructureCalculator {
-    pub full_ham: FullHamiltonian,
+pub struct BandStructureCalculator<M: MatrixOps> {
+    pub full_ham: FullHamiltonian<M>,
     pub a0: f64,
     pub save_dir: String,
     pub verbose: bool,
 }
 
-impl BandStructureCalculator {
+impl<M: MatrixOps> BandStructureCalculator<M> 
+where 
+    M::Scalar: ConvertFrom<Complex64>,
+    M: Diagonalize,
+{
     /// Creates a new band structure calculator
     ///
     /// # Arguments
@@ -375,7 +384,7 @@ impl BandStructureCalculator {
     ///
     /// # Returns
     /// A new BandStructureCalculator instance
-    pub fn new(full_ham: FullHamiltonian, a0: f64, save_dir: String, verbose: bool) -> Self {
+    pub fn new(full_ham: FullHamiltonian<M>, a0: f64, save_dir: String, verbose: bool) -> Self {
         Self {
             full_ham,
             a0,
@@ -430,7 +439,7 @@ impl BandStructureCalculator {
         k_point: &[f64],
         n_rel_states: usize,
         n_bands: usize,
-    ) -> (Array1<f64>, Vec<Array1<num_complex::Complex64>>) {
+    ) -> Result<(Array1<Complex64>, Array2<Complex64>), MatrixOpsError> {
         // Store original K value
         let original_k = self.full_ham.k.clone();
         
@@ -442,13 +451,13 @@ impl BandStructureCalculator {
         let (eigvals, eigvecs, _, _) = full_ham.diagonalize_full_hamiltonian(
             n_rel_states,
             n_bands,
-        );
+        )?;
         
         // Restore original K value
         let mut full_ham = self.full_ham.clone();
         full_ham.k = original_k;
         
-        (eigvals, eigvecs)
+        Ok((eigvals, eigvecs))
     }
     
     /// Calculates the band structure along high-symmetry paths
@@ -585,26 +594,21 @@ impl BandStructureCalculator {
             .template("[{elapsed_precise}] {bar:40.cyan/blue} {pos:>7}/{len:7} {msg}")
             .unwrap());
 
-        let num_threads = 2;
-        
-        // Create a custom thread pool for this calculation
-        let pool = ThreadPoolBuilder::new()
-            .num_threads(num_threads)  // Adjust as needed
-            .build()
-            .unwrap();
-        
-        // let _limiter = ThreadLimiter::new("OPENBLAS_NUM_THREADS", "1");
+        let mut unique_eigvals = Vec::with_capacity(unique_k_points.len());
 
-        let unique_eigvals: Vec<_> = pool.install(|| {
-            // Parallelize the computation
-            unique_k_points.par_iter()
-                .map(|k_point| {
-                    let (evals, _) = self.calculate_at_k_point(k_point, n_rel_states, n_bands);
-                    progress_bar.inc(1); // Increment the progress bar
-                    evals
-                })
-                .collect()
-        });
+        for k_point in &unique_k_points {
+            let (evals, _) = self
+                .calculate_at_k_point(k_point, n_rel_states, n_bands)
+                .unwrap();
+
+            unique_eigvals.push(
+                evals.iter()
+                    .map(|&val| val.re)
+                    .collect::<Array1<f64>>()
+            );
+
+            progress_bar.inc(1);
+        }
 
         // Mark the progress bar as finished
         progress_bar.finish();
@@ -615,8 +619,8 @@ impl BandStructureCalculator {
         // If you want more detailed timing:
         let seconds = elapsed.as_secs();
         let millis = elapsed.subsec_millis();
-        println!("Time taken: {} seconds and {} milliseconds using {} threads", 
-                seconds, millis, num_threads);
+        println!("Time taken: {} seconds and {} milliseconds", 
+                seconds, millis);
 
         
         // Reconstruct full band structure using symmetry

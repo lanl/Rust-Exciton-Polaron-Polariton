@@ -5,7 +5,8 @@ use std::{collections::HashMap, f64::consts::PI};
 use rayon::prelude::*;
 use log::{warn, info};
 use ndarray::{Array1, Array2};
-use crate::utils::{BosonMode, HermitianConjugate, MatrixOps};
+use crate::utils::{BosonMode};
+use matrix_ops::{HermitianConjugate, MatrixOps};
 use std::fs::{self, File};
 use std::io::{Write, Read};
 use std::path::Path;
@@ -266,7 +267,7 @@ impl LMMatrixElementArray {
     pub fn populate_tay_mat_elements(
         &mut self,
         all_q_ind: &Vec<Vec<i32>>,
-        e_vecs: &Vec<Array1<c64>>,
+        e_vecs: &Array2<c64>,
         modes: &Vec<BosonMode>,
         n_com: usize,
         mu: f64,
@@ -277,7 +278,7 @@ impl LMMatrixElementArray {
     pub fn populate_tay_mat_elements_with_cache(
         &mut self,
         all_q_ind: &Vec<Vec<i32>>,
-        e_vecs: &Vec<Array1<c64>>,
+        e_vecs: &Array2<c64>,
         modes: &Vec<BosonMode>,
         n_com: usize,
         mu: f64,
@@ -285,7 +286,7 @@ impl LMMatrixElementArray {
         force_recompute: bool,
         config_hash: u64,
     ) {
-        let n_rel = e_vecs[0].len() / n_com;
+        let n_rel = e_vecs.nrows() / n_com;
         
         // Try to load from cache if cache_dir is provided and not forcing recompute
         if let Some(dir) = cache_dir {
@@ -536,16 +537,14 @@ impl LMMatrixElementArray {
     pub fn to_exciton_basis(
         &self,
         rel_matrix: &Array2<c64>,
-        e_vecs: &Vec<Array1<c64>>,
+        e_vecs: &Array2<c64>,
         n_com: usize,
     ) -> Array2<c64>{
         let com_identity = Array2::eye(n_com);
 
         let matrix = rel_matrix.kron(&com_identity);
 
-        let transform = Array2::from_shape_fn((e_vecs[0].len(), e_vecs.len()), |(i_row,i_column)| {
-            e_vecs[i_column][i_row]
-        });
+        let transform = e_vecs;
 
         let transform_dag = &transform.dag();
 
@@ -701,14 +700,14 @@ impl LMMatrixElementArray {
     // Only returns the sine term for phonon modes
     pub fn phonon_mat_elements(
         &self,
-        e_vecs: &Vec<Array1<c64>>,
+        e_vecs: &Array2<c64>,
         modes: &Vec<BosonMode>,
         mu: f64,
         n_com: usize,
     ) -> Vec<Array2<c64>>{
 
         // let n_eigs = e_vecs.len();
-        let n_rel = e_vecs[0].len() / n_com;
+        let n_rel = e_vecs.nrows() / n_com;
 
         // Get Laguerre coefficients for radial integrals
         let (lag_coeffs, states) = &self.get_laguerre_coeffs(n_rel);

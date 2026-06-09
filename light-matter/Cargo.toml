@@ -29,7 +29,8 @@ rand = "0.9.2"
 scilib = "1.0.0"
 num_threads = "0.1.7"
 num_cpus = "1.17.0"
-rust_slepc_bindings = {path = "../slepc_rust"}
+slepc-rs = {path = "../slepc_rust"}
+matrix-ops ={ path = "../matrix_ops"}
 chrono = "0.4"
 colored ="3.0.0"
 

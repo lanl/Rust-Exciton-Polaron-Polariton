@@ -13,12 +13,15 @@ use crate::visualization::{plot_band_structure, plot_rel_eigenstate, plot_spectr
 use crate::band_structure::calculate_n_colored_band_structure;
 
 use log::{info, warn};
+use matrix_ops::MatrixOps;
 use ndarray::{Array1, Array2};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::time::Instant;
 use ordered_float::OrderedFloat;
+use matrix_ops::{ConvertFrom, Diagonalize, MatrixOpsError};
+use num_complex::Complex64;
 
 /// Main system class for exciton simulations in 2D materials
 ///
@@ -31,7 +34,7 @@ use ordered_float::OrderedFloat;
 ///
 /// It provides methods for solving the exciton Hamiltonian, calculating band structures,
 /// and visualizing results.
-pub struct Exciton2DGridSystem {
+pub struct Exciton2DGridSystem<M: MatrixOps> {
     pub n_kappa: usize,
     pub a0: f64,
     pub v0: f64,
@@ -54,11 +57,15 @@ pub struct Exciton2DGridSystem {
     pub vector_sum_to_index:  HashMap<(usize, (OrderedFloat<f64>, OrderedFloat<f64>)), usize>,
     pub matrix_elem_calc: MatrixElementCalculator,
     pub rel_ham: RelativeHamiltonian,
-    pub full_ham: FullHamiltonian,
-    pub band_calc: BandStructureCalculator,
+    pub full_ham: FullHamiltonian<M>,
+    pub band_calc: BandStructureCalculator<M>,
 }
 
-impl Exciton2DGridSystem {
+impl<M: MatrixOps> Exciton2DGridSystem<M> 
+where 
+    M::Scalar: ConvertFrom<Complex64>,
+    M: Diagonalize,
+{
     /// Creates a new exciton system with the specified parameters
     ///
     /// # Arguments
@@ -91,7 +98,8 @@ impl Exciton2DGridSystem {
         n_jobs: i32,
         use_gpu: bool,
         batch_size: usize,
-    ) -> Self {
+    ) -> Self 
+    {
         // Create save directory if it doesn't exist
         if !Path::new(&save_dir).exists() {
             match fs::create_dir_all(&save_dir) {
@@ -340,7 +348,11 @@ impl Exciton2DGridSystem {
         &self,
         n_rel_states: usize,
         k_eigvals: usize,
-    ) -> (Array1<f64>, Vec<Array1<num_complex::Complex64>>, Array1<f64>, Array2<f64>) {
+    ) -> Result<(Array1<Complex64>, Array2<Complex64>, Array1<f64>, Array2<f64>), MatrixOpsError> 
+    where 
+        M::Scalar: ConvertFrom<Complex64>,
+        M: Diagonalize,
+    {
         self.full_ham.diagonalize_full_hamiltonian(n_rel_states, k_eigvals)
     }
     
@@ -442,7 +454,7 @@ impl Exciton2DGridSystem {
             self.v0,
             &self.save_dir,
             recalculate_bands,
-        )
+        ).unwrap()
     }
 
     /// Plots the band structure with n-expectation values as colors

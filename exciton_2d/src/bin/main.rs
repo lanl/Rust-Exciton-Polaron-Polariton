@@ -6,6 +6,9 @@
 use clap::Parser;
 use exciton_2d::{Exciton2DGridSystem, ExcitonConfig};
 use log::{LevelFilter};
+use matrix_ops::{Diagonalize, MatrixOps, ConvertFrom};
+use ndarray::{Array1, Array2};
+use num_complex::Complex64;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -75,7 +78,10 @@ struct Args {
 /// # Arguments
 /// * `system` - The exciton system
 /// * `args` - Command-line arguments
-fn plot_n_colored_bands(system: &Exciton2DGridSystem, args: &Args) {
+fn plot_n_colored_bands<M: MatrixOps + Diagonalize>(system: &Exciton2DGridSystem<M>, args: &Args) 
+where 
+    M::Scalar: ConvertFrom<Complex64>,    
+{
     println!("Calculating n-colored band structure...");
     
     // Calculate band structure with n-expectation values
@@ -133,7 +139,7 @@ fn _scan_parameters(args: &Args) {
             };
             
             // Create the 2D exciton system
-            let system = Exciton2DGridSystem::from_config(config);
+            let system: Exciton2DGridSystem<Array2<Complex64>> = Exciton2DGridSystem::from_config(config);
             
             // Solve for the relative coordinate eigenstates
             let (rel_eigvals, rel_eigvecs, rel_pars) = system.solve_rel_hamiltonian(16);
@@ -150,7 +156,7 @@ fn _scan_parameters(args: &Args) {
             let (eigvals, _, _, _) = system.diagonalize_full_hamiltonian(
                 args.n_rel_states,
                 args.n_bands
-            );
+            ).unwrap();
             
             println!("\nFull Hamiltonian eigenvalues:");
             for i in 0..eigvals.len() {
@@ -177,11 +183,11 @@ fn _scan_parameters(args: &Args) {
 }
 
 
-fn gamma_point_eigenstates(system: &Exciton2DGridSystem, args: &Args) {
+fn gamma_point_eigenstates(system: &Exciton2DGridSystem<Array2<Complex64>>, args: &Args) {
     
-    let (e_vals, _,_,_) = system.diagonalize_full_hamiltonian(args.n_rel_states, args.n_bands);
+    let (e_vals, _,_,_) = system.diagonalize_full_hamiltonian(args.n_rel_states, args.n_bands).unwrap();
 
-    let diffs = &e_vals - e_vals[0];
+    let diffs = &e_vals.iter().map(|x| x.re).collect::<Array1<_>>() - e_vals[0].re;
 
     println!("Exciton transitions at gamma point are: \n {:?}", diffs);
 }

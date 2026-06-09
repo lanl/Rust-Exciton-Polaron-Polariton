@@ -4,6 +4,8 @@
 //! eigenstates, and calculates the band structure.
 
 use exciton_2d::{Exciton2DGridSystem, ExcitonConfig};
+use ndarray::Array2;
+use slepc::Complex64;
 use std::path::PathBuf;
 
 fn main() {
@@ -26,7 +28,7 @@ fn main() {
     };
     
     // Create the 2D exciton system
-    let system = Exciton2DGridSystem::from_config(config);
+    let system: Exciton2DGridSystem<Array2<Complex64>> = Exciton2DGridSystem::from_config(config);
     
     // Solve for the relative coordinate eigenstates
     let (rel_eigvals, rel_eigvecs, rel_pars) = system.solve_rel_hamiltonian(16);

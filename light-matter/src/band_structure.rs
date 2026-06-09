@@ -12,10 +12,11 @@ use std::time::Instant;
 use colored::Colorize;
 use std::iter::Sum;
 use ndarray_linalg::c64;
+use matrix_ops::{ConvertFrom, DiagonalizationOptions, Diagonalize, MatrixOps, MatrixOpsError, Sqrt};
 
 use crate::timed_println;
 
-use crate::utils::{ConvertFrom, MatrixOps, PPConfig, SolverOperator, Sqrt};
+use crate::utils::{PPConfig};
 use crate::hamiltonians::{PPHamiltonian, Boson};
 
 /// Calculate the photonic character of an eigenstate
@@ -153,7 +154,7 @@ where M: MatrixOps
 /// MPI might already be initialized by other libraries (like PETSc/SLEPc).
 /// 
 /// It falls back to environment variables if the mpi crate has issues.
-pub fn calculate_color_band_structure_mpi_simple<M,B>(
+pub fn calculate_color_band_structure_mpi<M,B>(
     pp: &mut PPHamiltonian<M,B>,
     n_k_points: usize,
     n_eig: usize,
@@ -161,8 +162,11 @@ pub fn calculate_color_band_structure_mpi_simple<M,B>(
     pp_config: &PPConfig,
     use_cached: bool,
     zoomed: bool
-) -> (Vec<Vec<f64>>, Vec<Array1<f64>>, Vec<Vec<f64>>) 
-where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum + ConvertFrom<f64> + ConvertFrom<c64> , B: Boson<M>
+) -> Result<(Vec<Vec<f64>>, Vec<Array1<f64>>, Vec<Vec<f64>>), MatrixOpsError> 
+where 
+    M: MatrixOps + Diagonalize, 
+    M::Scalar: Sqrt + Sum + ConvertFrom<f64> + ConvertFrom<c64> , 
+    B: Boson<M>
 {
     use std::env;
 
@@ -239,7 +243,7 @@ where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum + ConvertF
     if rank == 0 && use_cached && Path::new(&filename).exists() {
         timed_println!("Loading cached color band structure data from {}", filename);
         match ColorBandData::load_from_file(&filename) {
-            Ok(data) => return data.to_results(),
+            Ok(data) => return Ok(data.to_results()),
             Err(e) => timed_println!("Failed to load cached data: {}, recalculating...", e)
         }
     }
@@ -298,9 +302,14 @@ where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum + ConvertF
 
     for (global_idx, k) in my_k_points.iter() {
         // pp.update_k(k.clone());
-        let h_pp = pp.build_pp_hamiltonian(Some(k.clone()));
+        let h_pp = pp.build_pp_hamiltonian(Some(k.clone()))?;
 
-        let (eigvals, eigvecs) = h_pp.diagonalize(Some(n_eig), None, prev_eigvecs.as_ref());
+        let mut option = DiagonalizationOptions::smallest_real(n_eig);
+        option.initial_guess = prev_eigvecs.clone();
+
+        let result = h_pp.diagonalize(option)?;
+
+        let (eigvals, eigvecs) = result.into_arrays_hermitian();
         
         let photonic_character: Vec<f64> = (0..n_eig)
             .map(|i| calculate_photonic_character(&pp, &eigvecs.column(i).to_owned()))
@@ -431,9 +440,9 @@ where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum + ConvertF
         
         let _ = std::fs::remove_dir_all(&temp_dir);
         
-        (k_points, sorted_eigvals, sorted_photonic)
+        Ok((k_points, sorted_eigvals, sorted_photonic))
     } else {
-        (vec![], vec![], vec![])
+        Ok((vec![], vec![], vec![]))
     }
 }
 

@@ -7,12 +7,13 @@ use crate::grid::Grid;
 use crate::matrix_elements::MatrixElementCalculator;
 
 use log::{info, warn};
+use matrix_ops::{ConvertFrom, MatrixOps, MatrixOpsError, DiagonalizationOptions, Diagonalize};
 use ndarray::{Array1, Array2};
-use ndarray_linalg::Eigh;
 use num_complex::Complex64;
 use std::collections::HashMap;
 // use std::path::Path;
 use std::time::Instant;
+use sprs::TriMat;
 use ordered_float::OrderedFloat;
 
 /// Hamiltonian for the relative coordinate motion of an exciton
@@ -389,7 +390,7 @@ impl RelativeHamiltonian {
 /// and diagonalizing the full Hamiltonian matrix, which describes both the internal
 /// motion of the electron-hole pair and its motion through the periodic potential.
 #[derive(Clone)]
-pub struct FullHamiltonian {
+pub struct FullHamiltonian <M:MatrixOps>{
     pub rel_ham: RelativeHamiltonian,
     pub matrix_elem_calc: MatrixElementCalculator,
     pub kappa_vectors: Vec<Vec<f64>>,
@@ -398,9 +399,13 @@ pub struct FullHamiltonian {
     pub m: f64,
     pub k: Vec<f64>,
     pub verbose: bool,
+    _phantom: std::marker::PhantomData<M>,
 }
 
-impl FullHamiltonian {
+impl<M: MatrixOps> FullHamiltonian<M> 
+where 
+    M::Scalar: ConvertFrom<Complex64> + ConvertFrom<f64>
+{
     /// Creates a new full Hamiltonian
     ///
     /// # Arguments
@@ -431,6 +436,7 @@ impl FullHamiltonian {
             m,
             k,
             verbose,
+            _phantom: std::marker::PhantomData,
         }
     }
     
@@ -445,7 +451,10 @@ impl FullHamiltonian {
     ///
     /// # Returns
     /// * Tuple containing the complex Hamiltonian matrix, relative eigenvalues, and relative eigenvectors
-    pub fn build_hamiltonian_no_k(&self, n_rel_states: usize) -> (Array2<Complex64>, Array1<f64>, Array2<f64>) {
+    pub fn build_hamiltonian_no_k(&self, n_rel_states: usize) -> Result<(M, Array1<f64>, Array2<f64>), MatrixOpsError>
+    where 
+        M::Scalar: ConvertFrom<Complex64>
+    {
         // Solve for relative coordinate eigenstates
         let (rel_eigvals, rel_eigvecs, _parities) = self.rel_ham.solve(n_rel_states);
         
@@ -503,15 +512,17 @@ impl FullHamiltonian {
         let start_time = Instant::now();
         
         // Create a dense complex matrix for the Hamiltonian
-        let mut h_full = Array2::zeros((dim, dim));
-        
+        let mut h_full: M;
+        let eye_com = M::eye(n_com_states);
+
+        h_full = eye_com.kron(&M::from_diag(rel_eigvals.as_slice().unwrap())?);
+
+
+        let mut h_int = TriMat::new((dim, dim));
         // Loop over all basis states
         for i_rel in 0..n_rel_states_used {
             for i_com in 0..n_com_states {
                 let i = i_rel * n_com_states + i_com;
-                
-                // Add diagonal term (real)
-                h_full[[i, i]] = Complex64::new(rel_eigvals[i_rel], 0.0);
                 
                 // Off-diagonal terms from the potential - only for non-zero w_kappa
                 for (&kappa_pot_tuple, &v0) in &w_kappa_tuples {
@@ -527,7 +538,7 @@ impl FullHamiltonian {
                                 // Add to matrix if non-zero
                                 // Matrix element is -i * sin(κ·r), so multiply by -i
                                 if matrix_element.abs() > 1e-12 {
-                                    h_full[[i, j]] += Complex64::new(0.0, -v0 * matrix_element);
+                                    h_int.add_triplet(i, j, M::Scalar::convert_from(Complex64::new(0.0, -v0 * matrix_element)).unwrap());
                                 }
                             }
                         }
@@ -535,32 +546,14 @@ impl FullHamiltonian {
                 }
             }
         }
+
+        h_full = h_full.add(&M::from_trimat(&h_int)?);
         
         if self.verbose {
             info!("Full Hamiltonian built in {:.2} seconds", start_time.elapsed().as_secs_f64());
-            
-            // Debug: Check if there are any off-diagonal elements
-            let mut diag_sum = 0.0;
-            let mut offdiag_sum = 0.0;
-            
-            for i in 0..dim {
-                for j in 0..dim {
-                    if i == j {
-                        diag_sum += h_full[[i, j]].norm();
-                    } else {
-                        offdiag_sum += h_full[[i, j]].norm();
-                    }
-                }
-            }
-            
-            info!("Sum of diagonal elements (magnitude): {}", diag_sum);
-            info!("Sum of off-diagonal elements (magnitude): {}", offdiag_sum);
-            if offdiag_sum < 1e-6 {
-                warn!("WARNING: Almost no coupling between states!");
-            }
         }
         
-        (h_full, rel_eigvals, rel_eigvecs)
+        Ok((h_full, rel_eigvals, rel_eigvecs))
     }
     
     /// Builds the full Hamiltonian including center-of-mass kinetic energy
@@ -575,32 +568,28 @@ impl FullHamiltonian {
     ///
     /// # Returns
     /// * Tuple containing the complex Hamiltonian matrix, relative eigenvalues, and relative eigenvectors
-    pub fn build_full_hamiltonian(&self, n_rel_states: usize) -> (Array2<Complex64>, Array1<f64>, Array2<f64>) {
+    pub fn build_full_hamiltonian(&self, n_rel_states: usize) -> Result<(M, Array1<f64>, Array2<f64>), MatrixOpsError> {
         // Build the Hamiltonian without center-of-mass kinetic energy
-        let (mut h_full, rel_eigvals, rel_eigvecs) = self.build_hamiltonian_no_k(n_rel_states);
+        let (mut h_full, rel_eigvals, rel_eigvecs) = self.build_hamiltonian_no_k(n_rel_states)?;
         
         // Number of center-of-mass states
         let n_com_states = self.kappa_vectors.len();
         let n_rel_states_used = rel_eigvals.len();
+
+        let eye_rel = M::eye(n_rel_states_used);
         
-        // Add center-of-mass kinetic energy to diagonal elements
-        for i_rel in 0..n_rel_states_used {
-            for i_com in 0..n_com_states {
-                let i = i_rel * n_com_states + i_com;
-                
-                // Diagonal term: relative energy + center-of-mass kinetic energy
-                let k_vec_i = &self.kappa_vectors[i_com];
-                let mut k_plus_k = vec![0.0; 2];
-                for j in 0..2 {
-                    k_plus_k[j] = self.k[j] + k_vec_i[j];
-                }
-                
-                let e_com = (k_plus_k[0].powi(2) + k_plus_k[1].powi(2)) / (2.0 * self.m);
-                h_full[[i, i]] += Complex64::new(e_com, 0.0);
+        let com_kinetic = (0..n_com_states).map(|i_com| {
+            let k_vec_i = &self.kappa_vectors[i_com];
+            let mut k_plus_k = vec![0.0; 2];
+            for j in 0..2 {
+                k_plus_k[j] = self.k[j] + k_vec_i[j];
             }
-        }
+            (k_plus_k[0].powi(2) + k_plus_k[1].powi(2)) / (2.0 * self.m)
+        }).collect::<Vec<f64>>();
+
+        h_full = h_full.add(&M::from_diag(&com_kinetic)?.kron(&eye_rel));
         
-        (h_full, rel_eigvals, rel_eigvecs)
+        Ok((h_full, rel_eigvals, rel_eigvecs))
     }
     
     /// Diagonalizes the full Hamiltonian
@@ -622,60 +611,25 @@ impl FullHamiltonian {
         &self,
         n_rel_states: usize,
         k_eigvals: usize,
-    ) -> (Array1<f64>, Vec<Array1<Complex64>>, Array1<f64>, Array2<f64>) {
+    ) -> Result<(Array1<Complex64>, Array2<Complex64>, Array1<f64>, Array2<f64>), MatrixOpsError> 
+    where 
+        M::Scalar: ConvertFrom<Complex64>,
+        M: Diagonalize
+    {
         if self.verbose {
             info!("Building complex Hermitian Hamiltonian with -i*sin matrix elements");
         }
         
         // Build the full Hamiltonian with all states
-        let (h_full, rel_eigvals, rel_eigvecs) = self.build_full_hamiltonian(n_rel_states);
+        let (h_full, rel_eigvals, rel_eigvecs) = self.build_full_hamiltonian(n_rel_states)?;
                 
-        let start_time = Instant::now();
         if self.verbose {
-            info!("Diagonalizing full Hamiltonian with dimension {}x{}", h_full.nrows(), h_full.ncols());
             info!("Computing {} lowest eigenvalues...", k_eigvals);
         }
         
         // Compute eigenvalues and eigenvectors
-        match h_full.eigh(ndarray_linalg::UPLO::Lower) {
-            Ok((eigvals, eigvecs)) => {
-                // Take only the first k_eigvals
-                let n_eigvals = std::cmp::min(k_eigvals, eigvals.len());
-                let eigvals = eigvals.slice(ndarray::s![..n_eigvals]).to_owned();
-                
-                // Convert eigenvectors to Vec<Array1<Complex64>> for convenience
-                let mut eigvecs_list = Vec::new();
-                for i in 0..n_eigvals {
-                    eigvecs_list.push(eigvecs.slice(ndarray::s![.., i]).to_owned());
-                }
-                
-                if self.verbose {
-                    info!("Diagonalization completed in {:.2} seconds.", start_time.elapsed().as_secs_f64());
-                    info!("First 5 eigenvalues: {:?}", eigvals.slice(ndarray::s![..std::cmp::min(5, n_eigvals)]));
-                }
-                
-                (eigvals, eigvecs_list, rel_eigvals, rel_eigvecs)
-            },
-            Err(e) => {
-                // Log detailed error information
-                warn!("Eigenvalue computation failed for k = {:?}", self.k);
-                warn!("Hamiltonian shape = {:?}", h_full.shape());
-                warn!("Error details: {:?}", e);
-                
-                // Return empty results to avoid crashing
-                let eigvals = Array1::zeros(k_eigvals);
-                let mut eigvecs_list = Vec::new();
-                for _ in 0..k_eigvals {
-                    eigvecs_list.push(Array1::from_elem(h_full.nrows(), Complex64::new(0.0, 0.0)));
-                }
-                
-                if self.verbose {
-                    warn!("Using zeros as placeholder for failed diagonalization");
-                }
-                
-                (eigvals, eigvecs_list, rel_eigvals, rel_eigvecs)
-            }
-        }
+        let result = h_full.diagonalize(DiagonalizationOptions::smallest_real(k_eigvals))?;
+        Ok((result.eigenvalues, result.right_eigenvectors, rel_eigvals, rel_eigvecs))
     }
 }
 

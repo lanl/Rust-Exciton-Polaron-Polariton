@@ -4,8 +4,9 @@ use std::f64::consts::PI;
 use ndarray_linalg::c64;
 use crate::{band_structure, timed_println};
 use std::iter::Sum;
+use matrix_ops::{ConvertFrom, DiagonalizationOptions, Diagonalize, HermitianConjugate, MatrixOps, MatrixOpsError, Norm, PrettyArray2, Sqrt};
 
-use crate::utils::{ConvertFrom, HermitianConjugate, MatrixOps, Norm, PPConfig, PrettyArray2, SolverOperator, Sqrt};
+use crate::utils::PPConfig;
 use crate::hamiltonians::{PPHamiltonian, Boson};
 
 /// Result of dielectric‑function calculation including composition data.
@@ -238,8 +239,8 @@ pub fn get_dielectric_function<M,B>(
     gamma: f64, 
     save_dir: &str,
     use_cached: bool
-) -> DielectricResult 
-where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum + ConvertFrom<f64> + ConvertFrom<c64> + Norm + HermitianConjugate, B: Boson<M>
+) -> Result<DielectricResult, MatrixOpsError> 
+where M: MatrixOps + Diagonalize, M::Scalar: Sqrt + Sum + ConvertFrom<f64> + ConvertFrom<c64> + Norm + HermitianConjugate<Output = M::Scalar>, B: Boson<M>
 {
     timed_println!("Calculating dielectric function with {} eigenstates, gamma={:.1e}", n_eig, gamma);
 
@@ -257,7 +258,7 @@ where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum + ConvertF
             },
             Err(e) => {
                 timed_println!("Failed to load cache ({}), recalculating...", e);
-                compute_dielectric_cache(pp_config, pp, n_eig)
+                compute_dielectric_cache(pp_config, pp, n_eig)?
             }
         }
     } else {
@@ -268,7 +269,7 @@ where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum + ConvertF
         } else {
             timed_println!("Computing diagonalization data...");
         }
-        let cache_data = compute_dielectric_cache(pp_config, pp, n_eig);
+        let cache_data = compute_dielectric_cache(pp_config, pp, n_eig)?;
         
         // Save the computed cache for future use
         timed_println!("Saving cache to {}", cache_filename);
@@ -301,12 +302,12 @@ where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum + ConvertF
         1.0 + 4.0 * PI * result
     });
 
-    DielectricResult {
+    Ok(DielectricResult {
         real: dielectric_function.map(|&x| x.re),
         imag: dielectric_function.map(|&x| x.im),
         photonic_chars,
         phonon_numbers,
-    }
+    })
 }
 
 /// Helper function to compute the expensive diagonalization and matrix elements
@@ -314,12 +315,15 @@ fn compute_dielectric_cache<M,B>(
     pp_config: &PPConfig,
     pp: &mut PPHamiltonian<M,B>,
     n_eig: usize,
-) -> (Array1<f64>, Array1<f64>, Vec<f64>, Vec<f64>, usize) 
-where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum + ConvertFrom<f64> + ConvertFrom<c64> , B: Boson<M>, M::Scalar: ConvertFrom<f64> + ConvertFrom<c64> + HermitianConjugate + Norm
+) -> Result<(Array1<f64>, Array1<f64>, Vec<f64>, Vec<f64>, usize), MatrixOpsError> 
+where 
+    M: MatrixOps + Diagonalize, 
+    M::Scalar: Sqrt + Sum + ConvertFrom<f64> + ConvertFrom<c64> + HermitianConjugate<Output = M::Scalar> + Norm, 
+    B: Boson<M>, 
 {
 
     // Build Hamiltonian
-    let h_pp: M = pp.build_pp_hamiltonian(None);
+    let h_pp: M = pp.build_pp_hamiltonian(None)?;
 
     // Lag Coeffs for Relative coordinates
     let (lag_coeffs, states) = &pp.polariton.matrix_elements.get_laguerre_coeffs(pp.polariton.exciton.n_rel);
@@ -342,8 +346,8 @@ where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum + ConvertF
 
     // Get <x> in the Exciton basis
     let x_exc = &Array2::from_shape_fn((n_ex_eig,n_ex_eig) , |(idx1, idx2)| {
-            let vec1 = &e_vecs[idx1];
-            let vec2 = &e_vecs[idx2];
+            let vec1 = &e_vecs.column(idx1);
+            let vec2 = &e_vecs.column(idx2);
 
             // Calculate the matrix elements using iterators
             (0..n_rel).flat_map(|rel_ind1| {
@@ -373,7 +377,7 @@ where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum + ConvertF
     
 
     // Diagonalize at the Gamma point
-    let (pp_vals, pp_vecs) = h_pp.diagonalize(Some(n_eig), None, None);
+    let (pp_vals, pp_vecs) = h_pp.diagonalize(DiagonalizationOptions::smallest_real(n_eig))?.into_arrays_hermitian();
 
     // If the phonon coupling is effectively zero we *must* use a single
     // phonon vacuum state (dimension = 1).  This is independent of the value
@@ -452,33 +456,25 @@ where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum + ConvertF
     // Only create phonon number operator if phonons are actually present in the Hamiltonian
     let phonon_number_op = if has_phonon_dof {
         let lm_eye = M::eye(n_ex_eig * n_ph);
-        Some(lm_eye.kron(&pp.phonon.boson.adag_a(0)))
+        Some(lm_eye.kron(&pp.phonon.boson.adag_a(0)?))
     } else {
         None
     };
 
     for idx in 0..n_eig {
-        let vec = pp_vecs.column(idx).iter()
+        let vec: Array1<M::Scalar> = pp_vecs.column(idx).iter()
             .map(|val| M::Scalar::convert_from(*val).unwrap())
             .collect::<Array1<M::Scalar>>();
-        let vec_dag = vec.mapv(|x| x.dag());
+        let vec_dag: Array1<M::Scalar> = vec.iter().map(|x| x.dag()).collect();
 
         // Photonic character: sum_i <ψ|a_i† a_i|ψ>
-        // let mut photon_sum = 0.0f64;
-        // for mode_i in 0..n_photon_modes {
-        //     let adag_a = ex_eye.kron(&pp.polariton.photon.get_adag_a(mode_i)).kron(&pn_eye);
-        //     let mut tmp = Array1::zeros(vec.len()); // zero vector of same shape
-        //     adag_a.apply(vec.as_slice().unwrap(), tmp.as_slice_mut().unwrap());
-        //     let val: M::Scalar = vec_dag.dot(&tmp);
-        //     photon_sum += <M as MatrixOps>::Scalar::norm(val);
-        // }
         photonic_chars.push(band_structure::calculate_photonic_character(&pp, &pp_vecs.column(idx).to_owned()));
 
         // Phonon number expectation
         // Only compute if phonons are actually present in the Hamiltonian
         if let Some(ref op) = phonon_number_op {
-            let mut tmp = Array1::zeros(vec.len()); // zero vector of same shape
-            op.apply(vec.as_slice().unwrap(), tmp.as_slice_mut().unwrap());
+            let mut tmp: Array1<M::Scalar> = Array1::zeros(vec.len()); // zero vector of same shape
+            op.apply(vec.as_slice().unwrap(), tmp.as_slice_mut().unwrap())?;
             let val: M::Scalar = vec_dag.dot(&tmp);
             phonon_numbers.push(<M as MatrixOps>::Scalar::norm(val));
         } else {
@@ -487,5 +483,5 @@ where M: MatrixOps + SolverOperator<M::Scalar>, M::Scalar: Sqrt + Sum + ConvertF
         }
     }
 
-    (pp_vals, x_pp, photonic_chars, phonon_numbers, ground_state_index)
+    Ok((pp_vals, x_pp, photonic_chars, phonon_numbers, ground_state_index))
 }

@@ -1,16 +1,14 @@
-use exciton_2d::{Exciton2DGridSystem, ExcitonConfig};
+use exciton_2d::ExcitonConfig;
 use sprs::CsMat;
 use std::{f64::consts::PI, io::Write};
 use std::time::Instant;
 use ndarray::{arr1, Array1, Array2, s};
-use rust_slepc_bindings::{initialize, finalize};
 use std::env;
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use ndarray_linalg::c64;
-
-pub mod sparse_methods;
+use matrix_ops::{Result, ComposedOperator};
 
 pub mod utils;
 pub use utils::{Vector3D, BosonMode, Polarization};
@@ -21,29 +19,19 @@ pub use matrix_elements::LMMatrixElementArray;
 pub mod visualization;
 pub use visualization::{plot_band_structure, plot_dielectric_function, DielectricPlotType};
 
-pub mod color_band_plot;
 pub mod dielectric_function;
 pub mod band_structure;
 
-use crate::utils::{ComposedOperator, PPConfig};
-
-pub mod sing_ex;
-pub mod lin_op;
-
-pub mod dense_methods;
-
-pub mod slepc;
+use crate::utils::PPConfig;
 
 pub mod effective_modes;
-
-pub mod slepc_instrumented;
 
 pub mod logging;
 
 pub mod visualization_dielectric;
 
 pub mod hamiltonians;
-use crate::hamiltonians::{BosonicHamiltonian, ExcitonicHamiltonian, FullBosons, LMHamiltonian, PPHamiltonian, SingExBosons};
+use crate::hamiltonians::{PPHamiltonian, SingExBosons};
 
 // Speed of light in atomic units
 const C: f64 = 137.036;
@@ -52,15 +40,13 @@ pub enum Method {
     Sparse,
     Dense,
     LinOp,
-    SingExLegacy,
 }
 
-fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
+fn run_bandstructure(method: Method, e_config: ExcitonConfig) -> Result<()> {
 
     // Create the 2D exciton system
     let a0 = (&e_config).a0;
     let v0 = (&e_config).v0;
-    let exciton = Exciton2DGridSystem::from_config(e_config.clone());
     
     // Parameters for diagonalization
     let n_rel = 16;      // Number of relative coordinate states
@@ -126,20 +112,8 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
 
             timed_println!("Using sparse methods for light-matter coupling.");
 
-            // // Create light-matter system
-            // let photon = BosonicHamiltonian::<CsMat<c64>, SingExBosons<CsMat<c64>>>::new(photon_modes);
-            // let exciton = ExcitonicHamiltonian::new(exciton.full_ham, n_ex_eig, n_rel);
-            // let light_matter = LMHamiltonian::new(exciton, photon, coupling);
-
             // Start timing the band structure calculation
             let start_time = Instant::now();
-            
-            // // Create band structure calculator
-            // let mut band_structure = sparse_methods::BandStructureCalculatorLM::new(
-            //     light_matter, a0, v0, "lm_data".to_string(), sym_points.clone());
-
-            // // Using sparse matrices and SLEPc to calculate eigenvalues
-            // let (k_points, eigvals_list) = band_structure.calculate_lm_band_structure_sparse(n_k_points, n_eig);
             
             let mut pp: PPHamiltonian<CsMat<c64>, SingExBosons<CsMat<c64>>> = PPHamiltonian::from_config(&pp_config);
 
@@ -147,16 +121,13 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
 
             if calculate {
                 // Build the PP Hamiltonian
-                // pp.initialize();
                 let time1 = Instant::now();
-                // let gen_time = time1.duration_since(start_time);
-                // timed_println!("Built PPHamitonian in {:?}", gen_time);
 
                 // Calculate the band structure
                 timed_println!("Calculating {} eigenstates", n_eig);
                 timed_println!("Calculating color-coded band structure...");
                 (k_points_color, eigvals_list_color, photonic_character_list) =
-                    band_structure::calculate_color_band_structure_mpi_simple(&mut pp, n_k_points, n_eig, &sym_points, &pp_config, false, zoomed);
+                    band_structure::calculate_color_band_structure_mpi(&mut pp, n_k_points, n_eig, &sym_points, &pp_config, false, zoomed)?;
                 timed_println!("Calculated Band Structure in {:?}", Instant::now().duration_since(time1));
             }
             else {
@@ -184,93 +155,29 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
                 }
             }
 
+            Ok(())
         },
 
         Method::Dense => {
             
             timed_println!("Using dense methods for light-matter coupling.");
 
-            // Create light-matter system
-            let photon = BosonicHamiltonian::<Array2<c64>, FullBosons<Array2<c64>>>::new(photon_modes);
-            let exciton = ExcitonicHamiltonian::new(exciton.full_ham, n_ex_eig, n_rel);
-            let light_matter = LMHamiltonian::new(exciton, photon, lm_couplings.clone());
-
             // Start timing the band structure calculation
             let start_time = Instant::now();
             
-            // Create band structure calculator
-            let mut band_structure = dense_methods::BandStructureCalculatorLM::new(
-                light_matter, a0, v0, "lm_data".to_string(), sym_points.clone());
-            
-            // Using sparse matrices and ARPACK to calculate 40 lowest eigenvalues
-            let (k_points, eigvals_list) = band_structure.calculate_lm_band_structure(n_k_points);
-            
-            // End timing and print duration
-            let end_time = Instant::now();
-            let duration = end_time.duration_since(start_time);
-            timed_println!("Calc dispersion in {:?}", duration);
-
-            // Plot the band structure
-            plot_band_structure(
-                &k_points, sym_points, sym_labels, &eigvals_list, n_bands, a0, 
-                Some("disp_plot.png"), false, v0, total_coupling);
-        },
-
-        Method::LinOp => {
-            // let n_eig = 128;
-            let start_time = Instant::now();
-
-            // // Diagonalization test:
-            // timed_println!("Creating PPHamiltonian from config...");
-            // let time0 = Instant::now();
-            // let mut pp: PPHamiltonian<ComposedOperator<c64>, SingExBosons<ComposedOperator<c64>>> = PPHamiltonian::from_config(&pp_config);
-            // timed_println!("Created PPHamiltonian in {:?}", time0.elapsed());
-            
-            // timed_println!("Initializing PPHamiltonian...");
-            // let time_init = Instant::now();
-            // pp.initialize();
-            // timed_println!("Initialized PPHamiltonian in {:?}", time_init.elapsed());
-
-            // timed_println!("Building PP Hamiltonian matrix...");
-            // let time_build = Instant::now();
-            // let ham = pp.build_pp_hamiltonian(None);
-            // timed_println!("Built PP Hamiltonian matrix in {:?}", time_build.elapsed());
-
-            // let time1 = Instant::now();
-            // let gen_time = time1.duration_since(start_time);
-            // timed_println!("Total time to build PPHamitonian: {:?}", gen_time);
-
-            // timed_println!("Starting diagonalization with {} eigenvalues...", n_eig);
-            // let time_diag = Instant::now();
-            // let (e_vals, _) = ham.diagonalize(Some(n_eig), None, None);
-
-            // let diag_time = time_diag.elapsed();
-            // timed_println!("Diagonalized Hamiltonian in {:?}", diag_time);
-
-            // let total_time = Instant::now().duration_since(start_time);
-            // timed_println!("Total time (including diagonalization): {:?}", total_time);
-
-            // timed_println!("First ten energies:");
-            // println!("{:?}", e_vals.slice(s![0..10]));
-
-            // NEW IMPLEMENTATION:
-            
-            let mut pp: PPHamiltonian<ComposedOperator<c64>, SingExBosons<ComposedOperator<c64>>> = PPHamiltonian::from_config(&pp_config);
+            let mut pp: PPHamiltonian<Array2<c64>, SingExBosons<Array2<c64>>> = PPHamiltonian::from_config(&pp_config);
 
             let (k_points_color, eigvals_list_color, photonic_character_list);
 
             if calculate {
                 // Build the PP Hamiltonian
-                // pp.initialize(None);
                 let time1 = Instant::now();
-                // let gen_time = time1.duration_since(start_time);
-                // timed_println!("Built PPHamitonian in {:?}", gen_time);
 
                 // Calculate the band structure
                 timed_println!("Calculating {} eigenstates", n_eig);
                 timed_println!("Calculating color-coded band structure...");
                 (k_points_color, eigvals_list_color, photonic_character_list) =
-                    band_structure::calculate_color_band_structure_mpi_simple(&mut pp, n_k_points, n_eig, &sym_points, &pp_config, false, zoomed);
+                    band_structure::calculate_color_band_structure_mpi(&mut pp, n_k_points, n_eig, &sym_points, &pp_config, false, zoomed)?;
                 timed_println!("Calculated Band Structure in {:?}", Instant::now().duration_since(time1));
             }
             else {
@@ -293,58 +200,63 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) {
             if !k_points_color.is_empty() {
                 if let Err(e) = band_structure::plot_color_band_structure(
                     &k_points_color, &sym_points, &sym_labels, &eigvals_list_color,
-                    &photonic_character_list, n_eig, a0, &save_path, v0, total_coupling, zoomed) {
+                    &photonic_character_list, n_eig, a0, &save_path, v0, coupling, zoomed) {
                     timed_println!("Error plotting color-coded band structure: {}", e);
                 }
             }
 
-        }
+            Ok(())
+        },
 
-        Method::SingExLegacy => {
-            timed_println!("Using Mat-Vec methods for light-matter coupling in single photon limit.");
-            
+        Method::LinOp => {
+
+            timed_println!("Using dense methods for light-matter coupling.");
+
+            // Start timing the band structure calculation
             let start_time = Instant::now();
+            
+            let mut pp: PPHamiltonian<ComposedOperator<c64>, SingExBosons<ComposedOperator<c64>>> = PPHamiltonian::from_config(&pp_config);
 
             let (k_points_color, eigvals_list_color, photonic_character_list);
 
-            
-            let mut pp_wrapper = sing_ex::SingExWrapper::new(pp_config.clone());
-            pp_wrapper.generate_pp();
-            let mut pp = pp_wrapper.polaron_polariton.unwrap();
-
             if calculate {
-                timed_println!("Calculating {} eigenstates", n_eig);
-
+                // Build the PP Hamiltonian
                 let time1 = Instant::now();
-                let gen_time = time1.duration_since(start_time);
-                timed_println!("Precomputed matrix elements in {:?}", gen_time);
-                            
-                // Calculate and plot color-coded band structure
-                timed_println!("Calculating color-coded band structure...");
-                (k_points_color, eigvals_list_color, photonic_character_list) = 
-                    color_band_plot::calculate_color_band_structure_mpi_simple(
-                        &mut pp, n_k_points, n_eig, &sym_points, &pp_config, true, zoomed);
 
+                // Calculate the band structure
+                timed_println!("Calculating {} eigenstates", n_eig);
+                timed_println!("Calculating color-coded band structure...");
+                (k_points_color, eigvals_list_color, photonic_character_list) =
+                    band_structure::calculate_color_band_structure_mpi(&mut pp, n_k_points, n_eig, &sym_points, &pp_config, false, zoomed)?;
                 timed_println!("Calculated Band Structure in {:?}", Instant::now().duration_since(time1));
             }
             else {
+                // Load bandstructure
                 (k_points_color, eigvals_list_color, photonic_character_list) = 
-                    color_band_plot::load_color_band_structure(
+                    band_structure::load_color_band_structure(
                     &mut pp, n_k_points, n_eig, &pp_config, zoomed);
             }
-                
-            // Plot using gnuplot (only on rank 0 which has the data)
+
+
+            // End timing and print duration
+            let end_time = Instant::now();
+            let duration = end_time.duration_since(start_time);
+            timed_println!("Calc dispersion in {:?}", duration);
+
+             // Plot using gnuplot (only on rank 0 which has the data)
             let mut save_path = format!("sing_ex_color_disp_plot_{}_n{}",total_coupling, n_modes);
             save_path += if zoomed {"_zoomed.pdf"} else {".pdf"};
 
             if !k_points_color.is_empty() {
-                if let Err(e) = color_band_plot::plot_color_band_structure(
+                if let Err(e) = band_structure::plot_color_band_structure(
                     &k_points_color, &sym_points, &sym_labels, &eigvals_list_color,
-                    &photonic_character_list, n_eig, a0, &save_path, v0, total_coupling, zoomed) {
+                    &photonic_character_list, n_eig, a0, &save_path, v0, coupling, zoomed) {
                     timed_println!("Error plotting color-coded band structure: {}", e);
                 }
             }
-        } 
+
+            Ok(())
+        }
     }
 }
 
@@ -486,7 +398,7 @@ fn generate_stacked_plots(
 
 /// Main function demonstrating the use of the light-matter coupling framework
 /// Calculate dielectric function for a range of coupling strengths
-fn run_dielectric_scan(e_config: ExcitonConfig) {
+fn run_dielectric_scan(e_config: ExcitonConfig) -> Result<()> {
     // Check if we should calculate or just plot
     let calculate = true; // Set to false to skip calculation and just plot
     let use_cached = true; // Set to true to use cached diagonalization results (allows testing different gamma values)
@@ -632,7 +544,7 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
             Err(e) => timed_println!("Error plotting dielectric function: {}", e),
         }
         
-        return;
+        return Ok(());
     }
 
     timed_println!("Starting dielectric function scan for {} total coupling values", total_coupling_values.len());
@@ -715,7 +627,7 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
         let mut pp: PPHamiltonian<ComposedOperator<c64>, SingExBosons<ComposedOperator<c64>>> = PPHamiltonian::from_config(&pp_config);
         let result = dielectric_function::get_dielectric_function(
             &pp_config, &mut pp, n_eig, omegas.clone(), gamma, save_dir, use_cached
-        );
+        )?;
         let filename = dielectric_function::get_dielectric_function_filename(&pp, &pp_config, save_dir, n_eig, gamma);
         
         // // Generate the PP system
@@ -826,9 +738,11 @@ fn run_dielectric_scan(e_config: ExcitonConfig) {
             timed_println!("Rank 0: Failed to remove temporary directory: {}", e);
         }
     }
+
+    Ok(())
 }
 
-fn main() {
+fn main() -> Result<()> {
     // Get the number of available cores
     let num_threads = std::env::var("OMP_NUM_THREADS")
         .ok()
@@ -863,25 +777,21 @@ fn main() {
 
     // Choose which function to run
     let run_mode = "dielectric_scan"; // Options: "bandstructure", "dielectric_scan"
-
-    initialize().expect("Failed to initialize SLEPc");
     
     match run_mode {
         "bandstructure" => {
             // run_bandstructure(Method::LinOp, e_config.clone());
             // run_bandstructure(Method::SingExLegacy, e_config.clone());
-            run_bandstructure(Method::Sparse, e_config.clone());
+            run_bandstructure(Method::Sparse, e_config.clone())?;
             // run_bandstructure(Method::Dense, e_config.clone());
         },
         "dielectric_scan" => {
-            run_dielectric_scan(e_config.clone());
+            run_dielectric_scan(e_config.clone())?;
         },
         _ => {
             timed_println!("Unknown run mode: {}", run_mode);
         }
     }
-    
-    // Finalize SLEPc
-    finalize().expect("Failed to finalize SLEPc");
 
+    Ok(())
 }
