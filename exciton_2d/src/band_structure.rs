@@ -340,7 +340,7 @@ where
         // Find the corresponding unique result
         for (idx, eigvals, n_expectation) in &unique_results {
             if *idx == unique_idx {
-                eigvals_list[i] = eigvals.iter().map(|&val| val.re).collect();
+                eigvals_list[i] = eigvals.clone();
                 n_expectation_list[i] = n_expectation.clone();
                 break;
             }
@@ -439,7 +439,7 @@ where
         k_point: &[f64],
         n_rel_states: usize,
         n_bands: usize,
-    ) -> Result<(Array1<Complex64>, Array2<Complex64>), MatrixOpsError> {
+    ) -> Result<(Array1<f64>, Array2<Complex64>), MatrixOpsError> {
         // Store original K value
         let original_k = self.full_ham.k.clone();
         
@@ -602,9 +602,7 @@ where
                 .unwrap();
 
             unique_eigvals.push(
-                evals.iter()
-                    .map(|&val| val.re)
-                    .collect::<Array1<f64>>()
+                evals.clone()
             );
 
             progress_bar.inc(1);

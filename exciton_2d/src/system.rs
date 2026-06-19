@@ -348,7 +348,7 @@ where
         &self,
         n_rel_states: usize,
         k_eigvals: usize,
-    ) -> Result<(Array1<Complex64>, Array2<Complex64>, Array1<f64>, Array2<f64>), MatrixOpsError> 
+    ) -> Result<(Array1<f64>, Array2<Complex64>, Array1<f64>, Array2<f64>), MatrixOpsError> 
     where 
         M::Scalar: ConvertFrom<Complex64>,
         M: Diagonalize,

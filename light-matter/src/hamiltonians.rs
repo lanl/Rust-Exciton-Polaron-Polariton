@@ -23,7 +23,7 @@ pub trait Boson<M:MatrixOps> {
         M::Scalar: Sqrt,
     {
         let a = self.a(mode_i)?;
-        Ok(a.transpose().dot(&a))
+        a.transpose().dot(&a)
     }
 
     fn get_modes(&self) -> &Vec<BosonMode>;
@@ -60,7 +60,7 @@ impl<M: MatrixOps> Boson<M> for FullBosons<M> {
                         trimat.add_triplet(
                             n - 1,
                             n,
-                            (M::Scalar::convert_from(n).unwrap()).sqrt(),
+                            (M::Scalar::convert_from(n)).sqrt(),
                         );
                     }
 
@@ -187,7 +187,7 @@ impl<M: MatrixOps, B: Boson<M>> BosonicHamiltonian<M,B> {
                 .get_adag_a(mode_i)?
                 .scale(mode.omega)?;
 
-            Ok(acc.add(&h_ph_sing))
+            acc.add(&h_ph_sing)
         })
     }
 
@@ -234,13 +234,13 @@ where
         if exciton_energies.len() != self.n_ex_eig {
             warn!("Diagonalization returned {} eigenvalues, expected {}", exciton_energies.len(), self.n_ex_eig);
 
-            self.e_vals = ConvertFrom::convert_from(exciton_energies.slice_move(s![0..self.n_ex_eig]));
+            self.e_vals = Some(exciton_energies.slice_move(s![0..self.n_ex_eig]));
             self.e_vecs = Some(e_vecs.slice_move(s![..,0..self.n_ex_eig]));
             self.r_vecs = Some(r_vecs);
             return Ok(());
         }
 
-        self.e_vals = ConvertFrom::convert_from(exciton_energies);
+        self.e_vals = Some(exciton_energies);
         self.e_vecs = Some(e_vecs);
         self.r_vecs = Some(r_vecs);
         Ok(())
@@ -482,7 +482,7 @@ where
 
             p_c_sin.push( 
                     self.exciton.get_p_com(eps, false)?// P·eps 
-                    .dot(&M::from_dense(sin_mat.get(&vec![q_ind_key]).unwrap())?) // sin(qx/2) matrix element
+                    .dot(&M::from_dense(sin_mat.get(&vec![q_ind_key]).unwrap())?)? // sin(qx/2) matrix element
                 );
             
             p_q.push( 
@@ -569,12 +569,12 @@ where
                 // let a_diff = &(a_i.dot(&a_j.transpose()).add(&a_i.transpose().dot(a_j)));
 
                 // cos(q - q') term
-                kron_pairs.push((cos_diff.scale(coupling_2)?, a_i.dot(&a_j.transpose())));
-                kron_pairs.push((cos_diff.scale(coupling_2)?, a_i.transpose().dot(a_j)));
+                kron_pairs.push((cos_diff.scale(coupling_2)?, a_i.dot(&a_j.transpose())?));
+                kron_pairs.push((cos_diff.scale(coupling_2)?, a_i.transpose().dot(a_j)?));
 
                 // (q a†a)^2 term
                 let q_q = mode_i.q.dot(&mode_j.q) / 2.0 / self.exciton.exciton_ham.m;
-                kron_pairs.push((ex_eye.scale(q_q)?, cached_adag_a[i_ph].dot(&cached_adag_a[j_ph])));
+                kron_pairs.push((ex_eye.scale(q_q)?, cached_adag_a[i_ph].dot(&cached_adag_a[j_ph])?));
 
                 Ok(())
             })?;
@@ -630,7 +630,7 @@ where
         // Build the final Hamiltonian by adding terms
         // Don't use M::sum() here because it would try to optimize the diagonal terms
         let time_sum = Instant::now();
-        let ham = ham_terms.into_iter().reduce(|acc, term| acc.add(&term)).unwrap();
+        let ham = ham_terms.into_iter().reduce(|acc, term| acc.add(&term).unwrap()).unwrap();
         // let ham = M::sum(ham_terms);
         timed_println!("      LM sum all terms: {:?}", time_sum.elapsed());
 
@@ -749,9 +749,9 @@ where
 
             // 2 gamma cos() (b† + b)
             let lm_op = sin_pn[idx].kron(&ph_eye);
-            let pn_op = (neg_b.add(&b_dag)).scale(2.0 * self.pn_coupling)?;
+            let pn_op = (neg_b.add(&b_dag))?.scale(2.0 * self.pn_coupling)?;
 
-            *ham = ham.add(&lm_op.kron(&pn_op));
+            *ham = ham.add(&lm_op.kron(&pn_op))?;
 
             Ok(())
         })?;
@@ -822,11 +822,11 @@ where
         timed_println!("  Create zero matrix: {:?}", time_zeros.elapsed());
 
         let time_kron1 = Instant::now();
-        ham = ham.add(&lm_ham.kron(&pn_eye));
+        ham = ham.add(&lm_ham.kron(&pn_eye))?;
         timed_println!("  First kron product (LM ⊗ I_pn): {:?}", time_kron1.elapsed());
 
         let time_kron2 = Instant::now();
-        ham = ham.add(&lm_eye.kron(&pn_ham));
+        ham = ham.add(&lm_eye.kron(&pn_ham))?;
         timed_println!("  Second kron product (I_lm ⊗ pn): {:?}", time_kron2.elapsed());
 
         let time_int = Instant::now();

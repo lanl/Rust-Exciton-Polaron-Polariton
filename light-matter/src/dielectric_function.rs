@@ -463,7 +463,7 @@ where
 
     for idx in 0..n_eig {
         let vec: Array1<M::Scalar> = pp_vecs.column(idx).iter()
-            .map(|val| M::Scalar::convert_from(*val).unwrap())
+            .map(|val| M::Scalar::convert_from(*val))
             .collect::<Array1<M::Scalar>>();
         let vec_dag: Array1<M::Scalar> = vec.iter().map(|x| x.dag()).collect();
 

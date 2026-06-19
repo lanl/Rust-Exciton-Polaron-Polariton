@@ -538,7 +538,7 @@ where
                                 // Add to matrix if non-zero
                                 // Matrix element is -i * sin(κ·r), so multiply by -i
                                 if matrix_element.abs() > 1e-12 {
-                                    h_int.add_triplet(i, j, M::Scalar::convert_from(Complex64::new(0.0, -v0 * matrix_element)).unwrap());
+                                    h_int.add_triplet(i, j, M::Scalar::convert_from(Complex64::new(0.0, -v0 * matrix_element)));
                                 }
                             }
                         }
@@ -547,7 +547,7 @@ where
             }
         }
 
-        h_full = h_full.add(&M::from_trimat(&h_int)?);
+        h_full = h_full.add(&M::from_trimat(&h_int)?)?;
         
         if self.verbose {
             info!("Full Hamiltonian built in {:.2} seconds", start_time.elapsed().as_secs_f64());
@@ -587,7 +587,7 @@ where
             (k_plus_k[0].powi(2) + k_plus_k[1].powi(2)) / (2.0 * self.m)
         }).collect::<Vec<f64>>();
 
-        h_full = h_full.add(&M::from_diag(&com_kinetic)?.kron(&eye_rel));
+        h_full = h_full.add(&M::from_diag(&com_kinetic)?.kron(&eye_rel))?;
         
         Ok((h_full, rel_eigvals, rel_eigvecs))
     }
@@ -611,7 +611,7 @@ where
         &self,
         n_rel_states: usize,
         k_eigvals: usize,
-    ) -> Result<(Array1<Complex64>, Array2<Complex64>, Array1<f64>, Array2<f64>), MatrixOpsError> 
+    ) -> Result<(Array1<f64>, Array2<Complex64>, Array1<f64>, Array2<f64>), MatrixOpsError> 
     where 
         M::Scalar: ConvertFrom<Complex64>,
         M: Diagonalize
@@ -628,8 +628,8 @@ where
         }
         
         // Compute eigenvalues and eigenvectors
-        let result = h_full.diagonalize(DiagonalizationOptions::smallest_real(k_eigvals))?;
-        Ok((result.eigenvalues, result.right_eigenvectors, rel_eigvals, rel_eigvecs))
+        let (eigenvalues, right_eigenvectors) = h_full.diagonalize(DiagonalizationOptions::smallest_real(k_eigvals))?.into_arrays_hermitian();
+        Ok((eigenvalues, right_eigenvectors, rel_eigvals, rel_eigvecs))
     }
 }
 

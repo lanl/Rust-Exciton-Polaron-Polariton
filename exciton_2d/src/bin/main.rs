@@ -7,7 +7,7 @@ use clap::Parser;
 use exciton_2d::{Exciton2DGridSystem, ExcitonConfig};
 use log::{LevelFilter};
 use matrix_ops::{Diagonalize, MatrixOps, ConvertFrom};
-use ndarray::{Array1, Array2};
+use ndarray::Array2;
 use num_complex::Complex64;
 use std::path::PathBuf;
 use std::time::Instant;
@@ -187,7 +187,7 @@ fn gamma_point_eigenstates(system: &Exciton2DGridSystem<Array2<Complex64>>, args
     
     let (e_vals, _,_,_) = system.diagonalize_full_hamiltonian(args.n_rel_states, args.n_bands).unwrap();
 
-    let diffs = &e_vals.iter().map(|x| x.re).collect::<Array1<_>>() - e_vals[0].re;
+    let diffs = &e_vals - e_vals[0];
 
     println!("Exciton transitions at gamma point are: \n {:?}", diffs);
 }

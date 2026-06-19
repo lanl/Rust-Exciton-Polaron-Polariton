@@ -6,7 +6,7 @@ use rayon::prelude::*;
 use log::{warn, info};
 use ndarray::{Array1, Array2};
 use crate::utils::{BosonMode};
-use matrix_ops::{HermitianConjugate, MatrixOps};
+use matrix_ops::{HermitianConjugate};
 use std::fs::{self, File};
 use std::io::{Write, Read};
 use std::path::Path;
@@ -540,9 +540,11 @@ impl LMMatrixElementArray {
         e_vecs: &Array2<c64>,
         n_com: usize,
     ) -> Array2<c64>{
+        use ndarray::linalg::kron;
+
         let com_identity = Array2::eye(n_com);
 
-        let matrix = rel_matrix.kron(&com_identity);
+        let matrix = kron(&rel_matrix, &com_identity);
 
         let transform = e_vecs;
 
@@ -550,7 +552,7 @@ impl LMMatrixElementArray {
 
         // println!("Unitary test: \n{}", PrettyC64Array2(&(transform_dag.dot(&transform)), 2));
 
-        transform_dag.dot(&matrix).dot(&transform)
+        transform_dag.dot(&matrix).dot(transform)
     }
 
     pub fn to_real_rel_basis(
