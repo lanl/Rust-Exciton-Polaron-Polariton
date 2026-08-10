@@ -1,25 +1,22 @@
-//! Matrix element calculation module for exciton simulations
-//!
-//! This module provides functionality for calculating and caching matrix elements
-//! of the periodic potential between different eigenstates of the relative coordinate
-//! Hamiltonian. These matrix elements are essential for constructing the full Hamiltonian
-//! that includes both relative and center-of-mass motion.
-//!
 //! ## Matrix Element Convention
 //!
 //! This module computes the **real** sine integrals:
 //! ```text
-//! V_{ij}(κ) = ∫ ψ_i(r) sin(κ·r) ψ_j(r) dr
+//! S_ij(κ) = ∫ d²r ψ_i(r) sin(κ·r / 2) ψ_j(r)
 //! ```
 //!
-//! The `-i` factor needed for the Hermitian Hamiltonian is applied when constructing
-//! the Hamiltonian matrix in `hamiltonian.rs`, where the full matrix element becomes:
+//! The complex prefactor from the lattice Hamiltonian is applied in
+//! `hamiltonian.rs`. The full lattice matrix element is:
 //! ```text
-//! H_{ij} = -i * V_0 * V_{ij}(κ)
+//! H_latt = -2i w_κ e^{iκ·X} sin(κ·r / 2)
+//! ```
+//! so after the CoM plane-wave shift, the relative-coordinate factor is:
+//! ```text
+//! -2i w_κ S_ij(κ).
 //! ```
 //!
-//! This separation allows the matrix element calculator to work with real numbers,
-//! while the Hamiltonian builder handles the complex arithmetic.
+//! This separation lets the matrix-element calculator work with real numbers,
+//! while the Hamiltonian builder handles the complex prefactor and CoM momentum shift.
 use crate::grid::Grid;
 use crate::utils::fast_matrix_element_calc;
 use log::{info, warn};
@@ -94,16 +91,20 @@ impl MatrixElementCalculator {
         
         // Precompute potential terms for common kappa values
         for &(kx, ky) in w_kappa.keys() {
-            let mut sin_x = Array2::zeros((self.grid.grid_size, 1));
-            let mut sin_y = Array2::zeros((1, self.grid.grid_size));
-            
-            for i in 0..self.grid.grid_size {
-                sin_x[[i, 0]] = (kx * self.grid.x[i] / 2.0).sin();
-                sin_y[[0, i]] = (ky * self.grid.y[i] / 2.0).sin();
+            let mut sin_term = Array2::zeros((self.grid.grid_size, self.grid.grid_size));
+
+            for iy in 0..self.grid.grid_size {
+                for ix in 0..self.grid.grid_size {
+                    let x = self.grid.x[ix];
+                    let y = self.grid.y[iy];
+
+                    sin_term[[iy, ix]] =
+                        ((kx * x + ky * y) / 2.0).sin();
+                }
             }
             
             let key = format!("sin_term_{:.6}_{:.6}", kx, ky);
-            pre.insert(key, sin_x + sin_y);
+            pre.insert(key, sin_term);
         }
         drop(pre)
     }
@@ -231,16 +232,18 @@ impl MatrixElementCalculator {
             .to_shape((self.grid.grid_size, self.grid.grid_size)).unwrap().to_owned();
         
         // Calculate the sine term
-        let mut sin_x = Array2::zeros((self.grid.grid_size, 1));
-        let mut sin_y = Array2::zeros((1, self.grid.grid_size));
-        
-        for i in 0..self.grid.grid_size {
-            sin_x[[i, 0]] = (kappa_pot.0.0 * x_grid[[i, 0]] / 2.0).sin();
-            sin_y[[0, i]] = (kappa_pot.1.0 * y_grid[[0, i]] / 2.0).sin();
+        let mut sin_term = Array2::zeros((self.grid.grid_size, self.grid.grid_size));
+
+        for iy in 0..self.grid.grid_size {
+            for ix in 0..self.grid.grid_size {
+                let x = self.grid.x[ix];
+                let y = self.grid.y[iy];
+
+                sin_term[[iy, ix]] =
+                    ((kappa_pot.0.0 * x + kappa_pot.1.0 * y) / 2.0).sin();
+            }
         }
         
-        let sin_term = sin_x + sin_y;
-                
         fast_matrix_element_calc(
             &psi_i, 
             &psi_j,
@@ -286,19 +289,19 @@ impl MatrixElementCalculator {
         let sin_term = if let Some(term) = precomputed.get(&sin_term_key) {
             term.clone()
         } else {
-            // Calculate the sine term
-            let x_grid = precomputed.get("x_grid").unwrap();
-            let y_grid = precomputed.get("y_grid").unwrap();
-            
-            let mut sin_x = Array2::zeros((self.grid.grid_size, 1));
-            let mut sin_y = Array2::zeros((1, self.grid.grid_size));
-            
-            for i in 0..self.grid.grid_size {
-                sin_x[[i, 0]] = (kappa_pot[0] * x_grid[[i, 0]] / 2.0).sin();
-                sin_y[[0, i]] = (kappa_pot[1] * y_grid[[0, i]] / 2.0).sin();
+            let mut sin_term = Array2::zeros((self.grid.grid_size, self.grid.grid_size));
+
+            for iy in 0..self.grid.grid_size {
+                for ix in 0..self.grid.grid_size {
+                    let x = self.grid.x[ix];
+                    let y = self.grid.y[iy];
+
+                    sin_term[[iy, ix]] =
+                        ((kappa_pot[0] * x + kappa_pot[1] * y) / 2.0).sin();
+                }
             }
-            
-            sin_x + sin_y
+
+            sin_term
         };
         
         let matrix_element = fast_matrix_element_calc(
@@ -339,13 +342,9 @@ impl MatrixElementCalculator {
         );
         
         if Path::new(&matrix_elements_filename).exists() && !self.recalculate {
-            if self.verbose {info!("Loading precomputed matrix elements from {}", matrix_elements_filename)};
-            
-            // In a real implementation, we'd deserialize from JSON
-            // For now, we'll just return an empty HashMap
-            let v_rel = HashMap::new();
-            if self.verbose {info!("Loaded {} precomputed matrix elements", v_rel.len())};
-            return v_rel;
+            if self.verbose {
+                info!("Cache exists but loading is not implemented; recomputing...");
+            }
         }
         
         if self.verbose {info!("Pre-calculating potential matrix elements...")};
@@ -358,7 +357,7 @@ impl MatrixElementCalculator {
                 for j in 0..n_rel_states {
                     // Use cached matrix element calculation
                     let matrix_element = self.cached_potential_matrix_element(kappa_pot_tuple, i, j);
-                    if matrix_element > 1e-12 {  // Only store non-zero elements
+                    if matrix_element.abs() > 1e-12 {  // Only store non-zero elements
                         v_rel.insert((i, j, kappa_pot_tuple), matrix_element);
                     }
                 }

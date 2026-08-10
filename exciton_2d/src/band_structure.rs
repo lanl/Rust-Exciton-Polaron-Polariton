@@ -111,6 +111,17 @@ impl ColorBandData {
 /// relative coordinate state contributes most to the eigenstate.
 ///
 /// Note: Eigenvectors are complex due to -i*sin matrix elements.
+/// 
+/// Basis convention used throughout exciton_2d:
+///     |state> = |CoM_index> ⊗ |rel_index>
+/// with flat index
+///     idx = com_index * n_rel_states + rel_index.
+///
+/// Therefore diagonal operators are ordered as:
+///     H_rel -> I_com ⊗ H_rel
+///     H_com -> H_com ⊗ I_rel
+///
+/// Any downstream crate using exciton eigenvectors must use the same ordering.
 pub fn calculate_n_expectation<M: MatrixOps>(
     full_ham: &FullHamiltonian<M>,
     eigenvector: &Array1<num_complex::Complex64>,
@@ -139,7 +150,7 @@ pub fn calculate_n_expectation<M: MatrixOps>(
     
     for i_rel in 0..n_rel_states {
         for i_com in 0..n_com_states {
-            let i = i_rel * n_com_states + i_com;
+            let i = i_rel + i_com * n_rel_states;
             if i < eigenvector.len() {
                 // For complex eigenvectors, probability is |ψ|²
                 let prob = eigenvector[i].norm_sqr();

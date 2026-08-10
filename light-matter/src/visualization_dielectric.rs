@@ -37,6 +37,7 @@ pub fn compute_weight_fields(
     x_pp: &Array1<f64>,
     photonic_chars: &[f64],
     phonon_numbers: &[f64],
+    ground_state_index: usize,
     gamma: f64,
 ) -> (Array1<f64>, Array1<f64>) {
     let n_states = pp_vals.len();
@@ -49,7 +50,7 @@ pub fn compute_weight_fields(
         let mut phot_sum = 0.0f64;
         let mut phon_sum = 0.0f64;
         for i in 0..n_states {
-            let delta_e = pp_vals[i] - pp_vals[0];
+            let delta_e = pp_vals[i] - pp_vals[ground_state_index];
             let contrib = x_pp[i] * x_pp[i] / (omega - delta_e + c64::i() * gamma);
             let w_i = contrib.norm(); // magnitude of complex contribution
             w_sum += w_i;
@@ -230,6 +231,9 @@ pub fn plot_dielectric_stacked_photonic(
     // Calculate total contribution strength for each state across all frequencies
     let mut state_contributions: Vec<(usize, f64, f64, f64)> = Vec::new(); // (index, energy, photonic_char, total_contribution)
     for i in 0..pp_vals.len() {
+        if i == ground_state_index {
+            continue;
+        }
         let delta_e = pp_vals[i] - ground_state_energy;
         let x_sq = x_pp[i] * x_pp[i];
         // Sum |Im[contrib]| across frequency range of interest (0.17-0.18)
@@ -269,7 +273,7 @@ pub fn plot_dielectric_stacked_photonic(
             photonic_sum += weight * photonic_chars[i];
         }
         
-        im_eps[w_idx] = (1.0 + 4.0 * PI * eps_contrib).im.abs();
+        im_eps[w_idx] = (1.0 - 4.0 * PI * eps_contrib).im.abs();
         
         if weight_sum > 1e-12 {
             photonic_weighted[w_idx] = photonic_sum / weight_sum;
@@ -404,6 +408,9 @@ pub fn plot_dielectric_stacked_phonon(
         let mut fock_weights: Vec<f64> = vec![0.0; n_fock + 1];
         
         for i in 0..pp_vals.len() {
+            if i == ground_state_index {
+                continue;
+            }
             let delta_e = pp_vals[i] - ground_state_energy;
             let contrib = x_pp[i] * x_pp[i] / (omega - delta_e + c64::i() * gamma);
             eps_contrib += contrib;
@@ -418,7 +425,7 @@ pub fn plot_dielectric_stacked_phonon(
             fock_weights[fock_idx] += weight;
         }
         
-        im_eps[w_idx] = (1.0 + 4.0 * PI * eps_contrib).im.abs();
+        im_eps[w_idx] = (1.0 - 4.0 * PI * eps_contrib).im.abs();
         
         // Normalize the Fock contributions to sum to im_eps[w_idx]
         if total_weight > 1e-12 {

@@ -295,11 +295,15 @@ where M: MatrixOps + Diagonalize, M::Scalar: Sqrt + Sum + ConvertFrom<f64> + Con
     let dielectric_function: Array1<c64> = Array1::from_shape_fn(omegas.len(), |idx| {
         let omega = omegas[idx];
 
-        let result: c64 = x_pp.iter().enumerate().map(|(pp_ind, x_pp_val)| {
-            x_pp_val * x_pp_val / (omega - (pp_vals[pp_ind] - pp_vals[ground_state_index]) + c64::i() * gamma)
-        }).sum();
+        let result: c64 = x_pp.iter().enumerate()
+            .filter(|(pp_ind, _)| *pp_ind != ground_state_index)
+            .map(|(pp_ind, x_pp_val)| {
+                x_pp_val * x_pp_val
+                    / (omega - (pp_vals[pp_ind] - pp_vals[ground_state_index]) + c64::i() * gamma)
+            })
+            .sum();
 
-        1.0 + 4.0 * PI * result
+        1.0 - 4.0 * PI * result
     });
 
     Ok(DielectricResult {
@@ -355,12 +359,12 @@ where
                 (0..n_rel).flat_map(move |rel_ind2| {
 
                     (0..n_com).map(move |com_ind| {
-                        let i1 = n_com * rel_ind1 + com_ind;
-                        let i2 = n_com * rel_ind2 + com_ind;
+                        let i1 = com_ind * n_rel + rel_ind1;
+                        let i2 = com_ind * n_rel + rel_ind2;
                         let a1 = vec1[i1];
                         let a2 = vec2[i2];
 
-                        a1 * a2 * x_rel[[rel_ind1,rel_ind2]]
+                        a1.conj() * a2 * x_rel[[rel_ind1, rel_ind2]]
                     })
                 })
             })
@@ -426,6 +430,13 @@ where
         photon_character = band_structure::calculate_photonic_character(&pp, &vec0.to_owned());
     }
 
+
+    // We store the magnitude of the scalar transition dipole,
+    //     x_pp[n] = |<0|x|n>|.
+    // This is sufficient for the scalar resonant dielectric function, where the
+    // numerator is |<0|x|n>|^2. For a full tensor dielectric calculation,
+    // one should store complex transition dipoles for each Cartesian component
+    // and form <n|x_i|0><0|x_j|n> explicitly.
     let x_pp = Array1::from_shape_fn(n_eig, |idx| {
         let vec1 = pp_vecs.column(idx);
 
@@ -436,7 +447,7 @@ where
                     let pp_ind1 = ex_ind1 * n_ph*n_pn + bos_ind;
                     let pp_ind2 = ex_ind2 * n_ph*n_pn + bos_ind;
 
-                    vec0[pp_ind1] * vec1[pp_ind2] * x_element
+                    vec0[pp_ind1].conj() * vec1[pp_ind2] * x_element
                 })
             })
         }).fold(c64::zero(), |acc, val| acc + val).norm()

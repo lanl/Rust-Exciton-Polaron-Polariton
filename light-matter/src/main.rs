@@ -311,12 +311,15 @@ fn generate_stacked_plots(
                     let mut eps_contrib = c64::new(0.0, 0.0);
                     
                     for i in 0..pp_vals_zero.len() {
+                        if i == gs_idx_zero {
+                            continue;
+                        }
                         let delta_e = pp_vals_zero[i] - ground_state_energy;
                         let contrib = x_pp_zero[i] * x_pp_zero[i] / (omega - delta_e + c64::i() * gamma);
                         eps_contrib += contrib;
                     }
                     
-                    im_eps_zero[w_idx] = (1.0 + 4.0 * PI * eps_contrib).im.abs();
+                    im_eps_zero[w_idx] = (1.0 - 4.0 * PI * eps_contrib).im.abs();
                 }
                 
                 Some(im_eps_zero)

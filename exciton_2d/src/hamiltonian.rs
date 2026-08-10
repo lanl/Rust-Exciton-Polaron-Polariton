@@ -272,8 +272,8 @@ impl RelativeHamiltonian {
                             for i in 0..self.grid.grid_size {
                                 for j in 0..self.grid.grid_size {
                                     let phase = m as f64 * theta[[i, j]];
-                                    let real_part = radial[[i, j]] * phase.cos() / (2.0 * std::f64::consts::PI).sqrt();
-                                    eigvecs[[i * self.grid.grid_size + j, idx]] = real_part / 2.0_f64.sqrt();
+                                    let real_part = radial[[i, j]] * phase.cos() / std::f64::consts::PI.sqrt();
+                                    eigvecs[[i * self.grid.grid_size + j, idx]] = real_part;
                                 }
                             }
                         } else {
@@ -281,8 +281,8 @@ impl RelativeHamiltonian {
                             for i in 0..self.grid.grid_size {
                                 for j in 0..self.grid.grid_size {
                                     let phase = m.abs() as f64 * theta[[i, j]];
-                                    let imag_part = radial[[i, j]] * phase.sin() / (2.0 * std::f64::consts::PI).sqrt();
-                                    eigvecs[[i * self.grid.grid_size + j, idx]] = imag_part / 2.0_f64.sqrt();
+                                    let imag_part = radial[[i, j]] * phase.sin() / std::f64::consts::PI.sqrt();
+                                    eigvecs[[i * self.grid.grid_size + j, idx]] = imag_part;
                                 }
                             }
                         }
@@ -444,7 +444,7 @@ where
     ///
     /// This method constructs the Hamiltonian matrix that includes the relative coordinate
     /// energy and the periodic potential, but not the center-of-mass kinetic energy.
-    /// With -i*sin(κ·r) matrix elements, the Hamiltonian is complex but Hermitian.
+    /// With -2i*sin(κ·r) matrix elements, the Hamiltonian is complex but Hermitian.
     ///
     /// # Arguments
     /// * `n_rel_states` - Number of relative coordinate states to include
@@ -522,7 +522,7 @@ where
         // Loop over all basis states
         for i_rel in 0..n_rel_states_used {
             for i_com in 0..n_com_states {
-                let i = i_rel * n_com_states + i_com;
+                let i = i_rel + i_com * n_rel_states_used;
                 
                 // Off-diagonal terms from the potential - only for non-zero w_kappa
                 for (&kappa_pot_tuple, &v0) in &w_kappa_tuples {
@@ -531,14 +531,14 @@ where
                     if let Some(&j_com) = self.vector_sum_to_index.get(&key) {
                         // Loop over relative states
                         for j_rel in 0..n_rel_states_used {
-                            let j = j_rel * n_com_states + j_com;
+                            let j = j_rel + j_com * n_rel_states_used;
                             
                             // Get the potential matrix element if it exists
-                            if let Some(&matrix_element) = v_rel.get(&(i_rel, j_rel, kappa_pot_tuple)) {
+                            if let Some(&matrix_element) = v_rel.get(&(j_rel, i_rel, kappa_pot_tuple)) {
                                 // Add to matrix if non-zero
-                                // Matrix element is -i * sin(κ·r), so multiply by -i
+                                // Matrix element is -2i * sin(κ·r), so multiply by -2i
                                 if matrix_element.abs() > 1e-12 {
-                                    h_int.add_triplet(i, j, M::Scalar::convert_from(Complex64::new(0.0, -v0 * matrix_element)));
+                                    h_int.add_triplet(j, i, M::Scalar::convert_from(Complex64::new(0.0, -2.0 * v0 * matrix_element)));
                                 }
                             }
                         }
@@ -617,7 +617,7 @@ where
         M: Diagonalize
     {
         if self.verbose {
-            info!("Building complex Hermitian Hamiltonian with -i*sin matrix elements");
+            info!("Building complex Hermitian Hamiltonian with -2i*w_kappa*sin(kappa·x/2) matrix elements");
         }
         
         // Build the full Hamiltonian with all states

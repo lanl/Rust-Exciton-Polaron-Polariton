@@ -17,6 +17,7 @@
 core.*
 *.done
 *.pdf
+all_sources*
 
 # Environment-specific directories (ignored by default)
 /.cargo/

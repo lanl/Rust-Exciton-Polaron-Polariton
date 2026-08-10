@@ -544,7 +544,7 @@ impl LMMatrixElementArray {
 
         let com_identity = Array2::eye(n_com);
 
-        let matrix = kron(&rel_matrix, &com_identity);
+        let matrix = kron(&com_identity, rel_matrix);
 
         let transform = e_vecs;
 
@@ -555,6 +555,15 @@ impl LMMatrixElementArray {
         transform_dag.dot(&matrix).dot(transform)
     }
 
+    // Transform complex angular-momentum states |n,m> into the real basis:
+    //   l = 0: |n,0>
+    //   l > 0: (|n,l> + |n,-l>)/sqrt(2)          ~ cos(lθ)
+    //   l < 0: (|n,-l> - |n,l>)/(i sqrt(2))      ~ sin(|l|θ)
+    //
+    // The input relative-basis matrices are first computed in the complex |n,m>
+    // basis ordered as n=0: m=0; n=1: m=-1,0,1; etc. This routine applies the
+    // unitary basis rotation to obtain matrices in the real basis used by the
+    // exciton solver.
     pub fn to_real_rel_basis(
         &self,
         rel_matrix: &Array2<c64>,
@@ -825,6 +834,11 @@ impl LMMatrixElementArray {
         let m2 = i2.1;
         let beta_2 = mu * 2.0 / (n2 as f64 + 0.5);
 
+        // We factor out a final beta_2 at the end. Therefore the first two terms
+        // are written as |m|/beta_2 * O(l-1) - 1/2 * O(l), and multiplication by
+        // beta_2 gives |m| O(l-1) - beta_2/2 O(l), as required by
+        // dR/dr = [|m|/r - beta_2/2]R - beta_2 * L' contribution.
+
         let mut radial = (m2.abs() as f64)/beta_2 * self.get_overlap(i1, i2, l - 1, mu, lag_coeffs);
         
         radial -= 0.5 * self.get_overlap(i1, i2, l, mu, lag_coeffs);
@@ -954,8 +968,15 @@ impl LMMatrixElementArray {
 
         let norms = self.norm_constant(i1,mu) * self.norm_constant(i2, mu);
         let rad_integral = self.get_overlap(i1, i2, 3, mu, lag_coeffs);
+        let q2 = q.dot(q);
 
-        c64::new(overlap, 0.0) - angular * c64::new(norms * rad_integral, 0.0)
+        // The angular factor computed above is normalized so that the explicit
+        // angular integral contributes a factor of π. Therefore the Taylor term is
+        //
+        //   - (|q|^2 / 8) * [π * angular] * radial_overlap,
+        //
+        // which gives the prefactor π |q|^2 / 8 below.
+        c64::new(overlap, 0.0) - angular * c64::new(norms * rad_integral * PI * q2 / 8.0, 0.0)
     }
 
     /// Matrix element: i  n1,m1 | (epsilon·∇) cos(q·r/2) | n2,m2 >
@@ -1041,16 +1062,26 @@ impl LMMatrixElementArray {
         c64::new(norms, 0.0) * integral
     }
 
-    fn real_l_to_complex_m(&self, l: i32) -> Vec<(i32, c64)>{
+    fn real_l_to_complex_m(&self, l: i32) -> Vec<(i32, c64)> {
+        let inv_sqrt2 = 1.0 / 2_f64.sqrt();
+
         match l {
             0 => vec![(0, c64::new(1.0, 0.0))],
+
             l if l > 0 => vec![
-                ( l, c64::new( 1.0 / 2_f64.sqrt(), 0.0)), 
-                (-l, c64::new( 1.0 / 2_f64.sqrt(), 0.0))],
-            l if l < 0 => vec![
-                ( l, c64::new( 1.0 / 2_f64.sqrt(), 0.0)), 
-                (-l, c64::new(-1.0 / 2_f64.sqrt(), 0.0))],
-            _ => panic!("Invalid l value in real_l_to_complex_m")
+                ( l, c64::new(inv_sqrt2, 0.0)),
+                (-l, c64::new(inv_sqrt2, 0.0)),
+            ],
+
+            l if l < 0 => {
+                let a = -l;
+                vec![
+                    ( a, -c64::i() * inv_sqrt2),
+                    (-a,  c64::i() * inv_sqrt2),
+                ]
+            },
+
+            _ => unreachable!(),
         }
     }
 
@@ -1125,7 +1156,7 @@ impl LMMatrixElementArray {
         let sum = (m1 + m2).abs();
 
         // Only jumps in m by ±1 allowed
-        if diff & sum != 1 {
+        if diff != 1 && sum != 1 {
             return 0.0
         }
         

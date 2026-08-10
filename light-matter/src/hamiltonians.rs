@@ -29,6 +29,8 @@ pub trait Boson<M:MatrixOps> {
     fn get_modes(&self) -> &Vec<BosonMode>;
 
     fn dimension (&self) -> usize;
+
+    // fn total_momentum(&self) -> Result<M, MatrixOpsError>;
 }
 
 pub struct FullBosons<M: MatrixOps> {
@@ -85,8 +87,33 @@ impl<M: MatrixOps> Boson<M> for FullBosons<M> {
     fn dimension (&self) -> usize {
         self.get_modes().iter().map(|mode| mode.n_fock).product()
     }
+
+    // fn total_momentum(&self) -> Result<M, MatrixOpsError> {
+    //     let dim = self.dimension();
+        
+    //     self
+    //         .bosonic_modes
+    //         .iter()
+    //         .enumerate()
+    //         .try_fold(None, |acc: Option<Array1<M::Scalar>>, (idx, mode)| {
+                
+    //             let sing_diag = Array1::from_iter((0..mode.n_fock).map(|n| M::Scalar::convert_from(n as f64 * mode.q.norm())));
+
+    //             Ok(Some(match acc {
+    //                 Some(acc) => acc.kron(&sing_diag),
+    //                 None => sing_diag,
+    //             }))
+    //         })
+    // }
 }
 
+/// Single-excitation boson basis:
+///   |0>, |1_0>, |1_1>, ..., |1_{N-1}>.
+/// The annihilation operator a_i maps |1_i> -> |0>.
+/// The creation operator a_i† is represented as a_i^T and maps |0> -> |1_i>.
+/// Operators that would create two photons are projected out of this truncated
+/// Hilbert space. Therefore pair creation terms in A^2 and certain recoil terms
+/// vanish by projection in this basis.
 pub struct SingExBosons<M: MatrixOps> {
     pub bosonic_modes: Vec<BosonMode>,
     _phantom: std::marker::PhantomData<M>,
@@ -255,7 +282,7 @@ where
         let k = &self.exciton_ham.k;
 
         let n_com = kappas.len();
-        let n_eig = e_vecs.len();
+        let n_eig = e_vecs.ncols();
         
         // Convert k to Array1 once for efficiency
         let k_arr = arr1(&k);
@@ -280,7 +307,7 @@ where
                     let p = p_dot_unit_cache[com_ind];
                     
                     (0 .. n_rel).map(move |rel_ind| {
-                        let i = n_com * rel_ind + com_ind;
+                        let i = com_ind * n_rel + rel_ind;
                         let a1 = vec1[i];
                         a1.norm_sqr() * p  // |ψ|² for complex numbers
                     })
@@ -302,7 +329,7 @@ where
                     let p = p_dot_unit_cache[com_ind];
                     
                     (0 .. n_rel).map(move |rel_ind| {
-                        let i = n_com * rel_ind + com_ind;
+                        let i = com_ind * n_rel + rel_ind;
                         let a1 = vec1[i];
                         let a2 = vec2[i];
                         (a1.conj() * a2) * p  // p * ψ_i* ψ_j
@@ -527,7 +554,7 @@ where
                 2.0 / self.exciton.exciton_ham.m * coupling_i
             )?;
             let p_q = &self.p_q.as_ref().unwrap()[i_ph].scale(
-                1.0 / 2.0 / self.exciton.exciton_ham.m
+                -1.0 /  self.exciton.exciton_ham.m
             )?;
 
             let p_cos = &M::from_dense(&(
@@ -538,6 +565,21 @@ where
             // P•A sin(x) terms - these are perfect KronSum candidates
             kron_pairs.push((p_c_sin.clone(), a_i.clone()));
             kron_pairs.push((p_c_sin.clone(), a_i.transpose()));
+
+            // The exact transformed CoM light-matter coupling contains
+            //
+            //   (2/M) [P - sum_{q' != q} q' n_{q'}] · A_q
+            //       sin(q·x/2) (a_q† + a_q).
+            //
+            // Here we include the P · A_q part. The recoil-subtraction part
+            //
+            //   -(2/M) sum_{q' != q} (q'·A_q) n_{q'}
+            //       sin(q·x/2) (a_q† + a_q)
+            //
+            // is projected out in the single-excitation photon basis used by
+            // SingExBosons: n_{q'}(a_q† + a_q) either annihilates the wrong mode
+            // or creates a two-photon state outside the truncated subspace.
+            // If FullBosons is used, this recoil-subtraction term should be added.
 
             // p•A cos(x) terms
             kron_pairs.push((p_cos.clone(), a_i.scale(-1.0)?));
@@ -571,6 +613,31 @@ where
                 // cos(q - q') term
                 kron_pairs.push((cos_diff.scale(coupling_2)?, a_i.dot(&a_j.transpose())?));
                 kron_pairs.push((cos_diff.scale(coupling_2)?, a_i.transpose().dot(a_j)?));
+
+                // NOTE on the A^2 term:
+                //
+                // The full transformed diamagnetic term contains both number-conserving pieces
+                //     cos[(q-q')·x/2] (a_q† a_q' + a_q a_q'†)
+                // and pair creation/annihilation pieces
+                //     cos[(q+q')·x/2] (a_q a_q' + a_q† a_q'†).
+                //
+                // In the single-excitation photon basis used by SingExBosons, the pair
+                // creation/annihilation pieces leave the truncated Hilbert space and are
+                // therefore projected out. Thus we retain only the number-conserving A^2 terms.
+                //
+                // If this code is used with FullBosons, the pair terms should be added explicitly.terms
+                                // NOTE on the A^2 term:
+                //
+                // The full transformed diamagnetic term contains both number-conserving pieces
+                //     cos[(q-q')·x/2] (a_q† a_q' + a_q a_q'†)
+                // and pair creation/annihilation pieces
+                //     cos[(q+q')·x/2] (a_q a_q' + a_q† a_q'†).
+                //
+                // In the single-excitation photon basis used by SingExBosons, the pair
+                // creation/annihilation pieces leave the truncated Hilbert space and are
+                // therefore projected out. Thus we retain only the number-conserving A^2 terms.
+                //
+                // If this code is used with FullBosons, the pair terms should be added explicitly.
 
                 // (q a†a)^2 term
                 let q_q = mode_i.q.dot(&mode_j.q) / 2.0 / self.exciton.exciton_ham.m;
@@ -739,19 +806,63 @@ where
         M::Scalar: Sqrt + Sum, 
     {
         let sin_pn = self.sin_pn.as_ref().unwrap();
+        let ex_dim = sin_pn[0].dimension();
+
+        let m_com = self.polariton.exciton.exciton_ham.m;       
 
         let ph_eye = M::eye(ph_dim);
 
-        self.phonon.boson.get_modes().iter().enumerate().try_for_each(|(idx, _)| -> Result<(), MatrixOpsError> {
-            let b = self.phonon.get_a(idx)?;
-            let b_dag = b.transpose().scale(-1.0)?;
-            let neg_b = b.scale(-1.0)?;
+        self.phonon.boson.get_modes().iter().enumerate().try_for_each(|(idx1, mode_1)| -> Result<(), MatrixOpsError> {
+            let b = self.phonon.get_a(idx1)?;
+            let b_dag = b.transpose();
+            let k1 = &mode_1.q;
 
-            // 2 gamma cos() (b† + b)
-            let lm_op = sin_pn[idx].kron(&ph_eye);
-            let pn_op = (neg_b.add(&b_dag))?.scale(2.0 * self.pn_coupling)?;
+            // The unrotated transformed phonon coupling is
+            //     2i γ_k sin(k·x/2) (b_k† - b_k).
+            // We work in the phase-rotated phonon basis where
+            //     i(b† - b) -> -(b† + b),
+            // so the implemented coupling is
+            //     -2 γ_k sin(k·x/2) (b† + b).
+            let lm_op = sin_pn[idx1].kron(&ph_eye);
+            let pn_op = (b.add(&b_dag))?.scale(-2.0 * self.pn_coupling)?;
 
             *ham = ham.add(&lm_op.kron(&pn_op))?;
+
+            // P • k b†b term
+            let p_k = &self.polariton.exciton.get_p_com(k1, false)?;
+            let lm_op = p_k.kron(&ph_eye);  
+            let n_k1 = self.phonon.get_adag_a(idx1)?;
+            *ham = ham.add(&lm_op.kron(&n_k1.scale(-1.0 / m_com)?))?;
+
+            // k • k' b†b b†b term
+            self.phonon.boson.get_modes().iter().enumerate().try_for_each(|(idx2, mode_2)| -> Result<(), MatrixOpsError> {
+                let k2 = &mode_2.q;
+                let lm_op = M::eye(ph_dim * ex_dim);
+                let n_k2 = self.phonon.get_adag_a(idx2)?;
+                let pn_op = n_k1.dot(&n_k2)?.scale(k1.dot(k2) / (2.0 * m_com))?;
+
+                *ham = ham.add(&lm_op.kron(&pn_op))?;
+
+                Ok(())
+            })?;
+
+            // A • k b†b sin(q x/2) (a + a†) term
+            self.polariton.photon.boson.get_modes().iter().enumerate().try_for_each(|(ph_idx, ph_mode)| -> Result<(), MatrixOpsError> {
+                let eps = &ph_mode.eps;
+                let coupling =  eps.dot(k1) * self.polariton.couplings[ph_idx]; 
+
+                let ph_op = self.polariton.cached_a_ops.as_ref().unwrap()[ph_idx].add(
+                    &self.polariton.cached_a_ops.as_ref().unwrap()[ph_idx].transpose()
+                )?;
+                let ex_op = self.polariton.matrix_elements.sin_mat.get(&vec![ph_idx as i32]).unwrap();
+
+                let lm_op = M::from_dense(ex_op)?.kron(&ph_op);
+                let pn_op = self.phonon.get_adag_a(idx1)?.scale(-2.0 * coupling / m_com)?;
+
+                *ham = ham.add(&lm_op.kron(&pn_op))?;
+
+                Ok(())
+            })?;
 
             Ok(())
         })?;

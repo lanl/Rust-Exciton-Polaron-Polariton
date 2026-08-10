@@ -49,7 +49,7 @@ struct Args {
     n_jobs: i32,
     
     /// Number of relative coordinate eigenstates
-    #[clap(long, default_value_t = 16)]
+    #[clap(long, default_value_t = 25)]
     n_rel_states: usize,
     
     /// Number of bands to calculate
@@ -214,7 +214,7 @@ fn main() {
     let config = ExcitonConfig {
         n_kappa: 11,
         a0: 16.0,
-        v0: 0.1,
+        v0: 0.05,
         k: vec![0.0, 0.0],
         m_e: 0.2,
         m_h: 0.2,
