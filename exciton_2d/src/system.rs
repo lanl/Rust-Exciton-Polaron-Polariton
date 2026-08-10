@@ -4,24 +4,24 @@
 //! for simulating excitons in 2D materials.
 
 use crate::band_structure::BandStructureCalculator;
+use crate::band_structure::calculate_n_colored_band_structure;
 use crate::config::ExcitonConfig;
 use crate::grid::Grid;
 use crate::hamiltonian::{FullHamiltonian, RelativeHamiltonian};
 use crate::matrix_elements::MatrixElementCalculator;
 use crate::utils::print_memory_usage;
 use crate::visualization::{plot_band_structure, plot_rel_eigenstate, plot_spectrum};
-use crate::band_structure::calculate_n_colored_band_structure;
 
 use log::{info, warn};
 use matrix_ops::MatrixOps;
+use matrix_ops::{ConvertFrom, Diagonalize, MatrixOpsError};
 use ndarray::{Array1, Array2};
+use num_complex::Complex64;
+use ordered_float::OrderedFloat;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 use std::time::Instant;
-use ordered_float::OrderedFloat;
-use matrix_ops::{ConvertFrom, Diagonalize, MatrixOpsError};
-use num_complex::Complex64;
 
 /// Main system class for exciton simulations in 2D materials
 ///
@@ -54,15 +54,15 @@ pub struct Exciton2DGridSystem<M: MatrixOps> {
     pub grid: Grid,
     pub kappa_vectors: Vec<Vec<f64>>,
     pub w_kappa: HashMap<(OrderedFloat<f64>, OrderedFloat<f64>), f64>,
-    pub vector_sum_to_index:  HashMap<(usize, (OrderedFloat<f64>, OrderedFloat<f64>)), usize>,
+    pub vector_sum_to_index: HashMap<(usize, (OrderedFloat<f64>, OrderedFloat<f64>)), usize>,
     pub matrix_elem_calc: MatrixElementCalculator,
     pub rel_ham: RelativeHamiltonian,
     pub full_ham: FullHamiltonian<M>,
     pub band_calc: BandStructureCalculator<M>,
 }
 
-impl<M: MatrixOps> Exciton2DGridSystem<M> 
-where 
+impl<M: MatrixOps> Exciton2DGridSystem<M>
+where
     M::Scalar: ConvertFrom<Complex64>,
     M: Diagonalize,
 {
@@ -98,8 +98,7 @@ where
         n_jobs: i32,
         use_gpu: bool,
         batch_size: usize,
-    ) -> Self 
-    {
+    ) -> Self {
         // Create save directory if it doesn't exist
         if !Path::new(&save_dir).exists() {
             match fs::create_dir_all(&save_dir) {
@@ -107,29 +106,37 @@ where
                     if verbose {
                         info!("Created save directory: {}", save_dir);
                     }
-                },
+                }
                 Err(e) => {
                     warn!("Failed to create save directory {}: {}", save_dir, e);
                     // Continue anyway, operations that need the directory will fail later
                 }
             }
         }
-        
+
         // Masses for CoM and relative motion
-        let m = m_e + m_h;  // Total mass
-        let mu = (m_e * m_h) / (m_e + m_h);  // Reduced mass
-        
+        let m = m_e + m_h; // Total mass
+        let mu = (m_e * m_h) / (m_e + m_h); // Reduced mass
+
         // Set up the grid
         let grid = Grid::new(grid_size, box_size, verbose);
-        
+
         // Define reciprocal lattice vectors and potential
-        let (kappa_vectors, w_kappa, vector_sum_to_index) = 
+        let (kappa_vectors, w_kappa, vector_sum_to_index) =
             Self::setup_reciprocal_lattice(n_kappa, a0, v0, verbose);
-        
+
         // Initialize components
-        let matrix_elem_calc = MatrixElementCalculator::new(grid.clone(), save_dir.clone(), recalculate);
-        let rel_ham = RelativeHamiltonian::new(grid.clone(), mu, save_dir.clone(), recalculate, batch_size, verbose);
-        
+        let matrix_elem_calc =
+            MatrixElementCalculator::new(grid.clone(), save_dir.clone(), recalculate);
+        let rel_ham = RelativeHamiltonian::new(
+            grid.clone(),
+            mu,
+            save_dir.clone(),
+            recalculate,
+            batch_size,
+            verbose,
+        );
+
         let full_ham = FullHamiltonian::new(
             rel_ham.clone(),
             matrix_elem_calc.clone(),
@@ -140,17 +147,18 @@ where
             k.clone(),
             verbose,
         );
-        
-        let band_calc = BandStructureCalculator::new(full_ham.clone(), a0, save_dir.clone(), verbose);
-        
+
+        let band_calc =
+            BandStructureCalculator::new(full_ham.clone(), a0, save_dir.clone(), verbose);
+
         // Precompute potential terms
         matrix_elem_calc.precompute_potential_terms(&w_kappa);
-        
+
         // Check memory usage
         if verbose {
             print_memory_usage("After initialization");
         }
-        
+
         Self {
             n_kappa,
             a0,
@@ -178,7 +186,7 @@ where
             band_calc,
         }
     }
-    
+
     /// Creates a new exciton system from a configuration object
     ///
     /// # Arguments
@@ -201,7 +209,7 @@ where
             config.batch_size,
         )
     }
-    
+
     /// Sets up the reciprocal lattice vectors and potential terms
     ///
     /// This method constructs the reciprocal lattice vectors for a 2D square lattice
@@ -227,18 +235,18 @@ where
         a0: f64,
         v0: f64,
         verbose: bool,
-    ) -> (Vec<Vec<f64>>, // kappa_vectors
-        HashMap<(OrderedFloat<f64>, OrderedFloat<f64>), f64>, // w_kappa
-        HashMap<(usize, (OrderedFloat<f64>, OrderedFloat<f64>)), usize> // vector_sum_to_index
-    ) 
-    {
+    ) -> (
+        Vec<Vec<f64>>,                                                   // kappa_vectors
+        HashMap<(OrderedFloat<f64>, OrderedFloat<f64>), f64>,            // w_kappa
+        HashMap<(usize, (OrderedFloat<f64>, OrderedFloat<f64>)), usize>, // vector_sum_to_index
+    ) {
         // Define reciprocal lattice vectors (for a 2D system)
-        let b1 = 2.0 * std::f64::consts::PI / a0;  // First reciprocal lattice vector
-        let b2 = 2.0 * std::f64::consts::PI / a0;  // Second reciprocal lattice vector
+        let b1 = 2.0 * std::f64::consts::PI / a0; // First reciprocal lattice vector
+        let b2 = 2.0 * std::f64::consts::PI / a0; // Second reciprocal lattice vector
 
         // Define range for reciprocal lattice indices
-        let n_max = n_kappa as i32 / 2;  // Maximum index for reciprocal lattice vectors
-        
+        let n_max = n_kappa as i32 / 2; // Maximum index for reciprocal lattice vectors
+
         // Calculate all reciprocal lattice vectors κ = n1*b1 + n2*b2
         let mut kappa_vectors = Vec::new();
         for n1 in -n_max..=n_max {
@@ -246,45 +254,57 @@ where
                 kappa_vectors.push(vec![n1 as f64 * b1, n2 as f64 * b2]);
             }
         }
-        
+
         // Fourier coefficients for the periodic potential
         let mut w_kappa = HashMap::new();
-        
+
         // Define a relative tolerance for floating-point comparisons
         const REL_TOL: f64 = 1e-9;
         const ABS_TOL: f64 = 1e-12;
-        
+
         // Helper function for approximate floating-point equality
         let approx_eq = |a: f64, b: f64| -> bool {
             let abs_diff = (a - b).abs();
             abs_diff < ABS_TOL || abs_diff / a.abs().max(b.abs()) < REL_TOL
         };
-        
+
         for vec in &kappa_vectors {
             let kx = OrderedFloat::<f64>::from(vec[0]);
             let ky = OrderedFloat::<f64>::from(vec[1]);
-            
+
             // Check if this is a first-order reciprocal lattice vector using proper comparison
-            if (approx_eq(kx.abs(), b1) && approx_eq(ky.abs(), 0.0)) ||
-            (approx_eq(kx.abs(), 0.0) && approx_eq(ky.abs(), b2)) {
+            if (approx_eq(kx.abs(), b1) && approx_eq(ky.abs(), 0.0))
+                || (approx_eq(kx.abs(), 0.0) && approx_eq(ky.abs(), b2))
+            {
                 w_kappa.insert((kx, ky), v0 / 2.0);
                 if verbose {
-                    info!("Added potential term for kappa = [{}, {}] with V = {}", kx, ky, v0/2.0);
+                    info!(
+                        "Added potential term for kappa = [{}, {}] with V = {}",
+                        kx,
+                        ky,
+                        v0 / 2.0
+                    );
                 }
             }
         }
-        
+
         // Precompute a lookup table for vector sums to indices
         if verbose {
             info!("Building vector sum lookup table...");
         }
-        
+
         let start_time = Instant::now();
 
         // Create a dictionary mapping vector tuples to their indices for fast lookup
         let mut kappa_vector_to_index = HashMap::new();
         for (i, vec) in kappa_vectors.iter().enumerate() {
-            kappa_vector_to_index.insert((OrderedFloat::<f64>::from(vec[0]), OrderedFloat::<f64>::from(vec[1])), i);
+            kappa_vector_to_index.insert(
+                (
+                    OrderedFloat::<f64>::from(vec[0]),
+                    OrderedFloat::<f64>::from(vec[1]),
+                ),
+                i,
+            );
         }
 
         // More efficient lookup table construction with proper floating-point comparisons
@@ -295,32 +315,38 @@ where
                 // Calculate the sum vector
                 let k_vec_sum_x = k_vec_i[0] + **OrderedFloat(kx);
                 let k_vec_sum_y = k_vec_i[1] + **OrderedFloat(ky);
-                
+
                 // Find the matching vector using proper tolerance-based comparison
                 let mut found = false;
                 for (&(vx, vy), &j) in &kappa_vector_to_index {
-                    if approx_eq(vx.into_inner(), k_vec_sum_x) && 
-                    approx_eq(vy.into_inner(), k_vec_sum_y) {
+                    if approx_eq(vx.into_inner(), k_vec_sum_x)
+                        && approx_eq(vy.into_inner(), k_vec_sum_y)
+                    {
                         vector_sum_to_index.insert((i, (kx, ky)), j);
                         found = true;
                         break;
                     }
                 }
-                
+
                 if !found && verbose {
-                    warn!("No matching vector found for sum: [{}, {}]", k_vec_sum_x, k_vec_sum_y);
+                    warn!(
+                        "No matching vector found for sum: [{}, {}]",
+                        k_vec_sum_x, k_vec_sum_y
+                    );
                 }
             }
         }
 
         if verbose {
-            info!("Lookup table built in {:.2} seconds.", start_time.elapsed().as_secs_f64());
+            info!(
+                "Lookup table built in {:.2} seconds.",
+                start_time.elapsed().as_secs_f64()
+            );
         }
-        
+
         (kappa_vectors, w_kappa, vector_sum_to_index)
     }
 
-    
     /// Solves the relative coordinate Hamiltonian
     ///
     /// # Arguments
@@ -328,10 +354,13 @@ where
     ///
     /// # Returns
     /// * Tuple containing eigenvalues, eigenvectors, and parity values
-    pub fn solve_rel_hamiltonian(&self, k_eigvals: usize) -> (Array1<f64>, Array2<f64>, Array1<i32>) {
+    pub fn solve_rel_hamiltonian(
+        &self,
+        k_eigvals: usize,
+    ) -> (Array1<f64>, Array2<f64>, Array1<i32>) {
         self.rel_ham.solve(k_eigvals)
     }
-    
+
     /// Diagonalizes the full Hamiltonian including center-of-mass motion
     ///
     /// The Hamiltonian is complex (with -i*sin matrix elements) but Hermitian, so
@@ -348,24 +377,30 @@ where
         &self,
         n_rel_states: usize,
         k_eigvals: usize,
-    ) -> Result<(Array1<f64>, Array2<Complex64>, Array1<f64>, Array2<f64>), MatrixOpsError> 
-    where 
+    ) -> Result<(Array1<f64>, Array2<Complex64>, Array1<f64>, Array2<f64>), MatrixOpsError>
+    where
         M::Scalar: ConvertFrom<Complex64>,
         M: Diagonalize,
     {
-        self.full_ham.diagonalize_full_hamiltonian(n_rel_states, k_eigvals)
+        self.full_ham
+            .diagonalize_full_hamiltonian(n_rel_states, k_eigvals)
     }
-    
+
     /// Plots a relative coordinate eigenstate
     ///
     /// # Arguments
     /// * `eigvec` - Eigenstate vector to plot
     /// * `title` - Optional title for the plot
     /// * `save_path` - Optional path to save the plot
-    pub fn plot_rel_eigenstate(&self, eigvec: &Array1<f64>, title: Option<&str>, save_path: Option<&str>) {
+    pub fn plot_rel_eigenstate(
+        &self,
+        eigvec: &Array1<f64>,
+        title: Option<&str>,
+        save_path: Option<&str>,
+    ) {
         plot_rel_eigenstate(&self.grid, eigvec, title, save_path);
     }
-    
+
     /// Plots the energy spectrum
     ///
     /// # Arguments
@@ -374,7 +409,7 @@ where
     pub fn plot_spectrum(&self, eigvals: &Array1<f64>, save_path: Option<&str>) {
         plot_spectrum(eigvals, &self.k, save_path);
     }
-    
+
     /// Calculates the band structure along high-symmetry paths
     ///
     /// Note: With sine matrix elements, parity is not conserved. All states are
@@ -403,7 +438,7 @@ where
             recalculate_bands,
         )
     }
-    
+
     /// Plots the band structure
     ///
     /// # Arguments
@@ -454,7 +489,8 @@ where
             self.v0,
             &self.save_dir,
             recalculate_bands,
-        ).unwrap()
+        )
+        .unwrap()
     }
 
     /// Plots the band structure with n-expectation values as colors

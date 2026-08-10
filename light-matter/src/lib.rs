@@ -3,8 +3,8 @@
 pub mod utils;
 pub mod visualization;
 // pub mod color_band_plot;
-pub mod matrix_elements;
-mod logging;
 pub mod hamiltonians;
+mod logging;
+pub mod matrix_elements;
 
-pub use utils::{Vector3D, BosonMode, Polarization};
+pub use utils::{BosonMode, Polarization, Vector3D};

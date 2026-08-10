@@ -26,40 +26,43 @@ fn main() {
         use_gpu: false,
         batch_size: 32,
     };
-    
+
     // Create the 2D exciton system
     let system: Exciton2DGridSystem<Array2<Complex64>> = Exciton2DGridSystem::from_config(config);
-    
+
     // Solve for the relative coordinate eigenstates
     let (rel_eigvals, rel_eigvecs, rel_pars) = system.solve_rel_hamiltonian(16);
-    
+
     // Print the first few eigenvalues
     println!("Relative coordinate eigenvalues:");
     for i in 0..std::cmp::min(5, rel_eigvals.len()) {
-        println!("E_{} = {:.6} with parity {}", i, rel_eigvals[i], rel_pars[i]);
+        println!(
+            "E_{} = {:.6} with parity {}",
+            i, rel_eigvals[i], rel_pars[i]
+        );
     }
-    
+
     // Plot the first eigenstate
     system.plot_rel_eigenstate(
         &rel_eigvecs.column(0).to_owned(),
         Some("Ground State"),
-        Some("output_figures/ground_state.png")
+        Some("output_figures/ground_state.png"),
     );
-    
+
     // Calculate band structure
     let (k_points, eigvals_list) = system.calculate_band_structure(
-        30,  // n_points
-        9,   // n_rel_states
-        16,  // n_bands
+        30,   // n_points
+        9,    // n_rel_states
+        16,   // n_bands
         true, // recalculate_bands
     );
-    
+
     // Plot band structure
     system.plot_band_structure(
         &k_points,
         &eigvals_list,
-        Some("output_figures/band_structure.png")
+        Some("output_figures/band_structure.png"),
     );
-    
+
     println!("Example completed successfully!");
 }

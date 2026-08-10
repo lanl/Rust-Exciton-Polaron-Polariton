@@ -3,91 +3,92 @@
 //! This module provides various utility functions used throughout the crate.
 
 use log::info;
-use ndarray::Array2;
+use ndarray::{Array2, ArrayView2, Zip};
 use std::process;
 
-/// Prints an estimate of the current memory usage
+/// Basis convention used throughout exciton_2d:
+///
+///     |state> = |CoM_index> ⊗ |rel_index>
+///
+/// with flat index
+///
+///     idx = com_index * n_rel_states + rel_index.
+///
+/// Therefore diagonal operators are ordered as:
+///
+///     H_rel -> I_com ⊗ H_rel
+///     H_com -> H_com ⊗ I_rel
+///
+/// Any downstream crate using exciton eigenvectors must use the same ordering.
+#[inline]
+pub fn exciton_flat_index(com_ind: usize, rel_ind: usize, n_rel: usize) -> usize {
+    com_ind * n_rel + rel_ind
+}
+
+/// Inverse of `exciton_flat_index`.
+///
+/// Returns `(com_ind, rel_ind)`.
+#[inline]
+pub fn exciton_unflatten_index(idx: usize, n_rel: usize) -> (usize, usize) {
+    let com_ind = idx / n_rel;
+    let rel_ind = idx % n_rel;
+    (com_ind, rel_ind)
+}
+
+/// Prints an estimate of the current memory usage.
 ///
 /// This is a simplified implementation that could be improved with a proper
 /// memory profiling library.
-///
-/// # Arguments
-/// * `message` - A message to include with the memory usage information
 pub fn print_memory_usage(message: &str) {
-    // This is platform-specific, so we'll use a simpler approach
-    // For a more accurate implementation, consider using the 'psutil' crate
-    let usage = process::id(); // Just a placeholder
+    let usage = process::id(); // placeholder
     info!("Memory usage {}: {} bytes (estimated)", message, usage);
 }
 
-/// Applies a symmetry operation to a k-point
-///
-/// This function applies one of the eight symmetry operations of a square lattice
-/// to a given k-point. The symmetry operations are:
-/// - 0: Identity (no change)
-/// - 1: 90° rotation
-/// - 2: 180° rotation
-/// - 3: 270° rotation
-/// - 4: Reflection across x-axis
-/// - 5: Reflection across y-axis
-/// - 6: Reflection across y=x
-/// - 7: Reflection across y=-x
-///
-/// # Arguments
-/// * `k_point` - The k-point to transform
-/// * `symmetry_op` - The symmetry operation to apply (0-7)
-///
-/// # Returns
-/// * The transformed k-point
-///
-/// # Panics
-/// Panics if `symmetry_op` is not in the range 0-7
+/// Applies one of the eight square-lattice point-group symmetry operations.
 pub fn apply_symmetry(k_point: &[f64], symmetry_op: usize) -> Vec<f64> {
     let kx = k_point[0];
     let ky = k_point[1];
-    
+
     match symmetry_op {
-        0 => vec![kx, ky],                // Identity
-        1 => vec![-ky, kx],               // 90° rotation
-        2 => vec![-kx, -ky],              // 180° rotation
-        3 => vec![ky, -kx],               // 270° rotation
-        4 => vec![kx, -ky],               // Reflection across x-axis
-        5 => vec![-kx, ky],               // Reflection across y-axis
-        6 => vec![ky, kx],                // Reflection across y=x
-        7 => vec![-ky, -kx],              // Reflection across y=-x
+        0 => vec![kx, ky],
+        1 => vec![-ky, kx],
+        2 => vec![-kx, -ky],
+        3 => vec![ky, -kx],
+        4 => vec![kx, -ky],
+        5 => vec![-kx, ky],
+        6 => vec![ky, kx],
+        7 => vec![-ky, -kx],
         _ => panic!("Invalid symmetry operation: {}", symmetry_op),
     }
 }
 
-/// Calculates a matrix element efficiently
+/// Calculates a matrix element efficiently.
 ///
-/// This function computes the matrix element <psi_i|V|psi_j> efficiently by
-/// directly multiplying the wavefunctions and potential on the grid and
-/// integrating using a simple quadrature rule.
+/// Computes:
 ///
-/// The integral is approximated as:
-/// <psi_i|V|psi_j> ≈ sum_{x,y} psi_i(x,y) * V(x,y) * psi_j(x,y) * dx²
+///     <psi_i|V|psi_j> ≈ sum_xy psi_i(x,y) V(x,y) psi_j(x,y) dx²
 ///
-/// # Arguments
-/// * `psi_i_real` - First wavefunction on the 2D grid
-/// * `psi_j_real` - Second wavefunction on the 2D grid
-/// * `v_term` - Potential term on the 2D grid
-/// * `dx` - Grid spacing
-///
-/// # Returns
-/// * The calculated matrix element
+/// This version avoids temporary arrays.
+pub fn fast_matrix_element_calc_view(
+    psi_i_real: ArrayView2<f64>,
+    psi_j_real: ArrayView2<f64>,
+    v_term: ArrayView2<f64>,
+    dx: f64,
+) -> f64 {
+    let sum = Zip::from(&psi_i_real)
+        .and(&psi_j_real)
+        .and(&v_term)
+        .fold(0.0, |acc, &a, &b, &v| acc + a * v * b);
+
+    sum * dx * dx
+}
+
+/// Backward-compatible owned-array wrapper.
 pub fn fast_matrix_element_calc(
     psi_i_real: &Array2<f64>,
     psi_j_real: &Array2<f64>,
     v_term: &Array2<f64>,
     dx: f64,
 ) -> f64 {
-
-    // Calculate the product (psi_i_conj * V(x) * psi_j)
-    let real_part = (psi_i_real * v_term) * psi_j_real;
-    
-    // Sum and scale by dx^2
-    let real_sum = real_part.sum() * dx * dx;
-    
-    real_sum
+    fast_matrix_element_calc_view(psi_i_real.view(), psi_j_real.view(), v_term.view(), dx)
 }

@@ -1,31 +1,35 @@
+use bincode::{deserialize, serialize};
+use colored::Colorize;
+use matrix_ops::{
+    ConvertFrom, DiagonalizationOptions, Diagonalize, MatrixOps, MatrixOpsError, Sqrt,
+};
 use ndarray::{Array1, Array2, s};
+use ndarray_linalg::c64;
+use serde::{Deserialize, Serialize};
+use std::error::Error;
 use std::f64::EPSILON;
 use std::f64::consts::PI;
 use std::fs::File;
-use std::io::{Write};
+use std::io::Write;
+use std::iter::Sum;
 use std::path::Path;
 use std::process::Command;
-use bincode::{serialize, deserialize};
-use serde::{Serialize, Deserialize};
-use std::error::Error;
 use std::time::Instant;
-use colored::Colorize;
-use std::iter::Sum;
-use ndarray_linalg::c64;
-use matrix_ops::{ConvertFrom, DiagonalizationOptions, Diagonalize, MatrixOps, MatrixOpsError, Sqrt};
 
 use crate::timed_println;
 
-use crate::utils::{PPConfig};
-use crate::hamiltonians::{PPHamiltonian, Boson};
+use crate::hamiltonians::{Boson, PPHamiltonian};
+use crate::utils::PPConfig;
 
 /// Calculate the photonic character of an eigenstate
 /// Returns a value between 0 (purely excitonic) and 1 (purely photonic)
 pub fn calculate_photonic_character<M, B>(
-    pp: &PPHamiltonian<M,B>,
-    eigenvector: &Array1<c64>
-) -> f64  
-where M: MatrixOps, B: Boson<M>
+    pp: &PPHamiltonian<M, B>,
+    eigenvector: &Array1<c64>,
+) -> f64
+where
+    M: MatrixOps,
+    B: Boson<M>,
 {
     let n_ex = pp.polariton.exciton.n_ex_eig;
     let n_ph = pp.polariton.photon.dimension(); // +1 for ground state
@@ -34,21 +38,22 @@ where M: MatrixOps, B: Boson<M>
     } else {
         pp.phonon.dimension()
     };
-    
+
     // Calculate the total probability in photonic states (excluding ground state)
     let mut photonic_prob = 0.0;
     let mut total_prob = 0.0;
-    
+
     for ex_idx in 0..n_ex {
         for ph_idx in 0..n_ph {
             for pn_idx in 0..n_pn {
                 let idx = ex_idx * n_ph * n_pn + ph_idx * n_pn + pn_idx;
                 let prob = eigenvector[idx].norm_sqr();
-                
-                if ph_idx > 0 {  // Skip photon ground state
+
+                if ph_idx > 0 {
+                    // Skip photon ground state
                     photonic_prob += prob;
                 }
-                
+
                 total_prob += prob;
             }
         }
@@ -62,7 +67,7 @@ where M: MatrixOps, B: Boson<M>
 #[derive(Serialize, Deserialize)]
 pub struct ColorBandData {
     pub k_points: Vec<Vec<f64>>,
-    pub eigenvalues: Vec<Vec<f64>>,  // Flattened Array1 to make serialization easier
+    pub eigenvalues: Vec<Vec<f64>>, // Flattened Array1 to make serialization easier
     pub photonic_character: Vec<Vec<f64>>,
 }
 
@@ -71,30 +76,34 @@ impl ColorBandData {
     pub fn from_results(
         k_points: Vec<Vec<f64>>,
         eigenvalues: Vec<Array1<f64>>,
-        photonic_character: Vec<Vec<f64>>
+        photonic_character: Vec<Vec<f64>>,
     ) -> Self {
         // Convert Array1 to Vec for serialization
-        let eigenvalues_vec: Vec<Vec<f64>> = eigenvalues.iter()
-            .map(|arr| arr.to_vec())
-            .collect();
-            
+        let eigenvalues_vec: Vec<Vec<f64>> = eigenvalues.iter().map(|arr| arr.to_vec()).collect();
+
         Self {
             k_points,
             eigenvalues: eigenvalues_vec,
             photonic_character,
         }
     }
-    
+
     /// Convert back to calculation result format
     pub fn to_results(&self) -> (Vec<Vec<f64>>, Vec<Array1<f64>>, Vec<Vec<f64>>) {
         // Convert Vec back to Array1
-        let eigenvalues: Vec<Array1<f64>> = self.eigenvalues.iter()
+        let eigenvalues: Vec<Array1<f64>> = self
+            .eigenvalues
+            .iter()
             .map(|vec| Array1::from_vec(vec.clone()))
             .collect();
-            
-        (self.k_points.clone(), eigenvalues, self.photonic_character.clone())
+
+        (
+            self.k_points.clone(),
+            eigenvalues,
+            self.photonic_character.clone(),
+        )
     }
-    
+
     /// Save data to file
     pub fn save_to_file(&self, filename: &str) -> Result<(), Box<dyn Error>> {
         File::create(filename)?;
@@ -102,7 +111,7 @@ impl ColorBandData {
         std::fs::write(filename, data)?;
         Ok(())
     }
-    
+
     /// Load data from file
     pub fn load_from_file(filename: &str) -> Result<Self, Box<dyn Error>> {
         let data = std::fs::read(filename)?;
@@ -116,13 +125,14 @@ pub fn load_color_band_structure<M, B: Boson<M>>(
     n_k_points: usize,
     n_eig: usize,
     pp_config: &PPConfig,
-    zoomed: bool
-) -> (Vec<Vec<f64>>, Vec<Array1<f64>>, Vec<Vec<f64>>) 
-where M: MatrixOps
+    zoomed: bool,
+) -> (Vec<Vec<f64>>, Vec<Array1<f64>>, Vec<Vec<f64>>)
+where
+    M: MatrixOps,
 {
     let save_dir = "pp_data".to_string();
     std::fs::create_dir_all(&save_dir).unwrap_or_else(|_| {});
-    
+
     // Generate filename for the color band structure data
     let mut filename = format!(
         "{}/color_band_a0{}_V0{}_nrel{}_nbands{}_npoints{}_phcoup{}_nmodes{}_pncoup{}_npn{}_neig{}",
@@ -140,44 +150,54 @@ where M: MatrixOps
     );
 
     filename += if zoomed { "_zoomed.bin" } else { ".bin" };
-    
+
     timed_println!("Loading cached color band structure data from {}", filename);
     match ColorBandData::load_from_file(&filename) {
         Ok(data) => return data.to_results(),
-        Err(e) => panic!("Failed to load cached data: {}, recalculating...", e)
+        Err(e) => panic!("Failed to load cached data: {}, recalculating...", e),
     }
 }
 
 /// Calculate band structure with MPI parallelization (alternative implementation)
-/// 
+///
 /// This version uses a simpler approach that's compatible with systems where
 /// MPI might already be initialized by other libraries (like PETSc/SLEPc).
-/// 
+///
 /// It falls back to environment variables if the mpi crate has issues.
-pub fn calculate_color_band_structure_mpi<M,B>(
-    pp: &mut PPHamiltonian<M,B>,
+pub fn calculate_color_band_structure_mpi<M, B>(
+    pp: &mut PPHamiltonian<M, B>,
     n_k_points: usize,
     n_eig: usize,
     sym_points: &Vec<Vec<f64>>,
     pp_config: &PPConfig,
     use_cached: bool,
-    zoomed: bool
-) -> Result<(Vec<Vec<f64>>, Vec<Array1<f64>>, Vec<Vec<f64>>), MatrixOpsError> 
-where 
-    M: MatrixOps + Diagonalize, 
-    M::Scalar: Sqrt + Sum + ConvertFrom<f64> + ConvertFrom<c64> , 
-    B: Boson<M>
+    zoomed: bool,
+) -> Result<(Vec<Vec<f64>>, Vec<Array1<f64>>, Vec<Vec<f64>>), MatrixOpsError>
+where
+    M: MatrixOps + Diagonalize,
+    M::Scalar: Sqrt + Sum + ConvertFrom<f64> + ConvertFrom<c64>,
+    B: Boson<M>,
 {
     use std::env;
 
     // Debug: Print all MPI-related environment variables
     timed_println!("\n=== MPI Environment Variables ===");
     let mpi_vars = vec![
-        "PMI_SIZE", "PMI_RANK", "PMIX_SIZE", "PMIX_RANK",
-        "I_MPI_SIZE", "I_MPI_RANK", "I_MPI_WORLD_SIZE", "I_MPI_WORLD_RANK",
-        "OMPI_COMM_WORLD_SIZE", "OMPI_COMM_WORLD_RANK",
-        "SLURM_NTASKS", "SLURM_PROCID", "SLURM_NPROCS",
-        "MPI_LOCALNRANKS", "MPI_LOCALRANKID"
+        "PMI_SIZE",
+        "PMI_RANK",
+        "PMIX_SIZE",
+        "PMIX_RANK",
+        "I_MPI_SIZE",
+        "I_MPI_RANK",
+        "I_MPI_WORLD_SIZE",
+        "I_MPI_WORLD_RANK",
+        "OMPI_COMM_WORLD_SIZE",
+        "OMPI_COMM_WORLD_RANK",
+        "SLURM_NTASKS",
+        "SLURM_PROCID",
+        "SLURM_NPROCS",
+        "MPI_LOCALNRANKS",
+        "MPI_LOCALRANKID",
     ];
     for var in &mpi_vars {
         match env::var(var) {
@@ -197,7 +217,7 @@ where
         .expect("Could not find MPI world size in environment variables. Tried: PMI_SIZE, PMIX_SIZE, I_MPI_SIZE, OMPI_COMM_WORLD_SIZE, SLURM_NTASKS")
         .parse()
         .expect("Failed to parse world size as integer");
-    
+
     let rank: usize = env::var("PMI_RANK")
         .or_else(|_| env::var("PMIX_RANK"))
         .or_else(|_| env::var("I_MPI_RANK"))
@@ -220,7 +240,7 @@ where
 
     let save_dir = "pp_data".to_string();
     std::fs::create_dir_all(&save_dir).unwrap_or_else(|_| {});
-    
+
     // Generate filename for the color band structure data
     let mut filename = format!(
         "{}/color_band_a0{}_V0{}_nrel{}_nbands{}_npoints{}_phcoup{}_nmodes{}_pncoup{}_npn{}_neig{}",
@@ -238,13 +258,13 @@ where
     );
 
     filename += if zoomed { "_zoomed.bin" } else { ".bin" };
-    
+
     // Check if cached data exists and should be used (only rank 0)
     if rank == 0 && use_cached && Path::new(&filename).exists() {
         timed_println!("Loading cached color band structure data from {}", filename);
         match ColorBandData::load_from_file(&filename) {
             Ok(data) => return Ok(data.to_results()),
-            Err(e) => timed_println!("Failed to load cached data: {}, recalculating...", e)
+            Err(e) => timed_println!("Failed to load cached data: {}, recalculating...", e),
         }
     }
 
@@ -255,27 +275,39 @@ where
     let k_points: Vec<Vec<f64>>;
     if zoomed {
         let start = vec![0., 0.];
-        let end =   vec![PI / pp_config.e_config.a0 / 6., 0.];
+        let end = vec![PI / pp_config.e_config.a0 / 6., 0.];
 
-        timed_println!("Performing zoomed in band structure from k = {:?} to {:?}", start, end);
-        k_points = (0 .. n_k_points).map(|k_ind|{
-            let t_frac = k_ind as f64 / (n_k_points - 1) as f64;
+        timed_println!(
+            "Performing zoomed in band structure from k = {:?} to {:?}",
+            start,
+            end
+        );
+        k_points = (0..n_k_points)
+            .map(|k_ind| {
+                let t_frac = k_ind as f64 / (n_k_points - 1) as f64;
 
-            vec![start[0] + t_frac * (end[0] - start[0]), start[1] + t_frac * (end[1] - start[1])]
-        }).collect()
-    }
-    else {
-        k_points = sym_points.iter().enumerate().flat_map(|(sym_ind, sym_point)| {
-            let sym_ind2 = (sym_ind + 1) % sym_points.len();
-            (0..points_per_seg).map(move |t| {
-                // Interpolate between symmetry points
-                let t_frac = t as f64 / (points_per_seg - 1) as f64;
-                let x = sym_point[0] + t_frac * (sym_points[sym_ind2][0] - sym_point[0]);
-                let y = sym_point[1] + t_frac * (sym_points[sym_ind2][1] - sym_point[1]);
-
-                vec![x, y]
+                vec![
+                    start[0] + t_frac * (end[0] - start[0]),
+                    start[1] + t_frac * (end[1] - start[1]),
+                ]
             })
-        }).collect();
+            .collect()
+    } else {
+        k_points = sym_points
+            .iter()
+            .enumerate()
+            .flat_map(|(sym_ind, sym_point)| {
+                let sym_ind2 = (sym_ind + 1) % sym_points.len();
+                (0..points_per_seg).map(move |t| {
+                    // Interpolate between symmetry points
+                    let t_frac = t as f64 / (points_per_seg - 1) as f64;
+                    let x = sym_point[0] + t_frac * (sym_points[sym_ind2][0] - sym_point[0]);
+                    let y = sym_point[1] + t_frac * (sym_points[sym_ind2][1] - sym_point[1]);
+
+                    vec![x, y]
+                })
+            })
+            .collect();
     }
 
     // Distribute k-points across ranks
@@ -283,7 +315,7 @@ where
     let k_per_rank = (total_k_points + world_size - 1) / world_size;
     let start_idx = rank * k_per_rank;
     let end_idx = ((rank + 1) * k_per_rank).min(total_k_points);
-    
+
     let my_k_points: Vec<(usize, Vec<f64>)> = k_points[start_idx..end_idx]
         .iter()
         .enumerate()
@@ -291,13 +323,22 @@ where
         .collect();
 
     if rank == 0 {
-        timed_println!("Processing {} k-points across {} ranks", total_k_points, world_size);
+        timed_println!(
+            "Processing {} k-points across {} ranks",
+            total_k_points,
+            world_size
+        );
     }
-    timed_println!("Rank {}: Processing k-points {} to {}", rank, start_idx, end_idx - 1);
+    timed_println!(
+        "Rank {}: Processing k-points {} to {}",
+        rank,
+        start_idx,
+        end_idx - 1
+    );
 
-    
     // Calculate eigenvalues and photonic character for this rank's k-points
-    let mut local_results: Vec<(usize, Array1<f64>, Vec<f64>)> = Vec::with_capacity(my_k_points.len());
+    let mut local_results: Vec<(usize, Array1<f64>, Vec<f64>)> =
+        Vec::with_capacity(my_k_points.len());
     let mut prev_eigvecs: Option<Array2<c64>> = None;
 
     for (global_idx, k) in my_k_points.iter() {
@@ -310,11 +351,11 @@ where
         let result = h_pp.diagonalize(option)?;
 
         let (eigvals, eigvecs) = result.into_arrays_hermitian();
-        
+
         let photonic_character: Vec<f64> = (0..n_eig)
             .map(|i| calculate_photonic_character(&pp, &eigvecs.column(i).to_owned()))
             .collect();
-        
+
         prev_eigvecs = Some(eigvecs);
         local_results.push((*global_idx, eigvals, photonic_character));
 
@@ -355,13 +396,22 @@ where
     let temp_dir = format!("{}/mpi_temp_{}", save_dir, job_id);
     std::fs::create_dir_all(&temp_dir).unwrap_or_else(|_| {});
     let temp_filename = format!("{}/rank_{}.bin", temp_dir, rank);
-    
+
     let local_data = ColorBandData::from_results(
-        local_results.iter().map(|(idx, _, _)| k_points[*idx].clone()).collect(),
-        local_results.iter().map(|(_, eigvals, _)| eigvals.clone()).collect(),
-        local_results.iter().map(|(_, _, photonic)| photonic.clone()).collect(),
+        local_results
+            .iter()
+            .map(|(idx, _, _)| k_points[*idx].clone())
+            .collect(),
+        local_results
+            .iter()
+            .map(|(_, eigvals, _)| eigvals.clone())
+            .collect(),
+        local_results
+            .iter()
+            .map(|(_, _, photonic)| photonic.clone())
+            .collect(),
     );
-    
+
     if let Err(e) = local_data.save_to_file(&temp_filename) {
         timed_println!("Rank {}: Failed to save temporary data: {}", rank, e);
     }
@@ -370,10 +420,20 @@ where
     let barrier_dir = format!("{}/barriers", temp_dir);
     std::fs::create_dir_all(&barrier_dir).unwrap();
     let barrier_file = format!("{}/rank_{}.done", barrier_dir, rank);
-    
+
     // Write rank completion marker with timestamp to avoid stale files
-    std::fs::write(&barrier_file, format!("{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs())).unwrap();
-    
+    std::fs::write(
+        &barrier_file,
+        format!(
+            "{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_secs()
+        ),
+    )
+    .unwrap();
+
     if rank == 0 {
         timed_println!("Rank 0: Waiting for all ranks to finish...");
         let mut last_count = 0;
@@ -386,7 +446,11 @@ where
                 }
             }
             if completed_count != last_count {
-                timed_println!("Rank 0: {} of {} ranks completed", completed_count, world_size);
+                timed_println!(
+                    "Rank 0: {} of {} ranks completed",
+                    completed_count,
+                    world_size
+                );
                 last_count = completed_count;
             }
             if completed_count == world_size {
@@ -396,7 +460,7 @@ where
         }
         timed_println!("Rank 0: All ranks finished, gathering results...");
     }
-    
+
     // Gather results on rank 0
     if rank == 0 {
         let mut all_results: Vec<(usize, Array1<f64>, Vec<f64>)> = Vec::with_capacity(n_k_points);
@@ -418,28 +482,36 @@ where
 
             // Progress update (no ETA during gathering)
             if r % 1 == 0 {
-                timed_println!("Rank 0: Gathered results from rank {}/{}", r + 1, world_size);
+                timed_println!(
+                    "Rank 0: Gathered results from rank {}/{}",
+                    r + 1,
+                    world_size
+                );
             }
         }
 
         all_results.sort_by_key(|(idx, _, _)| *idx);
-        
+
         let mut sorted_eigvals = vec![Array1::<f64>::zeros(0); total_k_points];
         let mut sorted_photonic = vec![Vec::<f64>::new(); total_k_points];
-        
+
         for (idx, eigvals, photonic) in all_results {
             sorted_eigvals[idx] = eigvals;
             sorted_photonic[idx] = photonic;
         }
-        
-        let band_data = ColorBandData::from_results(k_points.clone(), sorted_eigvals.clone(), sorted_photonic.clone());
+
+        let band_data = ColorBandData::from_results(
+            k_points.clone(),
+            sorted_eigvals.clone(),
+            sorted_photonic.clone(),
+        );
         match band_data.save_to_file(&filename) {
             Ok(_) => timed_println!("Color band structure data saved to {}", filename),
-            Err(e) => timed_println!("Failed to save color band structure data: {}", e)
+            Err(e) => timed_println!("Failed to save color band structure data: {}", e),
         }
-        
+
         let _ = std::fs::remove_dir_all(&temp_dir);
-        
+
         Ok((k_points, sorted_eigvals, sorted_photonic))
     } else {
         Ok((vec![], vec![], vec![]))
@@ -458,24 +530,25 @@ pub fn plot_color_band_structure(
     save_path: &str,
     v0: f64,
     coupling: f64,
-    zoomed: bool
+    zoomed: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-
     let dark = false;
 
     // Create x-axis for the plot (path length)
     let mut x = vec![0.0; k_points.len()];
     for i in 1..k_points.len() {
-        let dx = k_points[i][0] - k_points[i-1][0];
-        let dy = k_points[i][1] - k_points[i-1][1];
-        x[i] = x[i-1] + (dx*dx + dy*dy).sqrt();
+        let dx = k_points[i][0] - k_points[i - 1][0];
+        let dy = k_points[i][1] - k_points[i - 1][1];
+        x[i] = x[i - 1] + (dx * dx + dy * dy).sqrt();
     }
 
     // Define the high-symmetry points
     let points_per_segment = k_points.len() / sym_points.len();
-    
+
     // Calculate positions of symmetry points on the x-axis
-    let sym_positions: Vec<f64> = (0..sym_points.len()).map(|i| x[i * points_per_segment]).collect();
+    let sym_positions: Vec<f64> = (0..sym_points.len())
+        .map(|i| x[i * points_per_segment])
+        .collect();
 
     // Check if we have any data to plot
     if eigvals_list.is_empty() || eigvals_list[0].is_empty() {
@@ -497,7 +570,7 @@ pub fn plot_color_band_structure(
             max_energy = max_energy.max(slice.fold(f64::NEG_INFINITY, |a, &b| a.max(b)));
         }
     }
-    
+
     // Set max energy to 0.3 or use calculated max
     max_energy = 0.05;
 
@@ -514,88 +587,120 @@ pub fn plot_color_band_structure(
     // Create data files for gnuplot
     let data_dir = Path::new("gnuplot_data");
     std::fs::create_dir_all(data_dir)?;
-    
+
     // Create a data file for each band
     for band_idx in 0..n_bands {
         let filename = data_dir.join(format!("band_{}.dat", band_idx));
         let mut file = File::create(filename)?;
-        
+
         // Write header
         writeln!(file, "# x energy photonic_character")?;
-        
+
         // Write data points
         for (i, &x_val) in x.iter().enumerate() {
             if band_idx < eigvals_list[i].len() && band_idx < photonic_character_list[i].len() {
                 let energy = eigvals_list[i][band_idx];
                 let photonic = photonic_character_list[i][band_idx];
-                
+
                 // We'll handle transparency in the gnuplot script
                 writeln!(file, "{} {} {}", x_val, energy, photonic)?;
             }
         }
     }
-    
+
     // Create gnuplot script
     let script_path = data_dir.join("plot_bands.gp");
     let mut script = File::create(&script_path)?;
-    
+
     // Write gnuplot script
     if dark {
-        writeln!(script, "set terminal pdfcairo enhanced font 'Arial,40' size 16,12 background rgb '#000000'")?;
-    }
-    else {
-        writeln!(script, "set terminal pdfcairo enhanced font 'Arial,40' size 16,12")?;
+        writeln!(
+            script,
+            "set terminal pdfcairo enhanced font 'Arial,40' size 16,12 background rgb '#000000'"
+        )?;
+    } else {
+        writeln!(
+            script,
+            "set terminal pdfcairo enhanced font 'Arial,40' size 16,12"
+        )?;
     }
     writeln!(script, "set output '{}'", save_path)?;
-    
+
     // Set margins to make room for the colorbar
     writeln!(script, "set lmargin 10")?;
     writeln!(script, "set rmargin 10")?;
     writeln!(script, "set tmargin 3")?;
     writeln!(script, "set bmargin 3")?;
-        
+
     if dark {
-        writeln!(script, "set title 'Exciton-Polariton Band Structure (a₀={:.1}, V₀={:.1}, g={:.6})' font 'Arial,16' textcolor rgb '#e0e0e0'", a0, v0, coupling)?;
+        writeln!(
+            script,
+            "set title 'Exciton-Polariton Band Structure (a₀={:.1}, V₀={:.1}, g={:.6})' font 'Arial,16' textcolor rgb '#e0e0e0'",
+            a0, v0, coupling
+        )?;
         writeln!(script, "set xlabel 'Wave vector' textcolor rgb '#e0e0e0'")?;
         writeln!(script, "set ylabel 'Energy (a.u.)' textcolor rgb '#e0e0e0'")?;
-    }
-    else {
-        writeln!(script, "set title 'Exciton-Polariton Band Structure (a₀={:.1}, V₀={:.1}, g={:.6})' font 'Arial,16'", a0, v0, coupling)?;
+    } else {
+        writeln!(
+            script,
+            "set title 'Exciton-Polariton Band Structure (a₀={:.1}, V₀={:.1}, g={:.6})' font 'Arial,16'",
+            a0, v0, coupling
+        )?;
         writeln!(script, "set xlabel 'Wave vector'")?;
         writeln!(script, "set ylabel 'Energy (a.u.)'")?;
     }
     writeln!(script, "set xrange [{}:{}]", x[0], x[x.len() - 1])?;
     writeln!(script, "set yrange [{}:{}]", min_energy, max_energy)?;
-    
+
     // Set up color palette - blue (excitonic) to red (photonic)
     writeln!(script, "set palette rgbformulae 22,13,-22")?;
-    writeln!(script, "set colorbox vertical user origin 0.88,0.1 size 0.03,0.8")?;
+    writeln!(
+        script,
+        "set colorbox vertical user origin 0.88,0.1 size 0.03,0.8"
+    )?;
     writeln!(script, "set cbrange [0:1]")?;
     if dark {
-        writeln!(script, "set cblabel 'Photonic Character' offset 2,0 textcolor rgb '#e0e0e0'")?;
+        writeln!(
+            script,
+            "set cblabel 'Photonic Character' offset 2,0 textcolor rgb '#e0e0e0'"
+        )?;
         writeln!(script, "set cbtics 0.2 textcolor rgb '#e0e0e0'")?;
         writeln!(script, "set xtics textcolor rgb '#e0e0e0'")?;
         writeln!(script, "set ytics textcolor rgb '#e0e0e0'")?;
         writeln!(script, "set border linecolor rgb '#808080'")?;
-    }
-    else {
+    } else {
         writeln!(script, "set cblabel 'Photonic Character' offset 2,0")?;
         writeln!(script, "set cbtics 0.2")?;
     }
-    
+
     // Define color functions based on photonic character with transparency support
-    writeln!(script, "# Define RGB components for our color gradient - exactly matching the palette")?;
+    writeln!(
+        script,
+        "# Define RGB components for our color gradient - exactly matching the palette"
+    )?;
     writeln!(script, "set angle degrees")?;
     writeln!(script, "r(x) = 3*x-1 < 0 ? 0: (3*x-1 > 1) ? 1 : 3*x-1")?;
     writeln!(script, "g(x) = sin(180*x)")?;
-    writeln!(script, "b(x) = 1-(3*x-1) < 0 ? 0: (1-(3*x-1) > 1) ? 1 : 1-(3*x-1)")?;
-    
-    writeln!(script, "# Define transparency function based on photonic character")?;
-    writeln!(script, "alpha(x) = x > 0.9 ? int(((x-0.9)/0.1*0.95)*255) : 0")?;
-    
+    writeln!(
+        script,
+        "b(x) = 1-(3*x-1) < 0 ? 0: (1-(3*x-1) > 1) ? 1 : 1-(3*x-1)"
+    )?;
+
+    writeln!(
+        script,
+        "# Define transparency function based on photonic character"
+    )?;
+    writeln!(
+        script,
+        "alpha(x) = x > 0.9 ? int(((x-0.9)/0.1*0.95)*255) : 0"
+    )?;
+
     writeln!(script, "# Create full ARGB color")?;
-    writeln!(script, "myColor(x) = (alpha(x)<<24) + (int(r(x)*0xff)<<16) + (int(g(x)*0xff)<<8) + int(b(x)*0xff)")?;
-    
+    writeln!(
+        script,
+        "myColor(x) = (alpha(x)<<24) + (int(r(x)*0xff)<<16) + (int(g(x)*0xff)<<8) + int(b(x)*0xff)"
+    )?;
+
     // Create a dummy file for the colorbar
     writeln!(script, "# Create a dummy file for the colorbar")?;
     let colorbar_file = data_dir.join("colorbar.dat");
@@ -604,7 +709,7 @@ pub fn plot_color_band_structure(
         let val = i as f64 / 100.0;
         writeln!(cb_file, "{} 0 {}", val, val)?;
     }
-    
+
     // Set up x-axis with symmetry point labels
     write!(script, "set xtics (")?;
     for (i, label) in sym_labels.iter().enumerate() {
@@ -614,47 +719,57 @@ pub fn plot_color_band_structure(
         write!(script, "'{}' {}", label, sym_positions[i])?;
     }
     writeln!(script, ")")?;
-    
+
     if !zoomed {
         // Draw vertical lines at symmetry points
         for &pos in &sym_positions {
             if dark {
-                writeln!(script, "set arrow from {},{} to {},{} nohead lc rgb '#606060' lw 6", 
-                        pos, min_energy, pos, max_energy)?;
-            }
-            else {
-                writeln!(script, "set arrow from {},{} to {},{} nohead lc rgb '#888888' lw 6", 
-                        pos, min_energy, pos, max_energy)?;
+                writeln!(
+                    script,
+                    "set arrow from {},{} to {},{} nohead lc rgb '#606060' lw 6",
+                    pos, min_energy, pos, max_energy
+                )?;
+            } else {
+                writeln!(
+                    script,
+                    "set arrow from {},{} to {},{} nohead lc rgb '#888888' lw 6",
+                    pos, min_energy, pos, max_energy
+                )?;
             }
         }
     }
-    
+
     // Plot all bands with color mapping and transparency
     write!(script, "plot ")?;
-    
+
     // First add a dummy plot for the colorbar using palette
-    write!(script, "'{}' using 1:2:3 with points pt 7 ps 0 lc palette notitle", 
-           colorbar_file.display())?;
-    
+    write!(
+        script,
+        "'{}' using 1:2:3 with points pt 7 ps 0 lc palette notitle",
+        colorbar_file.display()
+    )?;
+
     // Then add all the bands
-    let lw = if !zoomed {8} else {16};
+    let lw = if !zoomed { 8 } else { 16 };
     for band_idx in 0..n_bands {
         write!(script, ", ")?;
         // Use the myColor function that handles both color and transparency
-        write!(script, "'{}' using 1:2:(myColor($3)) with lines lw {} lc rgb var notitle", 
-               data_dir.join(format!("band_{}.dat", band_idx)).display(), lw)?;
+        write!(
+            script,
+            "'{}' using 1:2:(myColor($3)) with lines lw {} lc rgb var notitle",
+            data_dir.join(format!("band_{}.dat", band_idx)).display(),
+            lw
+        )?;
     }
     writeln!(script)?;
-    
+
     // Execute gnuplot
-    let status = Command::new("gnuplot")
-        .arg(script_path)
-        .status()?;
-    
+    let status = Command::new("gnuplot").arg(script_path).status()?;
+
     if !status.success() {
         return Err("Failed to execute gnuplot".into());
     }
-    
+
     timed_println!("Band structure plot saved to {}", save_path);
     Ok(())
 }

@@ -1,8 +1,8 @@
-use serde::{Serialize, Deserialize};
-use std::path::Path;
 use bincode::{self};
 use exciton_2d::ExcitonConfig;
 use ndarray::{Array1, array};
+use serde::{Deserialize, Serialize};
+use std::path::Path;
 
 // Speed of light in atomic units
 const C: f64 = 137.036;
@@ -10,20 +10,17 @@ const C: f64 = 137.036;
 // Define a serializable structure for band structure data storage
 #[derive(Serialize, Deserialize)]
 struct SerializableData {
-    matrix: Vec<Vec<f64>>,  // Stores k-points as a 2D matrix
-    arrays: Vec<Vec<f64>>,  // Stores eigenvalues as vectors
+    matrix: Vec<Vec<f64>>, // Stores k-points as a 2D matrix
+    arrays: Vec<Vec<f64>>, // Stores eigenvalues as vectors
 }
 
 /// Saves band structure data to a binary file using bincode serialization
 pub fn save_band_data<P: AsRef<Path>>(
     path: P,
-    data: (Vec<Vec<f64>>, Vec<Array1<f64>>)
+    data: (Vec<Vec<f64>>, Vec<Array1<f64>>),
 ) -> Result<(), Box<dyn std::error::Error>> {
     let (matrix, arrays) = data;
-    let converted_arrays: Vec<Vec<f64>> = arrays
-        .into_iter()
-        .map(|arr| arr.to_vec())
-        .collect();
+    let converted_arrays: Vec<Vec<f64>> = arrays.into_iter().map(|arr| arr.to_vec()).collect();
 
     let serializable_data = SerializableData {
         matrix,
@@ -37,12 +34,13 @@ pub fn save_band_data<P: AsRef<Path>>(
 
 /// Loads band structure data from a binary file
 pub fn load_band_data<P: AsRef<Path>>(
-    path: P
+    path: P,
 ) -> Result<(Vec<Vec<f64>>, Vec<Array1<f64>>), Box<dyn std::error::Error>> {
     let bytes = std::fs::read(path)?;
     let serializable_data: SerializableData = bincode::deserialize(&bytes)?;
 
-    let arrays: Vec<Array1<f64>> = serializable_data.arrays
+    let arrays: Vec<Array1<f64>> = serializable_data
+        .arrays
         .into_iter()
         .map(|vec| Array1::from_vec(vec))
         .collect();
@@ -144,8 +142,6 @@ impl Polarization {
     }
 }
 
-
-
 #[derive(Clone)]
 pub struct PPConfig {
     // Exciton Parameters
@@ -167,10 +163,10 @@ pub struct PPConfig {
     // Band Parameters
     pub n_k_points: usize,
     pub n_bands: usize,
-    
+
     // Cache directory for matrix elements
     pub cache_dir: Option<String>,
-    
+
     // Effective mode parameters (for cache filename generation)
     // These are the hand-entered parameters that define the mode structure
     pub d_omega: Option<f64>,
@@ -219,7 +215,7 @@ impl PPConfig {
             reflectivity: None,
         }
     }
-    
+
     /// Create a new PPConfig with effective mode parameters for better cache identification
     pub fn new_with_effective_modes(
         // Exciton Parameters
@@ -241,7 +237,7 @@ impl PPConfig {
         // Band Parameters
         n_k_points: usize,
         n_bands: usize,
-        
+
         // Effective mode parameters
         d_omega: f64,
         omega_max: f64,
@@ -266,15 +262,15 @@ impl PPConfig {
             reflectivity: Some(reflectivity),
         }
     }
-    
+
     /// Generate a deterministic hash from configuration parameters
     /// This hash uniquely identifies the physical system and can be used for caching
     pub fn get_config_hash(&self) -> u64 {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
-        
+
         let mut hasher = DefaultHasher::new();
-        
+
         // Hash exciton parameters
         self.e_config.a0.to_bits().hash(&mut hasher);
         self.e_config.v0.to_bits().hash(&mut hasher);
@@ -282,7 +278,7 @@ impl PPConfig {
         self.e_config.m_h.to_bits().hash(&mut hasher);
         self.n_rel.hash(&mut hasher);
         self.n_ex_eig.hash(&mut hasher);
-        
+
         // Hash polariton parameters
         for &coupling in &self.lm_couplings {
             coupling.to_bits().hash(&mut hasher);
@@ -293,7 +289,7 @@ impl PPConfig {
             q.y.to_bits().hash(&mut hasher);
             q.z.to_bits().hash(&mut hasher);
         }
-        
+
         // Hash polaron parameters
         self.pn_coupling.to_bits().hash(&mut hasher);
         self.pn_omega.to_bits().hash(&mut hasher);
@@ -301,8 +297,7 @@ impl PPConfig {
             val.to_bits().hash(&mut hasher);
         }
         self.pn_n_fock.hash(&mut hasher);
-        
+
         hasher.finish()
     }
 }
-

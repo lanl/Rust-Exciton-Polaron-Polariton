@@ -53,21 +53,27 @@
 //! );
 //! ```
 
+pub mod band_structure;
 pub mod config;
 pub mod grid;
-pub mod utils;
-pub mod matrix_elements;
 pub mod hamiltonian;
-pub mod band_structure;
-pub mod visualization;
+pub mod matrix_elements;
 pub mod system;
+pub mod utils;
+pub mod visualization;
 
 // Re-export main components for easier access
+pub use band_structure::{
+    BandStructureCalculator, ColorBandData, calculate_n_colored_band_structure,
+    calculate_n_expectation,
+};
 pub use config::ExcitonConfig;
-pub use utils::{print_memory_usage, apply_symmetry};
 pub use grid::Grid;
+pub use hamiltonian::{FullHamiltonian, RelativeHamiltonian};
 pub use matrix_elements::MatrixElementCalculator;
-pub use hamiltonian::{RelativeHamiltonian, FullHamiltonian};
-pub use band_structure::{BandStructureCalculator, ColorBandData, calculate_n_expectation, calculate_n_colored_band_structure};
-pub use visualization::{plot_rel_eigenstate, plot_spectrum, plot_band_structure};
 pub use system::Exciton2DGridSystem;
+pub use utils::{
+    apply_symmetry, exciton_flat_index, exciton_unflatten_index, fast_matrix_element_calc,
+    fast_matrix_element_calc_view, print_memory_usage,
+};
+pub use visualization::{plot_band_structure, plot_rel_eigenstate, plot_spectrum};
