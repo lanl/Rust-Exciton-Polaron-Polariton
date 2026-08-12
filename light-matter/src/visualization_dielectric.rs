@@ -50,9 +50,14 @@ pub fn compute_weight_fields(
         let mut phot_sum = 0.0f64;
         let mut phon_sum = 0.0f64;
         for i in 0..n_states {
+            if i == ground_state_index {
+                continue;
+            }
+
             let delta_e = pp_vals[i] - pp_vals[ground_state_index];
             let contrib = x_pp[i] * x_pp[i] / (omega - delta_e + c64::i() * gamma);
-            let w_i = contrib.norm(); // magnitude of complex contribution
+            let w_i = contrib.norm();
+
             w_sum += w_i;
             phot_sum += w_i * photonic_chars[i];
             phon_sum += w_i * phonon_numbers[i];

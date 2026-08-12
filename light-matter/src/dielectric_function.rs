@@ -1,11 +1,12 @@
 use crate::{band_structure, timed_println};
 use matrix_ops::{
     ConvertFrom, DiagonalizationOptions, Diagonalize, HermitianConjugate, MatrixOps,
-    MatrixOpsError, Norm, PrettyArray2, Sqrt,
+    MatrixOpsError, Norm, Sqrt,
 };
 use ndarray::{Array1, Array2, s};
 use ndarray_linalg::c64;
 use num_traits::Zero;
+use rayon::prelude::*;
 use std::f64::consts::PI;
 use std::iter::Sum;
 
@@ -93,8 +94,10 @@ where
         pp_config.omega_max,
         pp_config.reflectivity,
     ) {
+        let total_coupling = pp_config.lm_couplings.iter().sum::<f64>();
+        
         format!(
-            "{}/dielectric_a0{}_V0{}_nrel{}_omega0{:.6}_domega{:.1e}_omegamax{:.6}_refl{:.7}_nmodes{}_pncoup{:.6}_npn{}_neig{}_gamma{:.1e}.dat",
+            "{}/dielectric_a0{}_V0{}_nrel{}_omega0{:.6}_domega{:.1e}_omegamax{:.6}_refl{:.7}_lmcoup{:.6}_nmodes{}_pncoup{:.6}_npn{}_neig{}_gamma{:.1e}.dat",
             save_dir,
             pp_config.e_config.a0,
             pp_config.e_config.v0,
@@ -103,6 +106,7 @@ where
             d_omega,
             omega_max,
             reflectivity,
+            total_coupling,
             pp.polariton.photon.boson.get_modes().len(),
             pp_config.pn_coupling,
             pp_config.pn_n_fock,
@@ -306,19 +310,21 @@ where
             }
             let cache_data = compute_dielectric_cache(pp_config, pp, n_eig)?;
 
-            // Save the computed cache for future use
-            timed_println!("Saving cache to {}", cache_filename);
-            if let Err(e) = save_dielectric_cache(
-                &cache_filename,
-                &cache_data.0,
-                &cache_data.1,
-                &cache_data.2,
-                &cache_data.3,
-                cache_data.4,
-            ) {
-                timed_println!("Warning: Failed to save cache: {}", e);
-            } else {
-                timed_println!("Successfully saved cache");
+            if crate::utils::is_mpi_rank0_env() {
+                timed_println!("Saving cache to {}", cache_filename);
+
+                if let Err(e) = save_dielectric_cache(
+                    &cache_filename,
+                    &cache_data.0,
+                    &cache_data.1,
+                    &cache_data.2,
+                    &cache_data.3,
+                    cache_data.4,
+                ) {
+                    timed_println!("Warning: Failed to save cache: {}", e);
+                } else {
+                    timed_println!("Successfully saved cache");
+                }
             }
 
             cache_data
@@ -329,22 +335,35 @@ where
         pp_vals.slice(s![0..50.min(pp_vals.len())]).to_owned() - pp_vals[ground_state_index]
     );
 
-    // Compute dielectric function from cached data
-    let dielectric_function: Array1<c64> = Array1::from_shape_fn(omegas.len(), |idx| {
-        let omega = omegas[idx];
+    // Precompute transition energies and scalar oscillator strengths.
+    // x_pp[n] stores |<0|x|n>|, so the numerator is x_pp[n]^2.
+    let ground_energy = pp_vals[ground_state_index];
 
-        let result: c64 = x_pp
-            .iter()
-            .enumerate()
-            .filter(|(pp_ind, _)| *pp_ind != ground_state_index)
-            .map(|(pp_ind, x_pp_val)| {
-                x_pp_val * x_pp_val
-                    / (omega - (pp_vals[pp_ind] - pp_vals[ground_state_index]) + c64::i() * gamma)
-            })
-            .sum();
+    let transitions: Vec<(f64, f64)> = pp_vals
+        .iter()
+        .zip(x_pp.iter())
+        .enumerate()
+        .filter(|(idx, _)| *idx != ground_state_index)
+        .map(|(_, (&energy, &x))| (energy - ground_energy, x * x))
+        .collect();
 
-        1.0 - 4.0 * PI * result
-    });
+    let dielectric_vec: Vec<c64> = omegas
+        .as_slice()
+        .expect("omegas should be contiguous")
+        .par_iter()
+        .map(|&omega| {
+            let result: c64 = transitions
+                .iter()
+                .map(|&(delta_e, strength)| {
+                    c64::new(strength, 0.0) / (c64::new(omega - delta_e, gamma))
+                })
+                .sum();
+
+            c64::new(1.0, 0.0) - c64::new(4.0 * PI, 0.0) * result
+        })
+        .collect();
+
+    let dielectric_function = Array1::from_vec(dielectric_vec);
 
     Ok(DielectricResult {
         real: dielectric_function.map(|&x| x.re),
@@ -394,8 +413,8 @@ where
             .get_x(&states[r_ind1], &states[r_ind2], mu, &lag_coeffs)
     });
 
-    timed_println!("<x> for Relative Coordinate:");
-    println!("{}", PrettyArray2(&x_rel, 4));
+    // timed_println!("<x> for Relative Coordinate:");
+    // println!("{}", PrettyArray2(&x_rel, 4));
 
     // Get <x> in the Exciton basis
     let x_exc = &Array2::from_shape_fn((n_ex_eig, n_ex_eig), |(idx1, idx2)| {
@@ -419,18 +438,24 @@ where
             .fold(c64::zero(), |acc, val| acc + val)
     });
 
-    timed_println!("|<x>| for exciton:");
-    let x_exc_mag: Array2<f64> = x_exc.mapv(|val| val.norm());
-    println!("{}", PrettyArray2(&x_exc_mag, 4));
+    // timed_println!("|<x>| for exciton:");
+    // let x_exc_mag: Array2<f64> = x_exc.mapv(|val| val.norm());
+    // println!("{}", PrettyArray2(&x_exc_mag, 4));
 
-    timed_println!("Exciton eigenvalues transitions");
-    let e_vals_transition = pp.polariton.exciton.e_vals.as_ref().unwrap()
-        - pp.polariton.exciton.e_vals.as_ref().unwrap()[0];
-    println!("{}", e_vals_transition);
+    // timed_println!("Exciton eigenvalues transitions");
+    // let e_vals_transition = pp.polariton.exciton.e_vals.as_ref().unwrap()
+    //     - pp.polariton.exciton.e_vals.as_ref().unwrap()[0];
+    // println!("{}", e_vals_transition);
 
     // Diagonalize at the Gamma point
     let (pp_vals, pp_vecs) = h_pp
-        .diagonalize(DiagonalizationOptions::smallest_real(n_eig))?
+        .diagonalize(
+            DiagonalizationOptions::smallest_real(n_eig)
+                .backend(matrix_ops::DiagonalizationBackend::Auto)
+                .hermitian()
+                .max_iterations(50_000)
+                .tolerance(1e-10),
+        )?
         .into_arrays_hermitian();
 
     // If the phonon coupling is effectively zero we *must* use a single

@@ -16,35 +16,78 @@ use std::{collections::HashMap, f64::consts::PI};
 
 use crate::timed_println;
 
-/// Serializable version of matrix element arrays for caching
+/// Typed keys for matrix-element maps.
+///
+/// This replaces the old `Vec<i32>` convention:
+///
+/// - `vec![i]`       -> `ModeKey::Single(i)`
+/// - `vec![hi,-lo]`  -> `ModeKey::Diff { hi, lo }`
+/// - `vec![hi, lo]`  -> `ModeKey::Sum { hi, lo }`
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ModeKey {
+    Single(usize),
+    Diff { hi: usize, lo: usize },
+    Sum { hi: usize, lo: usize },
+}
+
+impl ModeKey {
+    #[inline]
+    pub fn single(mode: usize) -> Self {
+        Self::Single(mode)
+    }
+
+    #[inline]
+    pub fn diff(q1: usize, q2: usize) -> Self {
+        let hi = q1.max(q2);
+        let lo = q1.min(q2);
+        Self::Diff { hi, lo }
+    }
+
+    #[inline]
+    pub fn sum(q1: usize, q2: usize) -> Self {
+        let hi = q1.max(q2);
+        let lo = q1.min(q2);
+        Self::Sum { hi, lo }
+    }
+}
+
+/// Typed work items for matrix-element generation.
+///
+/// Currently `populate_tay_mat_elements_with_cache` is used for photon-sector
+/// matrix elements. Phonon single-mode matrix elements are generated separately
+/// by `phonon_mat_elements`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ModeTask {
+    PhotonSingle { mode: usize },
+    PhotonPair { q1: usize, q2: usize },
+}
+
+/// Serializable version of matrix element arrays for caching.
 #[derive(Serialize, Deserialize)]
 struct SerializableMatrixElements {
-    cos_mat: Vec<(Vec<i32>, Vec<c64>)>,
-    sin_mat: Vec<(Vec<i32>, Vec<c64>)>,
-    p_cos_mat: Vec<(Vec<i32>, Vec<c64>)>,
+    cos_mat: Vec<(ModeKey, Vec<c64>)>,
+    sin_mat: Vec<(ModeKey, Vec<c64>)>,
+    p_cos_mat: Vec<(ModeKey, Vec<c64>)>,
     matrix_shape: (usize, usize),
 }
 
 #[derive(Clone)]
 pub struct LMMatrixElementArray {
-    pub p_cos_mat: HashMap<Vec<i32>, Array2<c64>>, // Momentum Cosine matrix elements
-    pub cos_mat: HashMap<Vec<i32>, Array2<c64>>,   // Cosine matrix elements
-    pub sin_mat: HashMap<Vec<i32>, Array2<c64>>,   // Sine matrix elements
-    pub p_cos_mat_rel: Option<HashMap<Vec<i32>, Array2<c64>>>, // Momentum Cosine matrix elements in relative basis
-    pub cos_mat_rel: Option<HashMap<Vec<i32>, Array2<c64>>>, // Cosine matrix elements in relative basis
-    pub sin_mat_rel: Option<HashMap<Vec<i32>, Array2<c64>>>, // Sine matrix elements in relative basis
+    pub p_cos_mat: HashMap<ModeKey, Array2<c64>>, // Momentum-cosine matrix elements
+    pub cos_mat: HashMap<ModeKey, Array2<c64>>,   // Cosine matrix elements
+    pub sin_mat: HashMap<ModeKey, Array2<c64>>,   // Sine matrix elements
+
+    pub p_cos_mat_rel: Option<HashMap<ModeKey, Array2<c64>>>,
+    pub cos_mat_rel: Option<HashMap<ModeKey, Array2<c64>>>,
+    pub sin_mat_rel: Option<HashMap<ModeKey, Array2<c64>>>,
 }
 
 impl LMMatrixElementArray {
     pub fn new() -> Self {
-        let cos_mat: HashMap<Vec<i32>, Array2<c64>> = HashMap::new();
-        let p_cos_mat: HashMap<Vec<i32>, Array2<c64>> = HashMap::new();
-        let sin_mat: HashMap<Vec<i32>, Array2<c64>> = HashMap::new();
-
         Self {
-            cos_mat: cos_mat,
-            sin_mat: sin_mat,
-            p_cos_mat: p_cos_mat,
+            cos_mat: HashMap::new(),
+            sin_mat: HashMap::new(),
+            p_cos_mat: HashMap::new(),
             cos_mat_rel: None,
             p_cos_mat_rel: None,
             sin_mat_rel: None,
@@ -65,7 +108,7 @@ impl LMMatrixElementArray {
         config_hash: u64,
     ) -> String {
         format!(
-            "{}/matrix_elements_mu{:.6}_ncom{}_nrel{}_confighash{:016x}.bin",
+            "{}/matrix_elements_v2_mu{:.6}_ncom{}_nrel{}_confighash{:016x}.bin",
             cache_dir, mu, n_com, n_rel, config_hash
         )
     }
@@ -79,7 +122,7 @@ impl LMMatrixElementArray {
         config_hash: u64,
     ) -> String {
         format!(
-            "{}/matrix_elements_rel_mu{:.6}_nrel{}_confighash{:016x}.bin",
+            "{}/matrix_elements_rel_v2_mu{:.6}_nrel{}_confighash{:016x}.bin",
             cache_dir, mu, n_rel, config_hash
         )
     }
@@ -119,10 +162,17 @@ impl LMMatrixElementArray {
         let mut cos_vec = Vec::new();
         let mut sin_vec = Vec::new();
         let mut p_cos_vec = Vec::new();
-        let mut shape = (0, 0);
+
+        let shape = self
+            .cos_mat
+            .values()
+            .chain(self.sin_mat.values())
+            .chain(self.p_cos_mat.values())
+            .next()
+            .map(|m| (m.nrows(), m.ncols()))
+            .unwrap_or((0, 0));
 
         for (key, mat) in &self.cos_mat {
-            shape = (mat.nrows(), mat.ncols());
             cos_vec.push((key.clone(), mat.iter().cloned().collect::<Vec<_>>()));
         }
         for (key, mat) in &self.sin_mat {
@@ -140,8 +190,7 @@ impl LMMatrixElementArray {
         };
 
         let encoded = bincode::serialize(&serializable)?;
-        let mut file = File::create(filename)?;
-        file.write_all(&encoded)?;
+        crate::utils::atomic_write(filename, &encoded)?;
 
         info!("Saved matrix elements to cache: {}", filename);
         Ok(())
@@ -204,10 +253,16 @@ impl LMMatrixElementArray {
         let mut cos_vec = Vec::new();
         let mut sin_vec = Vec::new();
         let mut p_cos_vec = Vec::new();
-        let mut shape = (0, 0);
+
+        let shape = cos_mat_rel
+            .values()
+            .chain(sin_mat_rel.values())
+            .chain(p_cos_mat_rel.values())
+            .next()
+            .map(|m| (m.nrows(), m.ncols()))
+            .unwrap_or((0, 0));
 
         for (key, mat) in cos_mat_rel {
-            shape = (mat.nrows(), mat.ncols());
             cos_vec.push((key.clone(), mat.iter().cloned().collect::<Vec<_>>()));
         }
         for (key, mat) in sin_mat_rel {
@@ -240,9 +295,9 @@ impl LMMatrixElementArray {
         filename: &str,
     ) -> Result<
         (
-            HashMap<Vec<i32>, Array2<c64>>,
-            HashMap<Vec<i32>, Array2<c64>>,
-            HashMap<Vec<i32>, Array2<c64>>,
+            HashMap<ModeKey, Array2<c64>>,
+            HashMap<ModeKey, Array2<c64>>,
+            HashMap<ModeKey, Array2<c64>>,
         ),
         Box<dyn std::error::Error>,
     > {
@@ -280,7 +335,7 @@ impl LMMatrixElementArray {
 
     pub fn populate_tay_mat_elements(
         &mut self,
-        all_q_ind: &Vec<Vec<i32>>,
+        all_q_ind: &Vec<ModeTask>,
         e_vecs: &Array2<c64>,
         modes: &Vec<BosonMode>,
         n_com: usize,
@@ -293,7 +348,7 @@ impl LMMatrixElementArray {
 
     pub fn populate_tay_mat_elements_with_cache(
         &mut self,
-        all_q_ind: &Vec<Vec<i32>>,
+        all_q_ind: &Vec<ModeTask>,
         e_vecs: &Array2<c64>,
         modes: &Vec<BosonMode>,
         n_com: usize,
@@ -304,7 +359,7 @@ impl LMMatrixElementArray {
     ) {
         let n_rel = e_vecs.nrows() / n_com;
 
-        // Try to load from cache if cache_dir is provided and not forcing recompute
+        // Try to load from cache if cache_dir is provided and not forcing recompute.
         if let Some(dir) = cache_dir {
             if !force_recompute {
                 let cache_file = Self::get_cache_filename(dir, mu, n_com, n_rel, config_hash);
@@ -317,7 +372,6 @@ impl LMMatrixElementArray {
                             self.sin_mat = cached.sin_mat;
                             self.p_cos_mat = cached.p_cos_mat;
 
-                            // Also try to load relative basis cache
                             let cache_file_rel =
                                 Self::get_cache_filename_rel(dir, mu, n_rel, config_hash);
                             if Path::new(&cache_file_rel).exists() {
@@ -329,6 +383,7 @@ impl LMMatrixElementArray {
                                     self.p_cos_mat_rel = Some(p_cos_rel);
                                 }
                             }
+
                             return;
                         }
                         Err(e) => {
@@ -342,19 +397,20 @@ impl LMMatrixElementArray {
             }
         }
 
-        // Compute relative basis matrices (with caching)
+        // Compute relative-basis matrices.
         if self.cos_mat_rel.is_none() || self.sin_mat_rel.is_none() || self.p_cos_mat_rel.is_none()
         {
-            // Try to load relative basis from cache first
             let mut loaded_from_cache = false;
+
             if let Some(dir) = cache_dir {
                 if !force_recompute {
                     let cache_file_rel = Self::get_cache_filename_rel(dir, mu, n_rel, config_hash);
+
                     if Path::new(&cache_file_rel).exists() {
                         match Self::load_rel_from_file(&cache_file_rel) {
                             Ok((cos_rel, sin_rel, p_cos_rel)) => {
                                 info!(
-                                    "Successfully loaded relative basis matrix elements from cache"
+                                    "Successfully loaded relative-basis matrix elements from cache"
                                 );
                                 self.cos_mat_rel = Some(cos_rel);
                                 self.sin_mat_rel = Some(sin_rel);
@@ -362,14 +418,13 @@ impl LMMatrixElementArray {
                                 loaded_from_cache = true;
                             }
                             Err(e) => {
-                                warn!("Failed to load relative basis cache: {}. Recomputing...", e);
+                                warn!("Failed to load relative-basis cache: {}. Recomputing...", e);
                             }
                         }
                     }
                 }
             }
 
-            // Compute if not loaded from cache
             if !loaded_from_cache {
                 let (cos_mat_rel, sin_mat_rel, p_cos_mat_rel) =
                     self.compute_relative_tay_mat_elements(all_q_ind, modes, n_rel, mu);
@@ -378,259 +433,86 @@ impl LMMatrixElementArray {
                 self.sin_mat_rel = Some(sin_mat_rel);
                 self.p_cos_mat_rel = Some(p_cos_mat_rel);
 
-                // Save relative basis to cache
-                if let Some(dir) = cache_dir {
-                    let cache_file_rel = Self::get_cache_filename_rel(dir, mu, n_rel, config_hash);
-                    if let Err(e) = self.save_rel_to_file(&cache_file_rel) {
-                        warn!("Failed to save relative basis cache: {}", e);
+                if crate::utils::is_mpi_rank0_env() {
+                    if let Some(dir) = cache_dir {
+                        let cache_file_rel = Self::get_cache_filename_rel(dir, mu, n_rel, config_hash);
+                        if let Err(e) = self.save_rel_to_file(&cache_file_rel) {
+                            warn!("Failed to save relative-basis cache: {}", e);
+                        }
                     }
                 }
             }
         }
 
-        // Parallel computation over all q‑index vectors
-        let results: Vec<(Vec<i32>, Array2<c64>, Array2<c64>)> = all_q_ind
+        let cos_rel = self.cos_mat_rel.as_ref().unwrap();
+        let sin_rel = self.sin_mat_rel.as_ref().unwrap();
+        let p_cos_rel = self.p_cos_mat_rel.as_ref().unwrap();
+
+        let results: Vec<(ModeTask, Array2<c64>, Array2<c64>)> = all_q_ind
             .par_iter()
-            .enumerate()
-            .map(|(q_idx, q_inds)| {
-                let (matrix1, matrix2) = if q_inds.len() == 1 {
-                    // Single‑boson case
-                    let sin = self.sin_mat_rel.as_ref().unwrap().get(q_inds).unwrap();
-                    if q_idx < modes.len() {
-                        // Single Photon
-                        let p_cos = self.p_cos_mat_rel.as_ref().unwrap().get(q_inds).unwrap();
-                        (
-                            self.to_exciton_basis(p_cos, e_vecs, n_com),
-                            self.to_exciton_basis(sin, e_vecs, n_com),
-                        )
-                    } else {
-                        // Single Phonon
-                        let cos = self.cos_mat_rel.as_ref().unwrap().get(q_inds).unwrap();
-                        (
-                            self.to_exciton_basis(cos, e_vecs, n_com),
-                            self.to_exciton_basis(sin, e_vecs, n_com),
-                        )
-                    }
-                } else {
-                    // Two‑phonon (q₁±q₂) case – only cosine elements are needed
-                    let q_ind1 = q_inds[0].max(q_inds[1]);
-                    let q_ind2 = q_inds[0].min(q_inds[1]);
-                    let cos_dif = self
-                        .cos_mat_rel
-                        .as_ref()
-                        .unwrap()
-                        .get(&vec![q_ind1, -q_ind2])
-                        .unwrap();
-                    let cos_sum = self
-                        .cos_mat_rel
-                        .as_ref()
-                        .unwrap()
-                        .get(&vec![q_ind1, q_ind2])
-                        .unwrap();
+            .map(|task| match *task {
+                ModeTask::PhotonSingle { mode } => {
+                    let key = ModeKey::single(mode);
+
+                    let sin = sin_rel
+                        .get(&key)
+                        .unwrap_or_else(|| panic!("Missing relative sine matrix for {:?}", key));
+
+                    let p_cos = p_cos_rel
+                        .get(&key)
+                        .unwrap_or_else(|| panic!("Missing relative p_cos matrix for {:?}", key));
+
                     (
-                        self.to_exciton_basis(cos_dif, e_vecs, n_com),
+                        *task,
+                        self.to_exciton_basis(p_cos, e_vecs, n_com),
+                        self.to_exciton_basis(sin, e_vecs, n_com),
+                    )
+                }
+
+                ModeTask::PhotonPair { q1, q2 } => {
+                    let diff_key = ModeKey::diff(q1, q2);
+                    let sum_key = ModeKey::sum(q1, q2);
+
+                    let cos_diff = cos_rel.get(&diff_key).unwrap_or_else(|| {
+                        panic!("Missing relative cos-diff matrix for {:?}", diff_key)
+                    });
+
+                    let cos_sum = cos_rel.get(&sum_key).unwrap_or_else(|| {
+                        panic!("Missing relative cos-sum matrix for {:?}", sum_key)
+                    });
+
+                    (
+                        *task,
+                        self.to_exciton_basis(cos_diff, e_vecs, n_com),
                         self.to_exciton_basis(cos_sum, e_vecs, n_com),
                     )
-                };
-
-                // Return the key and the two matrices (the caller will decide where each goes)
-                (q_inds.clone(), matrix1, matrix2)
+                }
             })
             .collect();
 
-        // Populate the three hash‑maps according to the length of q_inds
-        results
-            .iter()
-            .enumerate()
-            .for_each(|(idx, (q_inds, mat_1, mat_2))| {
-                if q_inds.len() == 1 {
-                    // Single‑phonon entry – decide whether it belongs to p_cos or ordinary cos
-                    if idx < modes.len() {
-                        self.p_cos_mat.insert(q_inds.clone(), mat_1.clone());
-                    } else {
-                        self.cos_mat.insert(q_inds.clone(), mat_1.clone());
-                    }
-                    self.sin_mat.insert(q_inds.clone(), mat_2.clone());
-                } else if q_inds.len() == 2 {
-                    // Two‑phonon entry – store both combinations in the cosine map
-                    let q_ind1 = q_inds[0].max(q_inds[1]);
-                    let q_ind2 = q_inds[0].min(q_inds[1]);
+        for (task, mat_1, mat_2) in results {
+            match task {
+                ModeTask::PhotonSingle { mode } => {
+                    let key = ModeKey::single(mode);
 
-                    self.cos_mat.insert(vec![q_ind1, -q_ind2], mat_1.clone()); // q₁−q₂
-                    self.cos_mat.insert(vec![q_ind1, q_ind2], mat_2.clone()); // q₁+q₂
+                    self.p_cos_mat.insert(key, mat_1);
+                    self.sin_mat.insert(key, mat_2);
                 }
-            });
 
-        // Save to cache if cache_dir is provided
-        if let Some(dir) = cache_dir {
-            let cache_file = Self::get_cache_filename(dir, mu, n_com, n_rel, config_hash);
-            if let Err(e) = self.save_to_file(&cache_file) {
-                warn!("Failed to save matrix elements to cache: {}", e);
+                ModeTask::PhotonPair { q1, q2 } => {
+                    self.cos_mat.insert(ModeKey::diff(q1, q2), mat_1);
+                    self.cos_mat.insert(ModeKey::sum(q1, q2), mat_2);
+                }
             }
         }
-    }
 
-    /// Old matrix element population
-    pub fn _populate_tay_mat_elements(
-        &self,
-        all_q_ind: &Vec<Vec<i32>>,
-        e_vecs: &Vec<Array1<c64>>,
-        modes: &Vec<BosonMode>,
-        n_com: usize,
-        mu: f64,
-    ) -> Self {
-        let n_eigs = e_vecs.len();
-        let n_rel = e_vecs[0].len() / n_com;
-
-        // Use capacity hints for HashMaps
-        let mut cos_mat = HashMap::with_capacity(all_q_ind.len() - modes.len());
-        let mut sin_mat = HashMap::with_capacity(modes.len());
-        let mut p_cos_mat = HashMap::with_capacity(modes.len());
-
-        // Get Laguerre coefficients for radial integrals
-        let (lag_coeffs, states) = &self.get_laguerre_coeffs(n_rel);
-        // let dr_coeffs = &self.get_dr_radial_poly(states);
-
-        // Use parallel map to compute matrices for each q_inds value
-        let results: Vec<(Vec<i32>, Array2<c64>, Array2<c64>)> = all_q_ind
-            .par_iter()
-            .enumerate()
-            .map(|(q_idx, q_inds)| {
-                let mut matrix_1 = Array2::zeros((n_eigs, n_eigs));
-                let mut matrix_2 = Array2::zeros((n_eigs, n_eigs));
-
-                // Keep using iterators for the main computation
-                for idx1 in 0..n_eigs {
-                    for idx2 in 0..n_eigs {
-                        let vec1 = &e_vecs[idx1];
-                        let vec2 = &e_vecs[idx2];
-
-                        // Calculate the matrix elements using iterators
-                        let (element_1, element_2) = (0..n_rel)
-                            .flat_map(|r_ind1| {
-                                (0..n_rel).flat_map(move |r_ind2| {
-                                    let (mat_element1, mat_element2): (c64, c64);
-
-                                    // Get matrix elements
-                                    if q_inds.len() == 1 {
-                                        let mode_idx = q_inds[0] as usize;
-                                        let q = &modes[mode_idx].q;
-                                        let eps = &modes[mode_idx].eps;
-                                        if q_idx < modes.len() {
-                                            mat_element1 = self.get_p_cos_tayl(
-                                                &states[r_ind1],
-                                                &states[r_ind2],
-                                                q,
-                                                eps,
-                                                mu,
-                                                true,
-                                                &lag_coeffs,
-                                            );
-                                        } else {
-                                            mat_element1 = self.get_cos_tayl(
-                                                &states[r_ind1],
-                                                &states[r_ind2],
-                                                q,
-                                                mu,
-                                                true,
-                                                &lag_coeffs,
-                                            );
-                                        }
-                                        mat_element2 = self.get_sin_tayl(
-                                            &states[r_ind1],
-                                            &states[r_ind2],
-                                            q,
-                                            mu,
-                                            true,
-                                            &lag_coeffs,
-                                        );
-                                    } else {
-                                        let q_diff = &modes[q_inds[0] as usize].q
-                                            - &modes[q_inds[1] as usize].q;
-                                        let q_sum = &modes[q_inds[0] as usize].q
-                                            + &modes[q_inds[1] as usize].q;
-                                        mat_element1 = self.get_cos_tayl(
-                                            &states[r_ind1],
-                                            &states[r_ind2],
-                                            &q_diff,
-                                            mu,
-                                            true,
-                                            &lag_coeffs,
-                                        );
-                                        mat_element2 = self.get_cos_tayl(
-                                            &states[r_ind1],
-                                            &states[r_ind2],
-                                            &q_sum,
-                                            mu,
-                                            true,
-                                            &lag_coeffs,
-                                        );
-                                    }
-
-                                    (0..n_com).map(move |com_ind| {
-                                        let i1 = n_com * r_ind1 + com_ind;
-                                        let i2 = n_com * r_ind2 + com_ind;
-                                        let a1 = vec1[i1];
-                                        let a2 = vec2[i2];
-
-                                        (
-                                            a1.conj() * a2 * mat_element1,
-                                            a1.conj() * a2 * mat_element2,
-                                        )
-                                    })
-                                })
-                            })
-                            .fold((c64::zero(), c64::zero()), |acc, val| {
-                                (acc.0 + val.0, acc.1 + val.1)
-                            });
-
-                        matrix_1[[idx1, idx2]] = element_1;
-                        matrix_2[[idx1, idx2]] = element_2;
-                    }
+        if crate::utils::is_mpi_rank0_env() {
+            if let Some(dir) = cache_dir {
+                let cache_file = Self::get_cache_filename(dir, mu, n_com, n_rel, config_hash);
+                if let Err(e) = self.save_to_file(&cache_file) {
+                    warn!("Failed to save matrix elements to cache: {}", e);
                 }
-
-                // timed_println!("q_idx = {}", q_idx);
-                // timed_println!("q_inds = {:?}", q_inds);
-
-                // if q_idx >  modes.len() && q_inds.len() == 1{
-                //     let disp_mat = PrettyArray2(&matrix_2, 4);
-                //     timed_println!("Sine Matrix for phonon = ");
-                //     println!("{}", disp_mat);
-                // }
-
-                // Return tuple of q_inds and computed matrices
-                (q_inds.clone(), matrix_1, matrix_2)
-            })
-            .collect();
-
-        // Process results and populate HashMaps
-        results
-            .iter()
-            .enumerate()
-            .for_each(|(idx, (q_inds, matrix_1, matrix_2))| {
-                if q_inds.len() == 1 {
-                    if idx < modes.len() {
-                        p_cos_mat.insert(q_inds.clone(), matrix_1.clone());
-                    } else {
-                        cos_mat.insert(q_inds.clone(), matrix_1.clone());
-                    }
-                    sin_mat.insert(q_inds.clone(), matrix_2.clone());
-                } else if q_inds.len() == 2 {
-                    let q_ind1 = q_inds[0].max(q_inds[1]);
-                    let q_ind2 = q_inds[0].min(q_inds[1]);
-
-                    cos_mat.insert(vec![q_ind1, -q_ind2], matrix_1.clone());
-                    cos_mat.insert(vec![q_ind1, q_ind2], matrix_2.clone());
-                }
-            });
-
-        Self {
-            cos_mat,
-            sin_mat,
-            p_cos_mat,
-            cos_mat_rel: None,
-            sin_mat_rel: None,
-            p_cos_mat_rel: None,
+            }
         }
     }
 
@@ -642,15 +524,22 @@ impl LMMatrixElementArray {
     ) -> Array2<c64> {
         use ndarray::linalg::kron;
 
+        // exciton_2d basis convention:
+        //
+        //     |state> = |CoM> ⊗ |rel>
+        //
+        // with flat index:
+        //
+        //     idx = com_index * n_rel + rel_index.
+        //
+        // Therefore a relative-coordinate operator is:
+        //
+        //     I_com ⊗ O_rel.
         let com_identity = Array2::eye(n_com);
-
         let matrix = kron(&com_identity, rel_matrix);
 
         let transform = e_vecs;
-
-        let transform_dag = &transform.dag();
-
-        // println!("Unitary test: \n{}", PrettyC64Array2(&(transform_dag.dot(&transform)), 2));
+        let transform_dag = transform.dag();
 
         transform_dag.dot(&matrix).dot(transform)
     }
@@ -702,52 +591,37 @@ impl LMMatrixElementArray {
     /// ------------------------------------------------------------------------
     pub fn compute_relative_tay_mat_elements(
         &self,
-        all_q_ind: &Vec<Vec<i32>>,
+        all_q_ind: &Vec<ModeTask>,
         modes: &Vec<BosonMode>,
         n_rel: usize,
         mu: f64,
     ) -> (
-        HashMap<Vec<i32>, Array2<c64>>, // cos_mat
-        HashMap<Vec<i32>, Array2<c64>>, // sin_mat
-        HashMap<Vec<i32>, Array2<c64>>, // p_cos_mat
+        HashMap<ModeKey, Array2<c64>>,
+        HashMap<ModeKey, Array2<c64>>,
+        HashMap<ModeKey, Array2<c64>>,
     ) {
-        // Laguerre coefficients and the list of (n,m) states for the relative basis
         let (lag_coeffs, states) = self.get_laguerre_coeffs(n_rel);
 
-        //
         let from_real = false;
 
-        // Prepare hash‑maps with sensible capacity hints
         let mut cos_mat = HashMap::with_capacity(all_q_ind.len());
         let mut sin_mat = HashMap::with_capacity(modes.len());
         let mut p_cos_mat = HashMap::with_capacity(modes.len());
 
-        // Parallel computation over all q‑index vectors
-        let results: Vec<(Vec<i32>, Array2<c64>, Array2<c64>)> = all_q_ind
+        let results: Vec<(ModeTask, Array2<c64>, Array2<c64>)> = all_q_ind
             .par_iter()
-            .enumerate()
-            .map(|(q_idx, q_inds)| {
-                // Relative‑basis matrices (n_rel × n_rel)
+            .map(|task| {
                 let mut matrix1 = Array2::zeros((n_rel, n_rel));
                 let mut matrix2 = Array2::zeros((n_rel, n_rel));
 
-                // Loop over the relative states
                 for (i1, &(n1, m1)) in states.iter().enumerate() {
                     for (i2, &(n2, m2)) in states.iter().enumerate() {
-                        // ----------------------------------------------------------------
-                        // Choose the appropriate analytic element depending on q_inds
-                        // ----------------------------------------------------------------
-                        let (elem_cos, elem_sin) = if q_inds.len() == 1 {
-                            // Single‑phonon (or momentum‑cosine) case
-                            let mode_idx = q_inds[0] as usize;
-                            let q = &modes[mode_idx].q;
-                            let eps = &modes[mode_idx].eps;
+                        let (elem1, elem2) = match *task {
+                            ModeTask::PhotonSingle { mode } => {
+                                let q = &modes[mode].q;
+                                let eps = &modes[mode].eps;
 
-                            // NOTE: In the relative‑basis version we do **not** have `n_com`,
-                            // so we directly use the (n,m) pair as the state index.
-                            if q_idx < modes.len() {
-                                // momentum‑cosine (p_cos) element
-                                let pc = self.get_p_cos_tayl(
+                                let p_cos = self.get_p_cos_tayl(
                                     &(n1, m1),
                                     &(n2, m2),
                                     q,
@@ -756,20 +630,8 @@ impl LMMatrixElementArray {
                                     from_real,
                                     &lag_coeffs,
                                 );
-                                (
-                                    pc,
-                                    self.get_sin_tayl(
-                                        &(n1, m1),
-                                        &(n2, m2),
-                                        q,
-                                        mu,
-                                        from_real,
-                                        &lag_coeffs,
-                                    ),
-                                )
-                            } else {
-                                // ordinary cosine element
-                                let c = self.get_cos_tayl(
+
+                                let sin = self.get_sin_tayl(
                                     &(n1, m1),
                                     &(n2, m2),
                                     q,
@@ -777,79 +639,66 @@ impl LMMatrixElementArray {
                                     from_real,
                                     &lag_coeffs,
                                 );
-                                (
-                                    c,
-                                    self.get_sin_tayl(
-                                        &(n1, m1),
-                                        &(n2, m2),
-                                        q,
-                                        mu,
-                                        from_real,
-                                        &lag_coeffs,
-                                    ),
-                                )
+
+                                (p_cos, sin)
                             }
-                        } else {
-                            // Two‑phonon (q₁±q₂) case – only cosine elements are needed
-                            let q1 = &modes[q_inds[0] as usize].q;
-                            let q2 = &modes[q_inds[1] as usize].q;
-                            let q_dif = q1 - q2;
-                            let q_sum = q1 + q2;
-                            let cos_dif = self.get_cos_tayl(
-                                &(n1, m1),
-                                &(n2, m2),
-                                &q_dif,
-                                mu,
-                                from_real,
-                                &lag_coeffs,
-                            );
-                            let cos_sum = self.get_cos_tayl(
-                                &(n1, m1),
-                                &(n2, m2),
-                                &q_sum,
-                                mu,
-                                from_real,
-                                &lag_coeffs,
-                            );
-                            (cos_dif, cos_sum) // we will store c1 in `matrix_cos` and c2 in `matrix_sin`
+
+                            ModeTask::PhotonPair { q1, q2 } => {
+                                let q_vec1 = &modes[q1].q;
+                                let q_vec2 = &modes[q2].q;
+
+                                let q_dif = q_vec1 - q_vec2;
+                                let q_sum = q_vec1 + q_vec2;
+
+                                let cos_dif = self.get_cos_tayl(
+                                    &(n1, m1),
+                                    &(n2, m2),
+                                    &q_dif,
+                                    mu,
+                                    from_real,
+                                    &lag_coeffs,
+                                );
+
+                                let cos_sum = self.get_cos_tayl(
+                                    &(n1, m1),
+                                    &(n2, m2),
+                                    &q_sum,
+                                    mu,
+                                    from_real,
+                                    &lag_coeffs,
+                                );
+
+                                (cos_dif, cos_sum)
+                            }
                         };
 
-                        // Fill the matrices
-                        matrix1[[i1, i2]] = elem_cos;
-                        matrix2[[i1, i2]] = elem_sin;
+                        matrix1[[i1, i2]] = elem1;
+                        matrix2[[i1, i2]] = elem2;
                     }
                 }
 
                 let real_mat1 = self.to_real_rel_basis(&matrix1);
                 let real_mat2 = self.to_real_rel_basis(&matrix2);
 
-                // Return the key and the two matrices (the caller will decide where each goes)
-                (q_inds.clone(), real_mat1, real_mat2)
+                (*task, real_mat1, real_mat2)
             })
             .collect();
 
-        // Populate the three hash‑maps according to the length of q_inds
-        results
-            .iter()
-            .enumerate()
-            .for_each(|(idx, (q_inds, mat_1, mat_2))| {
-                if q_inds.len() == 1 {
-                    // Single‑phonon entry – decide whether it belongs to p_cos or ordinary cos
-                    if idx < modes.len() {
-                        p_cos_mat.insert(q_inds.clone(), mat_1.clone());
-                    } else {
-                        cos_mat.insert(q_inds.clone(), mat_1.clone());
-                    }
-                    sin_mat.insert(q_inds.clone(), mat_2.clone());
-                } else if q_inds.len() == 2 {
-                    // Two‑phonon entry – store both combinations in the cosine map
-                    let q_ind1 = q_inds[0].max(q_inds[1]);
-                    let q_ind2 = q_inds[0].min(q_inds[1]);
+        for (task, mat_1, mat_2) in results {
+            match task {
+                ModeTask::PhotonSingle { mode } => {
+                    let key = ModeKey::single(mode);
 
-                    cos_mat.insert(vec![q_ind1, -q_ind2], mat_1.clone()); // q₁−q₂
-                    cos_mat.insert(vec![q_ind1, q_ind2], mat_2.clone()); // q₁+q₂
+                    p_cos_mat.insert(key, mat_1);
+                    sin_mat.insert(key, mat_2);
                 }
-            });
+
+                ModeTask::PhotonPair { q1, q2 } => {
+                    cos_mat.insert(ModeKey::diff(q1, q2), mat_1);
+                    cos_mat.insert(ModeKey::sum(q1, q2), mat_2);
+                }
+            }
+        }
 
         (cos_mat, sin_mat, p_cos_mat)
     }

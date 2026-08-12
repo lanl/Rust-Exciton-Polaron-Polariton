@@ -32,3 +32,11 @@ macro_rules! timed_println {
         println!("[{}]{}{}", now.format("%Y-%m-%d %H:%M:%S%.3f"), mpi_message, format!($($arg)*));
     }};
 }
+
+#[macro_export]
+macro_rules! timed_println_rank0 {
+    ($($arg:tt)*) => {{
+        if $crate::utils::is_mpi_rank0_env() {$crate::timed_println!($($arg)*);
+        }
+    }};
+}

@@ -3,7 +3,7 @@
 #SBATCH --job-name=sing_ex_disp
 #SBATCH --output myjob_%j.out
 #SBATCH --error myjob_%j.err
-#SBATCH --partition=general
+#SBATCH --partition=skylake-gold
 #
 #SBATCH --time=2-00:00:00
 ###SBATCH --time=8:00:00
@@ -16,23 +16,34 @@
 
 ulimit -c 0  # Disable core dumps
 
-# Load Intel MKL
-module load intel-mkl
-module load intel-mpi
+use_matrix_ops_petsc_mpi
 
-# Allow 8 threads per MPI rank
+echo "Environment:"
+echo "  Rust: $(rustc --version)"
+echo "  MPI: $(mpirun --version | head -n 1)"
+echo "  SLEPC_DIR: $SLEPC_DIR"
+echo "  PETSC_DIR: $PETSC_DIR"
+echo ""
+
+# Allow 64 threads per MPI rank
 export OMP_NUM_THREADS=64
 export MKL_NUM_THREADS=64
 export OMP_PROC_BIND=close
 export OMP_PLACES=cores
 
-# # Intel MPI pinning - each rank gets 8 cores
-export I_MPI_PIN_DOMAIN=omp         # Pin to OMP domain
-export I_MPI_PIN=1
+# # # Intel MPI pinning - each rank gets 8 cores
+# export I_MPI_PIN_DOMAIN=omp         # Pin to OMP domain
+# export I_MPI_PIN=1
 
-# Build with job-specific target directory to avoid bus errors from concurrent builds
-echo "Building binary for job ${SLURM_JOB_ID}..."
-cargo build --release --target-dir ./target_${SLURM_JOB_ID}
+# Build with job-specific target directory and optimizations
+echo "Building project in release mode for job ${SLURM_JOB_ID}..."
+RUSTFLAGS="-C target-cpu=native" cargo build --release --target-dir ./target_${SLURM_JOB_ID}
+if [ $? -ne 0 ]; then
+    echo "ERROR: Build failed"
+    exit 1
+fi
+echo "Build complete."
+echo ""
 
 # Run the job-specific binary
 echo "Running job ${SLURM_JOB_ID}..."
@@ -40,7 +51,7 @@ echo "Number of MPI ranks: ${SLURM_NTASKS}"
 echo "Nodes: ${SLURM_JOB_NODELIST}"
 echo "CPUs per task: ${SLURM_CPUS_PER_TASK}"
 
-srun ./target_${SLURM_JOB_ID}/release/light-matter
+srun --cpu-bind=cores ./target_${SLURM_JOB_ID}/release/light-matter
 
 echo "Job ${SLURM_JOB_ID} completed."
 

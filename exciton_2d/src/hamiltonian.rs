@@ -5,6 +5,7 @@
 
 use crate::grid::Grid;
 use crate::matrix_elements::MatrixElementCalculator;
+use crate::utils::exciton_flat_index;
 
 use log::{info, warn};
 use matrix_ops::{ConvertFrom, DiagonalizationOptions, Diagonalize, MatrixOps, MatrixOpsError};
@@ -437,6 +438,30 @@ pub struct FullHamiltonian<M: MatrixOps> {
     _phantom: std::marker::PhantomData<M>,
 }
 
+/// Prepared exciton Hamiltonian with all K-independent terms precomputed.
+///
+/// The full exciton Hamiltonian has the form
+///
+///     H(K) = H_0 + H_CoM(K),
+///
+/// where H_0 contains the relative-coordinate energies and the lattice coupling,
+/// while H_CoM(K) is diagonal in the CoM plane-wave basis:
+///
+///     H_CoM(K) = |K + kappa|^2 / (2M).
+///
+/// This struct allows band-structure calculations to build H_0 once and only
+/// update the diagonal CoM kinetic term for each K point.
+#[derive(Clone)]
+pub struct PreparedExcitonHamiltonian<M: MatrixOps> {
+    pub h_no_k: M,
+    pub rel_eigvals: Array1<f64>,
+    pub rel_eigvecs: Array2<f64>,
+    pub kappa_vectors: Vec<Vec<f64>>,
+    pub n_rel: usize,
+    pub n_com: usize,
+    pub mass: f64,
+}
+
 impl<M: MatrixOps> FullHamiltonian<M>
 where
     M::Scalar: ConvertFrom<Complex64> + ConvertFrom<f64>,
@@ -473,6 +498,37 @@ where
             verbose,
             _phantom: std::marker::PhantomData,
         }
+    }
+
+    /// Prepares the K-independent part of the exciton Hamiltonian.
+    ///
+    /// This builds the Hamiltonian without the CoM kinetic term:
+    ///
+    ///     H_0 = I_com ⊗ H_rel + H_lattice,
+    ///
+    /// and stores the relative-coordinate eigenbasis and CoM reciprocal vectors.
+    /// For each K point, call `PreparedExcitonHamiltonian::hamiltonian_at_k`.
+    pub fn prepare(
+        &self,
+        n_rel_states: usize,
+    ) -> Result<PreparedExcitonHamiltonian<M>, MatrixOpsError>
+    where
+        M::Scalar: ConvertFrom<Complex64>,
+    {
+        let (h_no_k, rel_eigvals, rel_eigvecs) = self.build_hamiltonian_no_k(n_rel_states)?;
+
+        let n_rel = rel_eigvals.len();
+        let n_com = self.kappa_vectors.len();
+
+        Ok(PreparedExcitonHamiltonian {
+            h_no_k,
+            rel_eigvals,
+            rel_eigvecs,
+            kappa_vectors: self.kappa_vectors.clone(),
+            n_rel,
+            n_com,
+            mass: self.m,
+        })
     }
 
     /// Builds the Hamiltonian without center-of-mass kinetic energy
@@ -569,39 +625,45 @@ where
         h_full = eye_com.kron(&M::from_diag(rel_eigvals.as_slice().unwrap())?);
 
         let mut h_int = TriMat::new((dim, dim));
-        // Loop over all basis states
-        for i_rel in 0..n_rel_states_used {
-            for i_com in 0..n_com_states {
-                let i = i_rel + i_com * n_rel_states_used;
 
-                // Off-diagonal terms from the potential - only for non-zero w_kappa
-                for (&kappa_pot_tuple, &v0) in &w_kappa_tuples {
-                    // Find the index of the COM state with k' = k + kappa
-                    let key = (i_com, kappa_pot_tuple);
-                    if let Some(&j_com) = self.vector_sum_to_index.get(&key) {
-                        // Loop over relative states
-                        for j_rel in 0..n_rel_states_used {
-                            let j = j_rel + j_com * n_rel_states_used;
+        // Group sparse relative-coordinate sine matrix elements by transferred kappa.
+        // This avoids scanning all relative-state pairs for every CoM state.
+        let mut v_rel_by_kappa: HashMap<
+            (OrderedFloat<f64>, OrderedFloat<f64>),
+            Vec<(usize, usize, f64)>,
+        > = HashMap::new();
 
-                            // Get the potential matrix element if it exists
-                            if let Some(&matrix_element) =
-                                v_rel.get(&(j_rel, i_rel, kappa_pot_tuple))
-                            {
-                                // Add to matrix if non-zero
-                                // Matrix element is -2i * sin(κ·r), so multiply by -2i
-                                if matrix_element.abs() > 1e-12 {
-                                    h_int.add_triplet(
-                                        j,
-                                        i,
-                                        M::Scalar::convert_from(Complex64::new(
-                                            0.0,
-                                            -2.0 * v0 * matrix_element,
-                                        )),
-                                    );
-                                }
-                            }
-                        }
+        for (&(bra_rel, ket_rel, kappa_pot_tuple), &matrix_element) in &v_rel {
+            v_rel_by_kappa.entry(kappa_pot_tuple).or_default().push((
+                bra_rel,
+                ket_rel,
+                matrix_element,
+            ));
+        }
+
+        for i_com in 0..n_com_states {
+            for (&kappa_pot_tuple, rel_entries) in &v_rel_by_kappa {
+                let Some(&j_com) = self.vector_sum_to_index.get(&(i_com, kappa_pot_tuple)) else {
+                    continue;
+                };
+
+                let Some(&v0) = w_kappa_tuples.get(&kappa_pot_tuple) else {
+                    continue;
+                };
+
+                for &(j_rel, i_rel, matrix_element) in rel_entries {
+                    if matrix_element.abs() <= 1e-12 {
+                        continue;
                     }
+
+                    let col = exciton_flat_index(i_com, i_rel, n_rel_states_used);
+                    let row = exciton_flat_index(j_com, j_rel, n_rel_states_used);
+
+                    h_int.add_triplet(
+                        row,
+                        col,
+                        M::Scalar::convert_from(Complex64::new(0.0, -2.0 * v0 * matrix_element)),
+                    );
                 }
             }
         }
@@ -701,5 +763,36 @@ where
             .diagonalize(DiagonalizationOptions::smallest_real(k_eigvals))?
             .into_arrays_hermitian();
         Ok((eigenvalues, right_eigenvectors, rel_eigvals, rel_eigvecs))
+    }
+}
+
+impl<M: MatrixOps> PreparedExcitonHamiltonian<M>
+where
+    M::Scalar: ConvertFrom<f64>,
+{
+    /// Builds the full exciton Hamiltonian at a particular K point.
+    ///
+    /// The stored basis convention is
+    ///
+    ///     |state> = |CoM> ⊗ |rel>,
+    ///
+    /// so the CoM kinetic term is
+    ///
+    ///     diag(|K+kappa|^2 / 2M) ⊗ I_rel.
+    pub fn hamiltonian_at_k(&self, k: &[f64]) -> Result<M, MatrixOpsError> {
+        let eye_rel = M::eye(self.n_rel);
+
+        let com_kinetic: Vec<f64> = self
+            .kappa_vectors
+            .iter()
+            .map(|kappa| {
+                let kx = k[0] + kappa[0];
+                let ky = k[1] + kappa[1];
+
+                (kx * kx + ky * ky) / (2.0 * self.mass)
+            })
+            .collect();
+
+        self.h_no_k.add(&M::from_diag(&com_kinetic)?.kron(&eye_rel))
     }
 }

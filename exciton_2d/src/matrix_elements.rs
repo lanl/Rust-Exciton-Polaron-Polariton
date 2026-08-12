@@ -146,62 +146,58 @@ impl MatrixElementCalculator {
     ) -> f64 {
         let cache_key = (i, j, kappa_pot);
 
-        // First check if the result is already in the cache
         if let Some(&result) = self.matrix_element_cache.read().unwrap().get(&cache_key) {
             return result;
         }
 
-        // Release the lock before acquiring other locks
+        let eigvecs_guard = self.cached_eigvecs.read().unwrap();
+        let eigvecs = eigvecs_guard
+            .as_ref()
+            .expect("Eigenvectors must be calculated before using cached matrix elements");
 
-        // Get the eigenvectors - acquire this lock first
-        let eigvecs = match self.cached_eigvecs.read().unwrap().as_ref() {
-            Some(ev) => ev.clone(),
-            None => panic!("Eigenvectors must be calculated before using cached matrix elements"),
-        };
+        let sin_term_key = format!("sin_term_{:.6}_{:.6}", kappa_pot.0.0, kappa_pot.1.0);
 
-        // Now get the precomputed data - acquire this lock second
-        let precomputed_data = {
+        let sin_term = {
             let precomputed = self.precomputed.read().unwrap();
 
-            if precomputed.is_empty() {
-                // Create temporary data without holding the lock
+            if let Some(term) = precomputed.get(&sin_term_key) {
+                term.clone()
+            } else {
                 drop(precomputed);
 
-                // Create x_grid and y_grid
-                let mut x_grid = Array2::zeros((self.grid.grid_size, 1));
-                let mut y_grid = Array2::zeros((1, self.grid.grid_size));
+                let mut sin_term = Array2::zeros((self.grid.grid_size, self.grid.grid_size));
 
-                for i in 0..self.grid.grid_size {
-                    x_grid[[i, 0]] = self.grid.x[i];
-                    y_grid[[0, i]] = self.grid.y[i];
+                for iy in 0..self.grid.grid_size {
+                    for ix in 0..self.grid.grid_size {
+                        let x = self.grid.x[ix];
+                        let y = self.grid.y[iy];
+
+                        sin_term[[iy, ix]] = ((kappa_pot.0.0 * x + kappa_pot.1.0 * y) / 2.0).sin();
+                    }
                 }
 
-                // Now acquire the write lock to update precomputed data
                 let mut precomputed = self.precomputed.write().unwrap();
-                precomputed.insert("x_grid".to_string(), x_grid);
-                precomputed.insert("y_grid".to_string(), y_grid);
+                precomputed.insert(sin_term_key.clone(), sin_term.clone());
 
-                // Return a copy of what we need
-                (
-                    precomputed.get("x_grid").unwrap().clone(),
-                    precomputed.get("y_grid").unwrap().clone(),
-                )
-            } else {
-                // Just get what we need from existing data
-                (
-                    precomputed.get("x_grid").unwrap().clone(),
-                    precomputed.get("y_grid").unwrap().clone(),
-                )
+                sin_term
             }
         };
 
-        let (x_grid, y_grid) = precomputed_data;
+        let psi_i: Array2<f64> = eigvecs
+            .column(i)
+            .to_shape((self.grid.grid_size, self.grid.grid_size))
+            .unwrap()
+            .to_owned();
 
-        // Calculate the matrix element without holding any locks
+        let psi_j: Array2<f64> = eigvecs
+            .column(j)
+            .to_shape((self.grid.grid_size, self.grid.grid_size))
+            .unwrap()
+            .to_owned();
+
         let result =
-            self.calculate_matrix_element_directly(kappa_pot, i, j, &eigvecs, &x_grid, &y_grid);
+            fast_matrix_element_calc(psi_i.view(), psi_j.view(), sin_term.view(), self.grid.dx);
 
-        // Finally, update the cache with the result
         self.matrix_element_cache
             .write()
             .unwrap()
@@ -228,14 +224,12 @@ impl MatrixElementCalculator {
     ///
     /// # Returns
     /// The matrix element <i|sin(kappa·r)|j> (real)
-    fn calculate_matrix_element_directly(
+    fn _calculate_matrix_element_directly(
         &self,
         kappa_pot: (OrderedFloat<f64>, OrderedFloat<f64>),
         i: usize,
         j: usize,
         eigvecs: &Array2<f64>,
-        x_grid: &Array2<f64>,
-        y_grid: &Array2<f64>,
     ) -> f64 {
         // Get the eigenvectors for states i and j
         let psi_i: Array2<f64> = eigvecs
@@ -261,7 +255,7 @@ impl MatrixElementCalculator {
             }
         }
 
-        fast_matrix_element_calc(&psi_i, &psi_j, &sin_term, self.grid.dx)
+        fast_matrix_element_calc(psi_i.view(), psi_j.view(), sin_term.view(), self.grid.dx)
     }
 
     /// Calculates a potential matrix element directly with provided eigenvectors
@@ -327,7 +321,8 @@ impl MatrixElementCalculator {
             sin_term
         };
 
-        let matrix_element = fast_matrix_element_calc(&psi_i, &psi_j, &sin_term, self.grid.dx);
+        let matrix_element =
+            fast_matrix_element_calc(psi_i.view(), psi_j.view(), sin_term.view(), self.grid.dx);
 
         // Cache the result
         self.matrix_element_cache
@@ -358,66 +353,55 @@ impl MatrixElementCalculator {
         w_kappa_tuples: &HashMap<(OrderedFloat<f64>, OrderedFloat<f64>), f64>,
         n_rel_states: usize,
     ) -> HashMap<(usize, usize, (OrderedFloat<f64>, OrderedFloat<f64>)), f64> {
-        // Check if precomputed matrix elements exist
         let matrix_elements_filename = format!(
             "{}/matrix_elements_grid{}_box{}_nrel{}.json",
             self.save_dir, self.grid.grid_size, self.grid.box_size, n_rel_states
         );
 
-        if Path::new(&matrix_elements_filename).exists() && !self.recalculate {
-            if self.verbose {
-                info!("Cache exists but loading is not implemented; recomputing...");
-            }
+        if Path::new(&matrix_elements_filename).exists() && !self.recalculate && self.verbose {
+            info!("Cache exists but loading is not implemented; recomputing...");
         }
 
         if self.verbose {
-            info!("Pre-calculating potential matrix elements...")
-        };
+            info!("Pre-calculating potential matrix elements...");
+        }
 
-        // Pre-calculate potential matrix elements ONLY for non-zero w_kappa values
         let mut v_rel = HashMap::new();
 
         for (&kappa_pot_tuple, _) in w_kappa_tuples {
             for i in 0..n_rel_states {
-                for j in 0..n_rel_states {
-                    // Use cached matrix element calculation
+                for j in i..n_rel_states {
                     let matrix_element =
                         self.cached_potential_matrix_element(kappa_pot_tuple, i, j);
+
                     if matrix_element.abs() > 1e-12 {
-                        // Only store non-zero elements
                         v_rel.insert((i, j, kappa_pot_tuple), matrix_element);
+
+                        if i != j {
+                            v_rel.insert((j, i, kappa_pot_tuple), matrix_element);
+                        }
                     }
                 }
             }
         }
 
-        // Save the precomputed matrix elements
         if self.verbose {
             info!(
-                "Saving {} matrix elements to {}",
+                "Computed {} non-zero matrix elements for {} non-zero kappa values",
                 v_rel.len(),
-                matrix_elements_filename
-            )
-        };
+                w_kappa_tuples.len()
+            );
 
-        if self.verbose {
-            // Debug: Print some sample matrix elements
             if !v_rel.is_empty() {
-                info!("Sample matrix elements (real sine integrals):");
-                let mut sample_count = 0;
-                for (&(i_rel, j_rel, kappa_pot), &val) in &v_rel {
-                    if sample_count < 5 {
-                        info!("  <{}|sin({:?}·r)|{}> = {}", i_rel, kappa_pot, j_rel, val);
-                        sample_count += 1;
-                    }
+                info!("Sample matrix elements:");
+                for (&(i_rel, j_rel, kappa_pot), &val) in v_rel.iter().take(5) {
+                    info!("  <{}|sin({:?}·r/2)|{}> = {}", i_rel, kappa_pot, j_rel, val);
                 }
             } else {
                 warn!("WARNING: No non-zero matrix elements found!");
             }
         }
 
-        // In a real implementation, we'd serialize to JSON
-        // For now, we'll just return the HashMap
         v_rel
     }
 }

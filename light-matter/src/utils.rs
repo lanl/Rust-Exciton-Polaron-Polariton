@@ -301,3 +301,45 @@ impl PPConfig {
         hasher.finish()
     }
 }
+
+pub fn mpi_rank_env_or_zero() -> usize {
+    std::env::var("PMI_RANK")
+        .or_else(|_| std::env::var("PMIX_RANK"))
+        .or_else(|_| std::env::var("I_MPI_RANK"))
+        .or_else(|_| std::env::var("OMPI_COMM_WORLD_RANK"))
+        .or_else(|_| std::env::var("SLURM_PROCID"))
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(0)
+}
+
+pub fn mpi_size_env_or_one() -> usize {
+    std::env::var("PMI_SIZE")
+        .or_else(|_| std::env::var("PMIX_SIZE"))
+        .or_else(|_| std::env::var("I_MPI_SIZE"))
+        .or_else(|_| std::env::var("OMPI_COMM_WORLD_SIZE"))
+        .or_else(|_| std::env::var("SLURM_NTASKS"))
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(1)
+}
+
+pub fn is_mpi_rank0_env() -> bool {
+    mpi_rank_env_or_zero() == 0
+}
+
+pub fn atomic_write(path: &str, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let tmp = format!("{}.tmp.{}", path, std::process::id());
+
+    {
+        let mut file = std::fs::File::create(&tmp)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+    }
+
+    std::fs::rename(tmp, path)?;
+
+    Ok(())
+}

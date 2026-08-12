@@ -69,11 +69,11 @@ pub use band_structure::{
 };
 pub use config::ExcitonConfig;
 pub use grid::Grid;
-pub use hamiltonian::{FullHamiltonian, RelativeHamiltonian};
+pub use hamiltonian::{FullHamiltonian, PreparedExcitonHamiltonian, RelativeHamiltonian};
 pub use matrix_elements::MatrixElementCalculator;
 pub use system::Exciton2DGridSystem;
 pub use utils::{
     apply_symmetry, exciton_flat_index, exciton_unflatten_index, fast_matrix_element_calc,
-    fast_matrix_element_calc_view, print_memory_usage,
+    print_memory_usage,
 };
 pub use visualization::{plot_band_structure, plot_rel_eigenstate, plot_spectrum};

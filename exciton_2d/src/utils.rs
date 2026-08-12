@@ -3,7 +3,7 @@
 //! This module provides various utility functions used throughout the crate.
 
 use log::info;
-use ndarray::{Array2, ArrayView2, Zip};
+use ndarray::{ArrayView2, Zip};
 use std::process;
 
 /// Basis convention used throughout exciton_2d:
@@ -69,7 +69,7 @@ pub fn apply_symmetry(k_point: &[f64], symmetry_op: usize) -> Vec<f64> {
 ///     <psi_i|V|psi_j> ≈ sum_xy psi_i(x,y) V(x,y) psi_j(x,y) dx²
 ///
 /// This version avoids temporary arrays.
-pub fn fast_matrix_element_calc_view(
+pub fn fast_matrix_element_calc(
     psi_i_real: ArrayView2<f64>,
     psi_j_real: ArrayView2<f64>,
     v_term: ArrayView2<f64>,
@@ -81,14 +81,4 @@ pub fn fast_matrix_element_calc_view(
         .fold(0.0, |acc, &a, &b, &v| acc + a * v * b);
 
     sum * dx * dx
-}
-
-/// Backward-compatible owned-array wrapper.
-pub fn fast_matrix_element_calc(
-    psi_i_real: &Array2<f64>,
-    psi_j_real: &Array2<f64>,
-    v_term: &Array2<f64>,
-    dx: f64,
-) -> f64 {
-    fast_matrix_element_calc_view(psi_i_real.view(), psi_j_real.view(), v_term.view(), dx)
 }

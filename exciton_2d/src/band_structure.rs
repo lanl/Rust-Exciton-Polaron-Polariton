@@ -4,7 +4,7 @@
 //! related properties of excitons in 2D materials.
 
 use crate::hamiltonian::FullHamiltonian;
-use crate::utils::apply_symmetry;
+use crate::utils::{apply_symmetry, exciton_flat_index};
 use bincode::{deserialize, serialize};
 use core::panic;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -131,13 +131,11 @@ pub fn calculate_n_expectation<M: MatrixOps>(
     eigenvector: &Array1<num_complex::Complex64>,
     n_rel_states: usize,
 ) -> f64 {
-    // Get the number of center-of-mass states
     let n_com_states = full_ham.kappa_vectors.len();
 
-    // Get the mapping from relative state index to n quantum number
-    // Generate all states in order
     let mut n_values: Vec<i32> = Vec::new();
     let mut n: i32 = 0;
+
     while n_values.len() < n_rel_states {
         for _m in -n..=n {
             n_values.push(n);
@@ -148,23 +146,21 @@ pub fn calculate_n_expectation<M: MatrixOps>(
         n += 1;
     }
 
-    // Calculate the expectation value of n
     let mut n_expectation = 0.0;
     let mut total_prob = 0.0;
 
-    for i_rel in 0..n_rel_states {
-        for i_com in 0..n_com_states {
-            let i = i_rel + i_com * n_rel_states;
-            if i < eigenvector.len() {
-                // For complex eigenvectors, probability is |ψ|²
-                let prob = eigenvector[i].norm_sqr();
-                n_expectation += prob * n_values[i_rel] as f64;
+    for rel_ind in 0..n_rel_states {
+        for com_ind in 0..n_com_states {
+            let idx = exciton_flat_index(com_ind, rel_ind, n_rel_states);
+
+            if idx < eigenvector.len() {
+                let prob = eigenvector[idx].norm_sqr();
+                n_expectation += prob * n_values[rel_ind] as f64;
                 total_prob += prob;
             }
         }
     }
 
-    // Return the expectation value
     if total_prob > 0.0 {
         n_expectation / total_prob
     } else {
@@ -191,7 +187,7 @@ pub fn calculate_n_colored_band_structure<M: MatrixOps>(
     recalculate: bool,
 ) -> Result<(Vec<Vec<f64>>, Vec<Array1<f64>>, Vec<Vec<f64>>), MatrixOpsError>
 where
-    M::Scalar: ConvertFrom<Complex64>,
+    M::Scalar: ConvertFrom<Complex64> + ConvertFrom<f64>,
     M: Diagonalize,
 {
     // Create save directory if it doesn't exist
@@ -316,44 +312,36 @@ where
             .progress_chars("#>-"),
     );
 
-    // Store original K value
-    let original_k = full_ham.k.clone();
+    // Build the K-independent Hamiltonian once.
+    //
+    // This avoids recomputing the relative basis, lattice matrix elements,
+    // and lattice coupling for every K point.
+    let prepared = full_ham.prepare(n_rel_states)?;
 
     // Calculate eigenvalues and n-expectation values for each unique k-point
     let mut unique_results = Vec::new();
 
     for (idx, k_point) in unique_k_points.iter().enumerate() {
-        // Create a thread-local copy of the FullHamiltonian
-        let mut full_ham_local = full_ham.clone();
-        full_ham_local.k = k_point.clone();
+        let h_k = prepared.hamiltonian_at_k(k_point)?;
 
-        // Diagonalize the Hamiltonian
-        let (eigvals, eigvecs, _, _) =
-            full_ham_local.diagonalize_full_hamiltonian(n_rel_states, n_bands)?;
+        let (eigvals, eigvecs) = h_k
+            .diagonalize(matrix_ops::DiagonalizationOptions::smallest_real(n_bands))?
+            .into_arrays_hermitian();
 
-        // Calculate n-expectation for each eigenstate
+        // Calculate n-expectation for each eigenstate.
+        //
+        // `calculate_n_expectation` only needs the CoM basis size from `full_ham`,
+        // so it remains valid for the prepared Hamiltonian.
         let n_expectation: Vec<f64> = (0..eigvals.len())
-            .map(|i| {
-                calculate_n_expectation(
-                    &full_ham_local,
-                    &eigvecs.column(i).to_owned(),
-                    n_rel_states,
-                )
-            })
+            .map(|i| calculate_n_expectation(full_ham, &eigvecs.column(i).to_owned(), n_rel_states))
             .collect();
 
-        // Store results
         unique_results.push((idx, eigvals, n_expectation));
 
-        // Update progress bar
         progress_bar.inc(1);
     }
 
     progress_bar.finish_with_message("Band structure calculation complete");
-
-    // Restore original K value
-    let mut full_ham_local = full_ham.clone();
-    full_ham_local.k = original_k;
 
     // Reconstruct full band structure using symmetry
     let mut eigvals_list = vec![Array1::<f64>::zeros(0); k_points.len()];
@@ -400,7 +388,7 @@ pub struct BandStructureCalculator<M: MatrixOps> {
 
 impl<M: MatrixOps> BandStructureCalculator<M>
 where
-    M::Scalar: ConvertFrom<Complex64>,
+    M::Scalar: ConvertFrom<Complex64> + ConvertFrom<f64>,
     M: Diagonalize,
 {
     /// Creates a new band structure calculator
@@ -469,20 +457,12 @@ where
         n_rel_states: usize,
         n_bands: usize,
     ) -> Result<(Array1<f64>, Array2<Complex64>), MatrixOpsError> {
-        // Store original K value
-        let original_k = self.full_ham.k.clone();
+        let prepared = self.full_ham.prepare(n_rel_states)?;
+        let h_k = prepared.hamiltonian_at_k(k_point)?;
 
-        // Set the new K value
-        let mut full_ham = self.full_ham.clone();
-        full_ham.k = k_point.to_vec();
-
-        // Diagonalize the Hamiltonian
-        let (eigvals, eigvecs, _, _) =
-            full_ham.diagonalize_full_hamiltonian(n_rel_states, n_bands)?;
-
-        // Restore original K value
-        let mut full_ham = self.full_ham.clone();
-        full_ham.k = original_k;
+        let (eigvals, eigvecs) = h_k
+            .diagonalize(matrix_ops::DiagonalizationOptions::smallest_real(n_bands))?
+            .into_arrays_hermitian();
 
         Ok((eigvals, eigvecs))
     }
@@ -631,14 +611,28 @@ where
                 .unwrap(),
         );
 
+        // Build the K-independent exciton Hamiltonian once.
+        //
+        // For each K point we only add the diagonal CoM kinetic term
+        // |K+kappa|^2/(2M).
+        let prepared = self
+            .full_ham
+            .prepare(n_rel_states)
+            .expect("Failed to prepare K-independent exciton Hamiltonian");
+
         let mut unique_eigvals = Vec::with_capacity(unique_k_points.len());
 
         for k_point in &unique_k_points {
-            let (evals, _) = self
-                .calculate_at_k_point(k_point, n_rel_states, n_bands)
-                .unwrap();
+            let h_k = prepared
+                .hamiltonian_at_k(k_point)
+                .expect("Failed to build exciton Hamiltonian at K");
 
-            unique_eigvals.push(evals.clone());
+            let (evals, _) = h_k
+                .diagonalize(matrix_ops::DiagonalizationOptions::smallest_real(n_bands))
+                .expect("Failed to diagonalize exciton Hamiltonian at K")
+                .into_arrays_hermitian();
+
+            unique_eigvals.push(evals);
 
             progress_bar.inc(1);
         }
