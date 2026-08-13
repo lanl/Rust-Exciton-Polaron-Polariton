@@ -343,3 +343,26 @@ pub fn atomic_write(path: &str, bytes: &[u8]) -> std::io::Result<()> {
 
     Ok(())
 }
+
+pub fn is_mpi_run_env() -> bool {
+    mpi_size_env_or_one() > 1
+}
+
+pub fn env_usize(keys: &[&str]) -> Option<usize> {
+    keys.iter()
+        .find_map(|key| std::env::var(key).ok()?.parse::<usize>().ok())
+}
+
+pub fn chunk_bounds(total: usize, chunk_index: usize, n_chunks: usize) -> (usize, usize) {
+    assert!(n_chunks > 0, "n_chunks must be positive");
+    assert!(
+        chunk_index < n_chunks,
+        "chunk_index must be less than n_chunks"
+    );
+
+    let per_chunk = (total + n_chunks - 1) / n_chunks;
+    let start = chunk_index * per_chunk;
+    let end = ((chunk_index + 1) * per_chunk).min(total);
+
+    (start, end)
+}

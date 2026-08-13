@@ -466,6 +466,62 @@ where
         Ok(())
     }
 
+    pub fn compute_lm_matrix_elements_only(
+        &mut self,
+        k: Option<Vec<f64>>,
+        force_recompute: bool,
+    ) -> Result<(), MatrixOpsError>
+    where
+        M::Scalar: ConvertFrom<c64>,
+    {
+        use std::time::Instant;
+
+        if let Some(k_val) = k {
+            self.update_k(k_val);
+        }
+
+        let time_eig = Instant::now();
+        self.exciton.compute_eigenstates()?;
+        timed_println_rank0!(
+            "Exciton diagonalization for matrix-element precompute: {:?}",
+            time_eig.elapsed()
+        );
+
+        let n_modes = self.photon.boson.get_modes().len();
+        let all_q_ind = self.photon.get_all_q_ind();
+
+        timed_println_rank0!(
+            "Precomputing LM matrix elements for {} photon modes: {} tasks",
+            n_modes,
+            all_q_ind.len()
+        );
+        timed_println_rank0!(
+            "  singles = {}, pairs = {}",
+            n_modes,
+            n_modes * (n_modes.saturating_sub(1)) / 2
+        );
+
+        let time_mat = Instant::now();
+
+        self.matrix_elements.populate_tay_mat_elements_with_cache(
+            &all_q_ind,
+            self.exciton.e_vecs.as_ref().unwrap(),
+            self.photon.boson.get_modes(),
+            self.exciton.exciton_ham.kappa_vectors.len(),
+            self.exciton.exciton_ham.rel_ham.mu,
+            self.cache_dir.as_deref(),
+            force_recompute,
+            self.config_hash,
+        );
+
+        timed_println_rank0!(
+            "LM matrix-element precompute completed in {:?}",
+            time_mat.elapsed()
+        );
+
+        Ok(())
+    }
+
     fn cache_photon_operators(&mut self) -> Result<(), MatrixOpsError>
     where
         M::Scalar: Sqrt + One + Zero,

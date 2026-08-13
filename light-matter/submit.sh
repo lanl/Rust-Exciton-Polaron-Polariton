@@ -15,6 +15,8 @@
 
 ulimit -c 0  # Disable core dumps
 
+source "${HOME}/env/matrix_ops_petsc_mpi.sh"
+
 # Load Intel MKL
 module load intel-mkl
 module load intel-mpi

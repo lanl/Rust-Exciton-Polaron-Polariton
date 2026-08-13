@@ -106,9 +106,8 @@ impl ColorBandData {
 
     /// Save data to file
     pub fn save_to_file(&self, filename: &str) -> Result<(), Box<dyn Error>> {
-        File::create(filename)?;
         let data = serialize(&self)?;
-        std::fs::write(filename, data)?;
+        crate::utils::atomic_write(filename, &data)?;
         Ok(())
     }
 
@@ -156,6 +155,324 @@ where
         Ok(data) => return data.to_results(),
         Err(e) => panic!("Failed to load cached data: {}, recalculating...", e),
     }
+}
+
+pub fn generate_band_k_points(
+    n_k_points: usize,
+    sym_points: &[Vec<f64>],
+    a0: f64,
+    zoomed: bool,
+) -> Vec<Vec<f64>> {
+    if n_k_points == 0 {
+        return Vec::new();
+    }
+
+    if n_k_points == 1 {
+        return vec![vec![0.0, 0.0]];
+    }
+
+    if zoomed {
+        let start = vec![0.0, 0.0];
+        let end = vec![PI / a0 / 6.0, 0.0];
+
+        return (0..n_k_points)
+            .map(|k_ind| {
+                let t_frac = k_ind as f64 / (n_k_points - 1) as f64;
+                vec![
+                    start[0] + t_frac * (end[0] - start[0]),
+                    start[1] + t_frac * (end[1] - start[1]),
+                ]
+            })
+            .collect();
+    }
+
+    let n_sym = sym_points.len();
+    assert!(n_sym > 0, "sym_points must not be empty");
+
+    let points_per_seg = (n_k_points / n_sym).max(2);
+
+    let mut k_points: Vec<Vec<f64>> = sym_points
+        .iter()
+        .enumerate()
+        .flat_map(|(sym_ind, sym_point)| {
+            let sym_ind2 = (sym_ind + 1) % sym_points.len();
+
+            (0..points_per_seg).map(move |t| {
+                let t_frac = t as f64 / (points_per_seg - 1) as f64;
+
+                vec![
+                    sym_point[0] + t_frac * (sym_points[sym_ind2][0] - sym_point[0]),
+                    sym_point[1] + t_frac * (sym_points[sym_ind2][1] - sym_point[1]),
+                ]
+            })
+        })
+        .collect();
+
+    k_points.truncate(n_k_points);
+    k_points
+}
+
+pub fn color_band_filename(
+    pp_config: &PPConfig,
+    save_dir: &str,
+    n_k_points: usize,
+    n_eig: usize,
+    zoomed: bool,
+) -> String {
+    let total_coupling = pp_config.lm_couplings.iter().sum::<f64>();
+
+    format!(
+        "{}/color_band_a0{}_V0{}_nrel{}_nbands{}_npoints{}_phcoup{:.6}_nmodes{}_pncoup{}_npn{}_neig{}{}.bin",
+        save_dir,
+        pp_config.e_config.a0,
+        pp_config.e_config.v0,
+        pp_config.n_rel,
+        pp_config.n_bands,
+        n_k_points,
+        total_coupling,
+        pp_config.q_values.len(),
+        pp_config.pn_coupling,
+        pp_config.pn_n_fock,
+        n_eig,
+        if zoomed { "_zoomed" } else { "" },
+    )
+}
+
+pub fn color_band_chunk_filename(
+    pp_config: &PPConfig,
+    save_dir: &str,
+    n_k_points: usize,
+    n_eig: usize,
+    zoomed: bool,
+    chunk_index: usize,
+    n_chunks: usize,
+) -> String {
+    let total_coupling = pp_config.lm_couplings.iter().sum::<f64>();
+
+    format!(
+        "{}/color_band_chunk_a0{}_V0{}_nrel{}_nbands{}_npoints{}_phcoup{:.6}_nmodes{}_pncoup{}_npn{}_neig{}_chunk{}_of{}{}.bin",
+        save_dir,
+        pp_config.e_config.a0,
+        pp_config.e_config.v0,
+        pp_config.n_rel,
+        pp_config.n_bands,
+        n_k_points,
+        total_coupling,
+        pp_config.q_values.len(),
+        pp_config.pn_coupling,
+        pp_config.pn_n_fock,
+        n_eig,
+        chunk_index,
+        n_chunks,
+        if zoomed { "_zoomed" } else { "" },
+    )
+}
+
+pub fn calculate_color_band_structure_distributed_chunk<M, B>(
+    pp: &mut PPHamiltonian<M, B>,
+    n_k_points: usize,
+    n_eig: usize,
+    sym_points: &[Vec<f64>],
+    pp_config: &PPConfig,
+    use_cached: bool,
+    zoomed: bool,
+    chunk_index: usize,
+    n_chunks: usize,
+) -> Result<(Vec<Vec<f64>>, Vec<Array1<f64>>, Vec<Vec<f64>>), MatrixOpsError>
+where
+    M: MatrixOps + Diagonalize,
+    M::Scalar: Sqrt + Sum + ConvertFrom<f64> + ConvertFrom<c64>,
+    B: Boson<M>,
+{
+    let rank = crate::utils::mpi_rank_env_or_zero();
+    let world_size = crate::utils::mpi_size_env_or_one();
+
+    let save_dir = "pp_data";
+    std::fs::create_dir_all(save_dir).ok();
+
+    let k_points = generate_band_k_points(
+        n_k_points,
+        sym_points,
+        pp_config.e_config.a0,
+        zoomed,
+    );
+
+    let total_k_points = k_points.len();
+
+    let (start_idx, end_idx) =
+        crate::utils::chunk_bounds(total_k_points, chunk_index, n_chunks);
+
+    let chunk_filename = color_band_chunk_filename(
+        pp_config,
+        save_dir,
+        n_k_points,
+        n_eig,
+        zoomed,
+        chunk_index,
+        n_chunks,
+    );
+
+    if rank == 0 {
+        timed_println!(
+            "Bandstructure distributed chunk {}/{}: K indices {}..{} of {} using {} MPI ranks",
+            chunk_index,
+            n_chunks,
+            start_idx,
+            end_idx,
+            total_k_points,
+            world_size,
+        );
+    }
+
+    // Important: every rank checks the same cache path and exits consistently.
+    if use_cached && Path::new(&chunk_filename).exists() {
+        if rank == 0 {
+            timed_println!("Loading cached band chunk from {}", chunk_filename);
+            let data = ColorBandData::load_from_file(&chunk_filename).map_err(|e| {
+                MatrixOpsError::Other {
+                    message: format!("Failed to load cached chunk {}: {}", chunk_filename, e),
+                }
+            })?;
+            return Ok(data.to_results());
+        } else {
+            return Ok((vec![], vec![], vec![]));
+        }
+    }
+
+    let mut chunk_k_points = Vec::new();
+    let mut chunk_eigvals = Vec::new();
+    let mut chunk_photonic = Vec::new();
+
+    let mut prev_eigvecs: Option<Array2<c64>> = None;
+
+    for global_idx in start_idx..end_idx {
+        let k = &k_points[global_idx];
+
+        if rank == 0 {
+            timed_println!(
+                "Chunk {}/{}: solving K index {} / {}: {:?}",
+                chunk_index,
+                n_chunks,
+                global_idx + 1,
+                total_k_points,
+                k,
+            );
+        }
+
+        // All ranks in this Slurm array task build the same K Hamiltonian
+        // and enter the same collective SLEPc solve.
+        let h_pp = pp.build_pp_hamiltonian(Some(k.clone()))?;
+
+        let mut options = DiagonalizationOptions::smallest_real(n_eig)
+            .backend(matrix_ops::DiagonalizationBackend::Auto)
+            .hermitian()
+            .max_iterations(50_000)
+            .tolerance(1e-10);
+
+        options.initial_guess = prev_eigvecs.clone();
+
+        let result = h_pp.diagonalize(options)?;
+        let (eigvals, eigvecs) = result.into_arrays_hermitian();
+
+        let n_returned = eigvals.len();
+
+        let photonic_character: Vec<f64> = (0..n_returned)
+            .map(|i| calculate_photonic_character(pp, &eigvecs.column(i).to_owned()))
+            .collect();
+
+        prev_eigvecs = Some(eigvecs);
+
+        if rank == 0 {
+            chunk_k_points.push(k.clone());
+            chunk_eigvals.push(eigvals);
+            chunk_photonic.push(photonic_character);
+        }
+    }
+
+    if rank == 0 {
+        let chunk_data = ColorBandData::from_results(
+            chunk_k_points.clone(),
+            chunk_eigvals.clone(),
+            chunk_photonic.clone(),
+        );
+
+        chunk_data.save_to_file(&chunk_filename).map_err(|e| {
+            MatrixOpsError::Other {
+                message: format!("Failed to save band chunk {}: {}", chunk_filename, e),
+            }
+        })?;
+
+        timed_println!("Saved band chunk to {}", chunk_filename);
+
+        Ok((chunk_k_points, chunk_eigvals, chunk_photonic))
+    } else {
+        Ok((vec![], vec![], vec![]))
+    }
+}
+
+pub fn gather_color_band_structure_chunks(
+    n_k_points: usize,
+    n_eig: usize,
+    pp_config: &PPConfig,
+    zoomed: bool,
+    n_chunks: usize,
+) -> Result<(Vec<Vec<f64>>, Vec<Array1<f64>>, Vec<Vec<f64>>), MatrixOpsError> {
+    let save_dir = "pp_data";
+    std::fs::create_dir_all(save_dir).ok();
+
+    let mut all_k_points = Vec::new();
+    let mut all_eigvals = Vec::new();
+    let mut all_photonic = Vec::new();
+
+    for chunk_index in 0..n_chunks {
+        let chunk_filename = color_band_chunk_filename(
+            pp_config,
+            save_dir,
+            n_k_points,
+            n_eig,
+            zoomed,
+            chunk_index,
+            n_chunks,
+        );
+
+        timed_println!("Loading band chunk {}", chunk_filename);
+
+        let data = ColorBandData::load_from_file(&chunk_filename).map_err(|e| {
+            MatrixOpsError::Other {
+                message: format!("Failed to load chunk file {}: {}", chunk_filename, e),
+            }
+        })?;
+
+        let (k, eig, phot) = data.to_results();
+
+        all_k_points.extend(k);
+        all_eigvals.extend(eig);
+        all_photonic.extend(phot);
+    }
+
+    let final_filename = color_band_filename(
+        pp_config,
+        save_dir,
+        n_k_points,
+        n_eig,
+        zoomed,
+    );
+
+    let final_data = ColorBandData::from_results(
+        all_k_points.clone(),
+        all_eigvals.clone(),
+        all_photonic.clone(),
+    );
+
+    final_data.save_to_file(&final_filename).map_err(|e| {
+        MatrixOpsError::Other {
+            message: format!("Failed to save gathered bandstructure {}: {}", final_filename, e),
+        }
+    })?;
+
+    timed_println!("Saved gathered bandstructure to {}", final_filename);
+
+    Ok((all_k_points, all_eigvals, all_photonic))
 }
 
 /// Calculate band structure with MPI parallelization (alternative implementation)
@@ -260,11 +577,15 @@ where
     filename += if zoomed { "_zoomed.bin" } else { ".bin" };
 
     // Check if cached data exists and should be used (only rank 0)
-    if rank == 0 && use_cached && Path::new(&filename).exists() {
-        timed_println!("Loading cached color band structure data from {}", filename);
-        match ColorBandData::load_from_file(&filename) {
-            Ok(data) => return Ok(data.to_results()),
-            Err(e) => timed_println!("Failed to load cached data: {}, recalculating...", e),
+    if use_cached && Path::new(&filename).exists() {
+        if rank == 0 {
+            timed_println!("Loading cached color band structure data from {}", filename);
+            match ColorBandData::load_from_file(&filename) {
+                Ok(data) => return Ok(data.to_results()),
+                Err(e) => timed_println!("Failed to load cached data: {}, recalculating...", e),
+            }
+        } else {
+            return Ok((vec![], vec![], vec![]));
         }
     }
 

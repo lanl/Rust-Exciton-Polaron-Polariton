@@ -448,60 +448,64 @@ impl LMMatrixElementArray {
         let sin_rel = self.sin_mat_rel.as_ref().unwrap();
         let p_cos_rel = self.p_cos_mat_rel.as_ref().unwrap();
 
-        let results: Vec<(ModeTask, Array2<c64>, Array2<c64>)> = all_q_ind
-            .par_iter()
-            .map(|task| match *task {
-                ModeTask::PhotonSingle { mode } => {
-                    let key = ModeKey::single(mode);
+        let task_chunk_size = 2048usize;
 
-                    let sin = sin_rel
-                        .get(&key)
-                        .unwrap_or_else(|| panic!("Missing relative sine matrix for {:?}", key));
+        for chunk in all_q_ind.chunks(task_chunk_size) {
+            let results: Vec<(ModeTask, Array2<c64>, Array2<c64>)> = chunk
+                .par_iter()
+                .map(|task| match *task {
+                    ModeTask::PhotonSingle { mode } => {
+                        let key = ModeKey::single(mode);
 
-                    let p_cos = p_cos_rel
-                        .get(&key)
-                        .unwrap_or_else(|| panic!("Missing relative p_cos matrix for {:?}", key));
+                        let sin = sin_rel
+                            .get(&key)
+                            .unwrap_or_else(|| panic!("Missing relative sine matrix for {:?}", key));
 
-                    (
-                        *task,
-                        self.to_exciton_basis(p_cos, e_vecs, n_com),
-                        self.to_exciton_basis(sin, e_vecs, n_com),
-                    )
-                }
+                        let p_cos = p_cos_rel
+                            .get(&key)
+                            .unwrap_or_else(|| panic!("Missing relative p_cos matrix for {:?}", key));
 
-                ModeTask::PhotonPair { q1, q2 } => {
-                    let diff_key = ModeKey::diff(q1, q2);
-                    let sum_key = ModeKey::sum(q1, q2);
+                        (
+                            *task,
+                            self.to_exciton_basis(p_cos, e_vecs, n_com),
+                            self.to_exciton_basis(sin, e_vecs, n_com),
+                        )
+                    }
 
-                    let cos_diff = cos_rel.get(&diff_key).unwrap_or_else(|| {
-                        panic!("Missing relative cos-diff matrix for {:?}", diff_key)
-                    });
+                    ModeTask::PhotonPair { q1, q2 } => {
+                        let diff_key = ModeKey::diff(q1, q2);
+                        let sum_key = ModeKey::sum(q1, q2);
 
-                    let cos_sum = cos_rel.get(&sum_key).unwrap_or_else(|| {
-                        panic!("Missing relative cos-sum matrix for {:?}", sum_key)
-                    });
+                        let cos_diff = cos_rel.get(&diff_key).unwrap_or_else(|| {
+                            panic!("Missing relative cos-diff matrix for {:?}", diff_key)
+                        });
 
-                    (
-                        *task,
-                        self.to_exciton_basis(cos_diff, e_vecs, n_com),
-                        self.to_exciton_basis(cos_sum, e_vecs, n_com),
-                    )
-                }
-            })
-            .collect();
+                        let cos_sum = cos_rel.get(&sum_key).unwrap_or_else(|| {
+                            panic!("Missing relative cos-sum matrix for {:?}", sum_key)
+                        });
 
-        for (task, mat_1, mat_2) in results {
-            match task {
-                ModeTask::PhotonSingle { mode } => {
-                    let key = ModeKey::single(mode);
+                        (
+                            *task,
+                            self.to_exciton_basis(cos_diff, e_vecs, n_com),
+                            self.to_exciton_basis(cos_sum, e_vecs, n_com),
+                        )
+                    }
+                })
+                .collect();
 
-                    self.p_cos_mat.insert(key, mat_1);
-                    self.sin_mat.insert(key, mat_2);
-                }
+            for (task, mat_1, mat_2) in results {
+                match task {
+                    ModeTask::PhotonSingle { mode } => {
+                        let key = ModeKey::single(mode);
 
-                ModeTask::PhotonPair { q1, q2 } => {
-                    self.cos_mat.insert(ModeKey::diff(q1, q2), mat_1);
-                    self.cos_mat.insert(ModeKey::sum(q1, q2), mat_2);
+                        self.p_cos_mat.insert(key, mat_1);
+                        self.sin_mat.insert(key, mat_2);
+                    }
+
+                    ModeTask::PhotonPair { q1, q2 } => {
+                        self.cos_mat.insert(ModeKey::diff(q1, q2), mat_1);
+                        self.cos_mat.insert(ModeKey::sum(q1, q2), mat_2);
+                    }
                 }
             }
         }

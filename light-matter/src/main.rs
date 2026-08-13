@@ -1,13 +1,15 @@
 use exciton_2d::ExcitonConfig;
-use matrix_ops::{ComposedOperator, Result};
+use matrix_ops::{ComposedOperator, Result, MatrixOps};
 use ndarray::{Array1, Array2, arr1};
 use ndarray_linalg::c64;
 use sprs::CsMat;
-use std::env;
 use std::fs::File;
-use std::path::PathBuf;
 use std::time::Instant;
 use std::{f64::consts::PI, io::Write};
+use clap::Parser;
+
+pub mod cli;
+use crate::cli::{Cli, Command, MethodArg, BandParallelModeArg};
 
 pub mod utils;
 pub use utils::{BosonMode, Polarization, Vector3D};
@@ -41,36 +43,44 @@ pub enum Method {
     LinOp,
 }
 
-fn run_bandstructure(method: Method, e_config: ExcitonConfig) -> Result<()> {
-    // Create the 2D exciton system
-    let a0 = (&e_config).a0;
-    let v0 = (&e_config).v0;
+fn run_bandstructure_with_args(
+    method: Method,
+    e_config: ExcitonConfig,
+    args: cli::BandstructureArgs,
+    chunk_index: usize,
+    n_chunks: usize,
+) -> Result<()> {
 
-    // Parameters for diagonalization
-    let n_rel = 16; // Number of relative coordinate states
-    let n_ex_eig = 32; // Number of exciton eigenstates
-    let n_eig = 512; // Number PP eigenstates
+    let a0 = e_config.a0;
+    let v0 = e_config.v0;
 
-    let calculate = true;
+    let n_rel = args.n_rel;
+    let n_ex_eig = args.n_ex_eig;
+    let n_eig = args.n_eig;
 
-    let zoomed = true;
+    let calculate = args.calculate;
+    let zoomed = args.zoomed;
 
-    // Light-matter coupling parameters
-    let total_coupling = 0.003; // Coupling strength
+    let total_coupling = args.total_coupling;
     timed_println!("total_coupling = {}", total_coupling);
-    let omega_0 = 0.15; // Photon frequency
-    let n_modes = 23;
+
+    let omega_0 = args.omega_0;
+    let n_modes = args.n_modes;
     let coupling = total_coupling / (n_modes as f64);
 
-    // Define photon modes
-    // let qx_values = vec![0.0]; // Photon wavevectors along x
-    let qx_values = Array1::linspace(-0.001, 0.001, n_modes); // Photon wavevectors along x
-    let qy_values = Array1::linspace(-0.001, 0.001, n_modes);
-    let qz = omega_0 / C;
-    let n_fock = 2; // Dimension of Fock space
+    let qx_values = Array1::linspace(-args.q_max, args.q_max, n_modes);
+    let qy_values = Array1::linspace(-args.q_max, args.q_max, n_modes);
 
-    let n_k_points = 128; // Number of k-points along the path
-    let n_bands = 16;
+    let qz = omega_0 / C;
+    let n_fock = 2;
+
+    let n_k_points = args.n_k_points;
+    let n_bands = args.n_bands;
+
+    let pn_coupling = args.pn_coupling;
+    let pn_omega = args.pn_omega;
+    let pn_k = arr1(&[0.0, args.pn_k_y]);
+    let pn_n_fock = args.pn_n_fock;
 
     let q_values: Vec<Vector3D> = qx_values
         .iter()
@@ -85,12 +95,6 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) -> Result<()> {
 
     // Create uniform coupling vector (same coupling for all modes)
     let lm_couplings = vec![coupling; q_values.len()];
-
-    // Define phonon parameters
-    let pn_coupling = 0.0;
-    let pn_omega = 0.0075; // 1500 cm^-1
-    let pn_k = arr1(&[0., 0.05]); // 1 nm^1
-    let pn_n_fock = 0;
 
     let pp_config = PPConfig::new(
         e_config,
@@ -152,14 +156,17 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) -> Result<()> {
                 timed_println!("Calculating {} eigenstates", n_eig);
                 timed_println!("Calculating color-coded band structure...");
                 (k_points_color, eigvals_list_color, photonic_character_list) =
-                    band_structure::calculate_color_band_structure_mpi(
+                    run_bandstructure_parallel_mode(
                         &mut pp,
+                        args.parallel,
                         n_k_points,
                         n_eig,
                         &sym_points,
                         &pp_config,
-                        false,
+                        args.use_cached,
                         zoomed,
+                        chunk_index,
+                        n_chunks,
                     )?;
                 timed_println!(
                     "Calculated Band Structure in {:?}",
@@ -182,7 +189,10 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) -> Result<()> {
             let mut save_path = format!("sing_ex_color_disp_plot_{}_n{}", total_coupling, n_modes);
             save_path += if zoomed { "_zoomed.pdf" } else { ".pdf" };
 
-            if !k_points_color.is_empty() {
+            if !k_points_color.is_empty()
+                && crate::utils::is_mpi_rank0_env()
+                && !matches!(args.parallel, BandParallelModeArg::DistributedChunks)
+            {
                 if let Err(e) = band_structure::plot_color_band_structure(
                     &k_points_color,
                     &sym_points,
@@ -222,14 +232,17 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) -> Result<()> {
                 timed_println!("Calculating {} eigenstates", n_eig);
                 timed_println!("Calculating color-coded band structure...");
                 (k_points_color, eigvals_list_color, photonic_character_list) =
-                    band_structure::calculate_color_band_structure_mpi(
+                    run_bandstructure_parallel_mode(
                         &mut pp,
+                        args.parallel,
                         n_k_points,
                         n_eig,
                         &sym_points,
                         &pp_config,
-                        false,
+                        args.use_cached,
                         zoomed,
+                        chunk_index,
+                        n_chunks,
                     )?;
                 timed_println!(
                     "Calculated Band Structure in {:?}",
@@ -252,7 +265,10 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) -> Result<()> {
             let mut save_path = format!("sing_ex_color_disp_plot_{}_n{}", total_coupling, n_modes);
             save_path += if zoomed { "_zoomed.pdf" } else { ".pdf" };
 
-            if !k_points_color.is_empty() {
+            if !k_points_color.is_empty()
+                && crate::utils::is_mpi_rank0_env()
+                && !matches!(args.parallel, BandParallelModeArg::DistributedChunks)
+            {
                 if let Err(e) = band_structure::plot_color_band_structure(
                     &k_points_color,
                     &sym_points,
@@ -292,14 +308,17 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) -> Result<()> {
                 timed_println!("Calculating {} eigenstates", n_eig);
                 timed_println!("Calculating color-coded band structure...");
                 (k_points_color, eigvals_list_color, photonic_character_list) =
-                    band_structure::calculate_color_band_structure_mpi(
+                    run_bandstructure_parallel_mode(
                         &mut pp,
+                        args.parallel,
                         n_k_points,
                         n_eig,
                         &sym_points,
                         &pp_config,
-                        false,
+                        args.use_cached,
                         zoomed,
+                        chunk_index,
+                        n_chunks,
                     )?;
                 timed_println!(
                     "Calculated Band Structure in {:?}",
@@ -322,7 +341,10 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) -> Result<()> {
             let mut save_path = format!("sing_ex_color_disp_plot_{}_n{}", total_coupling, n_modes);
             save_path += if zoomed { "_zoomed.pdf" } else { ".pdf" };
 
-            if !k_points_color.is_empty() {
+            if !k_points_color.is_empty()
+                && crate::utils::is_mpi_rank0_env()
+                && !matches!(args.parallel, BandParallelModeArg::DistributedChunks)
+            {
                 if let Err(e) = band_structure::plot_color_band_structure(
                     &k_points_color,
                     &sym_points,
@@ -341,6 +363,80 @@ fn run_bandstructure(method: Method, e_config: ExcitonConfig) -> Result<()> {
             }
 
             Ok(())
+        }
+    }
+}
+
+fn run_bandstructure_parallel_mode<M, B>(
+    pp: &mut PPHamiltonian<M, B>,
+    parallel: BandParallelModeArg,
+    n_k_points: usize,
+    n_eig: usize,
+    sym_points: &Vec<Vec<f64>>,
+    pp_config: &PPConfig,
+    use_cached: bool,
+    zoomed: bool,
+    chunk_index: usize,
+    n_chunks: usize,
+) -> Result<(Vec<Vec<f64>>, Vec<Array1<f64>>, Vec<Vec<f64>>)>
+where
+    M: MatrixOps + matrix_ops::Diagonalize,
+    M::Scalar: matrix_ops::Sqrt
+        + std::iter::Sum
+        + matrix_ops::ConvertFrom<f64>
+        + matrix_ops::ConvertFrom<c64>,
+    B: hamiltonians::Boson<M>,
+{
+    match parallel {
+        BandParallelModeArg::Serial => {
+            // Serial is equivalent to a single distributed chunk.
+            band_structure::calculate_color_band_structure_distributed_chunk(
+                pp,
+                n_k_points,
+                n_eig,
+                sym_points,
+                pp_config,
+                use_cached,
+                zoomed,
+                0,
+                1,
+            )
+        }
+
+        BandParallelModeArg::KpointMpiLegacy => {
+            band_structure::calculate_color_band_structure_mpi(
+                pp,
+                n_k_points,
+                n_eig,
+                sym_points,
+                pp_config,
+                use_cached,
+                zoomed,
+            )
+        }
+
+        BandParallelModeArg::DistributedChunks => {
+            band_structure::calculate_color_band_structure_distributed_chunk(
+                pp,
+                n_k_points,
+                n_eig,
+                sym_points,
+                pp_config,
+                use_cached,
+                zoomed,
+                chunk_index,
+                n_chunks,
+            )
+        }
+
+        BandParallelModeArg::GatherChunks => {
+            band_structure::gather_color_band_structure_chunks(
+                n_k_points,
+                n_eig,
+                pp_config,
+                zoomed,
+                n_chunks,
+            )
         }
     }
 }
@@ -567,133 +663,170 @@ fn generate_stacked_plots(
 
 /// Main function demonstrating the use of the light-matter coupling framework
 /// Calculate dielectric function for a range of coupling strengths
-fn run_dielectric_scan(e_config: ExcitonConfig) -> Result<()> {
+fn run_dielectric_scan(e_config: ExcitonConfig, args: cli::DielectricArgs) -> Result<()> {
     timed_println!("Starting dielectric function scan...");
 
-    // Check if we should calculate or just plot
-    let calculate = true; // Set to false to skip calculation and just plot
-    let use_cached = false; // Set to true to use cached diagonalization results (allows testing different gamma values)
+    let calculate = args.calculate;
+    let use_cached = args.use_cached;
+    let zoomed = args.zoomed;
 
-    let zoomed = false;
+    let n_rel = args.n_rel;
+    let n_ex_eig = args.n_ex_eig;
 
-    // Parameters for diagonalization
-    let n_rel = 16; // Number of relative coordinate states
-    let n_ex_eig = 16; // Number of exciton eigenstates
+    let omega_0 = args.omega_0;
+    let n_modes = args.n_modes;
 
-    let omega_0 = 0.18; // Photon frequency
-    let n_modes = 32;
+    let omega_max = args.omega_max;
+    let reflectivities = args.reflectivities.clone();
+    let d_omega = args.d_omega;
 
-    // Define photon modes based on effective modes paper
-    let omega_max = 0.2;
-    let reflectivities = [0.0, 0.999999, 0.9999999];
-    let d_omega = 1e-4;
+    let pn_coupling = args.pn_coupling;
+    let pn_omega = args.pn_omega;
+    let pn_k = arr1(&[args.pn_k_x, 0.0]);
+    let pn_n_fock = args.pn_n_fock;
 
-    // Generate effective modes and their couplings for each reflectivity
-    let mut all_q_values = Vec::new();
-    let mut all_mode_couplings = Vec::new();
-    let mut total_coupling_values = Vec::new();
-    for &reflectivity in reflectivities.iter() {
-        let (q_values, mode_couplings) =
-            effective_modes::generate_modes(d_omega, n_modes, omega_0, omega_max, reflectivity);
+    let n_eig = args.n_eig;
+    let omegas = Array1::linspace(
+        args.omega_min_scan,
+        args.omega_max_scan,
+        args.n_omega_points,
+    );
 
-        let total_coupling: f64 = mode_couplings.iter().sum();
-        timed_println!(
-            "Reflectivity {}: generated {} modes with total coupling {:.6}",
-            reflectivity,
-            q_values.len(),
-            total_coupling
-        );
-        all_q_values.push(q_values);
-        all_mode_couplings.push(mode_couplings);
-        total_coupling_values.push(total_coupling);
-    }
-    let total_coupling_values = Array1::from_vec(total_coupling_values);
+    let gamma = args.gamma.unwrap_or(d_omega);
 
-    // Validate that all reflectivities generate the same number of modes
-    let n_modes_first = all_q_values[0].len();
-    for (idx, q_vals) in all_q_values.iter().enumerate() {
-        if q_vals.len() != n_modes_first {
-            timed_println!(
-                "Warning: Reflectivity {} generated {} modes, but first generated {}. This may cause issues.",
-                reflectivities[idx],
-                q_vals.len(),
-                n_modes_first
-            );
+    let omega_range = match (args.plot_omega_min, args.plot_omega_max) {
+        (Some(min), Some(max)) => Some((min, max)),
+        _ => {
+            if !zoomed {
+                Some((0.182, 0.202))
+            } else {
+                Some((0.183, 0.188))
+            }
         }
-    }
+    };
 
-    // Define phonon parameters
-    // let pn_coupling = 0.01; // 114 cm^-1
-    // let pn_coupling = 0.004385964912; // 50 cm^-1
-    // let pn_coupling = 0.008771929825; // 100 cm^-1
-    let pn_coupling = 0.0;
-    let pn_omega = 0.0025; // 500 cm^-1
-    // let pn_coupling = 0.001; // 11.4 cm^-1
-    // let pn_coupling = 0.0005; // 11.4 cm^-1
-    let pn_k = arr1(&[0., 0.05]); // 1 nm^1
-    let pn_n_fock = 1;
-
-    // Parameters for dielectric function calculation
-    let n_eig = 1024; // Number of eigenstates to use
-    let omegas = Array1::linspace(0.0, 0.3, 100000); // Frequency range
-    // let gamma = 5e-5;  // Broadening parameter ~0.9 meV
-    let gamma = d_omega;
-
-    let omega_range;
-    if !zoomed {
-        omega_range = Some((0.182, 0.202));
-    } else {
-        // omega_range = Some((0.174,0.18));
-        omega_range = Some((0.183, 0.188));
-    }
-
-    // Create directory for saving results
-    let save_dir = "dielectric_scan/effective_modes/";
+    let save_dir = args.output_dir.as_str();
     std::fs::create_dir_all(save_dir).unwrap_or_else(|_| {
-        timed_println!(
+        timed_println_rank0!(
             "Directory {} already exists or couldn't be created",
             save_dir
         );
     });
 
-    // Create more descriptive filenames
-    let mut real_filename = format!(
-        "dielectric_real_a0{}_V0{}_nrel{}_nmodes{}_pncoup{}_npn{}",
-        e_config.a0, e_config.v0, n_rel, n_modes, pn_coupling, pn_n_fock
-    );
-    let mut imag_filename = format!(
-        "dielectric_imag_a0{}_V0{}_nrel{}_nmodes{}_pncoup{}_npn{}",
-        e_config.a0, e_config.v0, n_rel, n_modes, pn_coupling, pn_n_fock
-    );
-    let mut both_filename = format!(
-        "dielectric_both_a0{}_V0{}_nrel{}_nmodes{}_pncoup{}_npn{}",
-        e_config.a0, e_config.v0, n_rel, n_modes, pn_coupling, pn_n_fock
-    );
-    if !zoomed {
-        real_filename += ".svg";
-        imag_filename += ".svg";
-        both_filename += ".svg";
-    } else {
-        real_filename += "_zoomed.svg";
-        imag_filename += "_zoomed.svg";
-        both_filename += "_zoomed.svg";
+    timed_println_rank0!("Dielectric CLI configuration:");
+    timed_println_rank0!("  calculate       = {}", calculate);
+    timed_println_rank0!("  use_cached      = {}", use_cached);
+    timed_println_rank0!("  zoomed          = {}", zoomed);
+    timed_println_rank0!("  n_rel           = {}", n_rel);
+    timed_println_rank0!("  n_ex_eig        = {}", n_ex_eig);
+    timed_println_rank0!("  n_eig           = {}", n_eig);
+    timed_println_rank0!("  omega_0         = {}", omega_0);
+    timed_println_rank0!("  omega_max       = {}", omega_max);
+    timed_println_rank0!("  d_omega         = {}", d_omega);
+    timed_println_rank0!("  gamma           = {}", gamma);
+    timed_println_rank0!("  n_modes target  = {}", n_modes);
+    timed_println_rank0!("  reflectivities  = {:?}", reflectivities);
+    timed_println_rank0!("  pn_coupling     = {}", pn_coupling);
+    timed_println_rank0!("  pn_omega        = {}", pn_omega);
+    timed_println_rank0!("  pn_k            = {:?}", pn_k);
+    timed_println_rank0!("  pn_n_fock       = {}", pn_n_fock);
+    timed_println_rank0!("  omega scan      = [{}, {}], n={}", args.omega_min_scan, args.omega_max_scan, args.n_omega_points);
+    timed_println_rank0!("  output_dir      = {}", save_dir);
+
+    // Generate effective modes and couplings for each reflectivity.
+    let mut all_q_values = Vec::new();
+    let mut all_mode_couplings = Vec::new();
+    let mut total_coupling_values = Vec::new();
+
+    for &reflectivity in reflectivities.iter() {
+        let (q_values, mode_couplings) =
+            effective_modes::generate_modes(d_omega, n_modes, omega_0, omega_max, reflectivity);
+
+        let total_coupling: f64 = mode_couplings.iter().sum();
+
+        timed_println_rank0!(
+            "Reflectivity {}: generated {} modes with total coupling {:.6}",
+            reflectivity,
+            q_values.len(),
+            total_coupling
+        );
+
+        all_q_values.push(q_values);
+        all_mode_couplings.push(mode_couplings);
+        total_coupling_values.push(total_coupling);
     }
+
+    let total_coupling_values = Array1::from_vec(total_coupling_values);
+
+    // Validate mode counts.
+    if let Some(first) = all_q_values.first() {
+        let n_modes_first = first.len();
+
+        for (idx, q_vals) in all_q_values.iter().enumerate() {
+            if q_vals.len() != n_modes_first {
+                timed_println_rank0!(
+                    "Warning: Reflectivity {} generated {} modes, but first generated {}.",
+                    reflectivities[idx],
+                    q_vals.len(),
+                    n_modes_first
+                );
+            }
+        }
+    }
+
+    // Output plot filenames.
+    let suffix = if zoomed { "_zoomed.svg" } else { ".svg" };
+
+    let real_filename = format!(
+        "{}/dielectric_real_a0{}_V0{}_nrel{}_nmodes{}_pncoup{}_npn{}{}",
+        save_dir,
+        e_config.a0,
+        e_config.v0,
+        n_rel,
+        n_modes,
+        pn_coupling,
+        pn_n_fock,
+        suffix,
+    );
+
+    let imag_filename = format!(
+        "{}/dielectric_imag_a0{}_V0{}_nrel{}_nmodes{}_pncoup{}_npn{}{}",
+        save_dir,
+        e_config.a0,
+        e_config.v0,
+        n_rel,
+        n_modes,
+        pn_coupling,
+        pn_n_fock,
+        suffix,
+    );
+
+    let both_filename = format!(
+        "{}/dielectric_both_a0{}_V0{}_nrel{}_nmodes{}_pncoup{}_npn{}{}",
+        save_dir,
+        e_config.a0,
+        e_config.v0,
+        n_rel,
+        n_modes,
+        pn_coupling,
+        pn_n_fock,
+        suffix,
+    );
 
     if !calculate {
         if !crate::utils::is_mpi_rank0_env() {
             return Ok(());
         }
 
-        // Just plot the existing data
         timed_println!("Plotting dielectric function from existing data...");
+
         let q_values = &all_q_values[0];
 
-        // Create reference parameters to match against
         let ref_params = visualization::DielectricParams {
             a0: e_config.a0,
             v0: e_config.v0,
             n_rel,
-            lm_coupling: 0.0, // This will be matched separately using total_coupling_values
+            lm_coupling: 0.0,
             n_modes: q_values.len(),
             pn_coupling,
             pn_n_fock,
@@ -709,7 +842,7 @@ fn run_dielectric_scan(e_config: ExcitonConfig) -> Result<()> {
             &total_coupling_values,
             Some(&ref_params),
             zoomed,
-            Some(&q_values),
+            Some(q_values),
         ) {
             Ok(_) => timed_println!("Successfully plotted real part of dielectric function"),
             Err(e) => timed_println!("Error plotting dielectric function: {}", e),
@@ -737,7 +870,7 @@ fn run_dielectric_scan(e_config: ExcitonConfig) -> Result<()> {
             &total_coupling_values,
             Some(&ref_params),
             zoomed,
-            Some(&q_values),
+            Some(q_values),
         ) {
             Ok(_) => timed_println!("Successfully plotted both parts of dielectric function"),
             Err(e) => timed_println!("Error plotting dielectric function: {}", e),
@@ -770,22 +903,16 @@ fn run_dielectric_scan(e_config: ExcitonConfig) -> Result<()> {
     }
 
     timed_println_rank0!(
-        "Starting dielectric function scan for {} total coupling values",
-        total_coupling_values.len()
+        "Starting dielectric function scan for {} reflectivity values",
+        reflectivities.len()
     );
 
-    // Select exactly one reflectivity case for this process group.
-    //
-    // Important:
-    // PETSc/SLEPc eigensolvers are collective over PETSC_COMM_WORLD. Therefore,
-    // all MPI ranks in this job must build and diagonalize the same Hamiltonian.
-    // Do not distribute reflectivities over MPI ranks inside one PETSc
-    // communicator. Use a Slurm job array or separate job submission instead.
-    let refl_idx: usize = env::var("REFLECTIVITY_INDEX")
-        .or_else(|_| env::var("SLURM_ARRAY_TASK_ID"))
-        .unwrap_or_else(|_| "0".to_string())
-        .parse()
-        .expect("REFLECTIVITY_INDEX/SLURM_ARRAY_TASK_ID must parse as usize");
+    // Select exactly one reflectivity for this process group.
+    // PETSc/SLEPc solves are collective over COMM_WORLD, so use job arrays for scan parallelism.
+    let refl_idx: usize = args
+        .reflectivity_index
+        .or_else(|| crate::utils::env_usize(&["REFLECTIVITY_INDEX", "SLURM_ARRAY_TASK_ID"]))
+        .unwrap_or(0);
 
     if refl_idx >= reflectivities.len() {
         panic!(
@@ -828,7 +955,7 @@ fn run_dielectric_scan(e_config: ExcitonConfig) -> Result<()> {
         reflectivity,
     );
 
-    timed_println!("Using ComposedOperator + distributed SLEPc shell backend");
+    timed_println_rank0!("Using ComposedOperator + distributed SLEPc shell backend");
 
     let mut pp: PPHamiltonian<ComposedOperator<c64>, SingExBosons<ComposedOperator<c64>>> =
         PPHamiltonian::from_config(&pp_config);
@@ -844,11 +971,16 @@ fn run_dielectric_scan(e_config: ExcitonConfig) -> Result<()> {
     )?;
 
     let filename = dielectric_function::get_dielectric_function_filename(
-        &pp, &pp_config, save_dir, n_eig, gamma,
+        &pp,
+        &pp_config,
+        save_dir,
+        n_eig,
+        gamma,
     );
 
     if crate::utils::is_mpi_rank0_env() {
         timed_println!("Saving dielectric function data to {}", filename);
+
         let mut file = File::create(&filename).unwrap();
 
         writeln!(file, "# omega Re[eps] Im[eps]").unwrap();
@@ -863,7 +995,7 @@ fn run_dielectric_scan(e_config: ExcitonConfig) -> Result<()> {
         }
     }
 
-    timed_println!(
+    timed_println_rank0!(
         "Completed reflectivity index {} in {:?}",
         refl_idx,
         start_time.elapsed()
@@ -872,55 +1004,159 @@ fn run_dielectric_scan(e_config: ExcitonConfig) -> Result<()> {
     Ok(())
 }
 
-fn main() -> Result<()> {
-    // Get the number of available cores
-    let num_threads = std::env::var("OMP_NUM_THREADS")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(1);
-    // let num_threads = 16;
+fn run_matrix_elem_calc_cli(args: cli::MatrixElemCalcArgs) -> Result<()> {
+    // This command is intended as a shared-cache CPU precompute.
+    // Avoid many MPI ranks writing the same cache files.
+    if !crate::utils::is_mpi_rank0_env() {
+        return Ok(());
+    }
 
-    // Configure Rayon thread pool
+    let mut e_config = args.exciton.to_config();
+
+    // Make the exciton save_dir consistent with the CLI.
+    e_config.save_dir = args.exciton.save_dir.clone();
+
+    let refl_idx = args
+        .reflectivity_index
+        .or_else(|| crate::utils::env_usize(&["REFLECTIVITY_INDEX", "SLURM_ARRAY_TASK_ID"]))
+        .unwrap_or(0);
+
+    if refl_idx >= args.reflectivities.len() {
+        panic!(
+            "reflectivity_index {} out of range 0..{}",
+            refl_idx,
+            args.reflectivities.len()
+        );
+    }
+
+    let reflectivity = args.reflectivities[refl_idx];
+
+    timed_println!("Starting standalone LM matrix-element precompute");
+    timed_println!("  n_rel             = {}", args.n_rel);
+    timed_println!("  n_ex_eig          = {}", args.n_ex_eig);
+    timed_println!("  omega_0           = {}", args.omega_0);
+    timed_println!("  omega_max         = {}", args.omega_max);
+    timed_println!("  d_omega           = {}", args.d_omega);
+    timed_println!("  n_modes side      = {}", args.n_modes);
+    timed_println!("  target modes      = {}", args.n_modes * args.n_modes);
+    timed_println!("  reflectivity idx  = {}", refl_idx);
+    timed_println!("  reflectivity      = {}", reflectivity);
+    timed_println!("  cache_dir         = {}", args.cache_dir);
+    timed_println!("  force_recompute   = {}", args.force_recompute);
+
+    std::fs::create_dir_all(&args.cache_dir).unwrap_or_else(|e| {
+        panic!("Failed to create cache directory {}: {}", args.cache_dir, e);
+    });
+
+    let (q_values, mode_couplings) = effective_modes::generate_modes(
+        args.d_omega,
+        args.n_modes,
+        args.omega_0,
+        args.omega_max,
+        reflectivity,
+    );
+
+    let total_coupling: f64 = mode_couplings.iter().sum();
+
+    timed_println!(
+        "Generated {} effective photon modes with total coupling {:.8}",
+        q_values.len(),
+        total_coupling
+    );
+
+    let pn_k = arr1(&[args.pn_k_x, 0.0]);
+
+    let mut pp_config = PPConfig::new_with_effective_modes(
+        e_config,
+        args.n_rel,
+        args.n_ex_eig,
+        mode_couplings,
+        args.omega_0,
+        q_values,
+        args.pn_coupling,
+        args.pn_omega,
+        pn_k,
+        args.pn_n_fock,
+        1,
+        1,
+        args.d_omega,
+        args.omega_max,
+        reflectivity,
+    );
+
+    pp_config.cache_dir = Some(args.cache_dir.clone());
+
+    timed_println!(
+        "PPConfig hash for matrix-element cache: {:016x}",
+        pp_config.get_config_hash()
+    );
+
+    // Use the sparse backend for the precompute command.
+    // This is a CPU/Rayon precompute and should usually be run as one process
+    // with many Rayon threads, not as an MPI/SLEPc job.
+    let mut pp: PPHamiltonian<CsMat<c64>, SingExBosons<CsMat<c64>>> =
+        PPHamiltonian::from_config(&pp_config);
+
+    pp.polariton
+        .compute_lm_matrix_elements_only(None, args.force_recompute)?;
+
+    timed_println!("Standalone LM matrix-element precompute finished");
+
+    Ok(())
+}
+
+
+fn method_from_arg(method: MethodArg) -> Method {
+    match method {
+        MethodArg::Sparse => Method::Sparse,
+        MethodArg::Dense => Method::Dense,
+        MethodArg::Linop => Method::LinOp,
+    }
+}
+
+fn run_bandstructure_cli(args: cli::BandstructureArgs) -> Result<()> {
+    let e_config = args.exciton.to_config();
+    let method = method_from_arg(args.method);
+
+    let chunk_index = args
+        .k_chunk_index
+        .or_else(|| crate::utils::env_usize(&["K_CHUNK_INDEX", "SLURM_ARRAY_TASK_ID"]))
+        .unwrap_or(0);
+
+    let n_chunks = args
+        .k_n_chunks
+        .or_else(|| crate::utils::env_usize(&["K_N_CHUNKS", "SLURM_ARRAY_TASK_COUNT"]))
+        .unwrap_or(1);
+
+    run_bandstructure_with_args(method, e_config, args, chunk_index, n_chunks)
+}
+
+fn run_dielectric_cli(args: cli::DielectricArgs) -> Result<()> {
+    let e_config = args.exciton.to_config();
+    run_dielectric_scan(e_config, args)
+}
+
+fn main() -> Result<()> {
+    let cli = Cli::parse();
+
+    let num_threads = cli
+        .rayon_threads
+        .or_else(|| {
+            std::env::var("OMP_NUM_THREADS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+        })
+        .unwrap_or(1);
+
     rayon::ThreadPoolBuilder::new()
         .num_threads(num_threads)
         .build_global()
         .unwrap();
 
-    // Create exciton configuration
-    let e_config = ExcitonConfig {
-        n_kappa: 7,                               // Number of bands
-        a0: 16.0,                                 // Lattice constant
-        v0: 0.05,                                 // Potential strength
-        k: vec![0.0, 0.0],                        // Initial k-vector
-        m_e: 0.2,                                 // Electron effective mass
-        m_h: 0.2,                                 // Hole effective mass
-        verbose: false,                           // Verbose output flag
-        grid_size: 64,                            // Grid size for real-space calculations
-        box_size: 3.0,                            // Real-space box size
-        save_dir: PathBuf::from("saved_data_lm"), // Directory to save data
-        recalculate: false,                       // Whether to recalculate existing data
-        n_jobs: 32,                               // Number of parallel jobs
-        use_gpu: false,                           // Whether to use GPU acceleration
-        batch_size: 32,                           // Batch size for calculations
-    };
-    // davidson::davidson_test();
-
-    // Choose which function to run
-    let run_mode = "dielectric_scan"; // Options: "bandstructure", "dielectric_scan"
-
-    match run_mode {
-        "bandstructure" => {
-            // run_bandstructure(Method::LinOp, e_config.clone());
-            // run_bandstructure(Method::SingExLegacy, e_config.clone());
-            run_bandstructure(Method::Sparse, e_config.clone())?;
-            // run_bandstructure(Method::Dense, e_config.clone());
-        }
-        "dielectric_scan" => {
-            run_dielectric_scan(e_config.clone())?;
-        }
-        _ => {
-            timed_println!("Unknown run mode: {}", run_mode);
-        }
+    match cli.command {
+        Command::Bandstructure(args) => run_bandstructure_cli(args)?,
+        Command::Dielectric(args) => run_dielectric_cli(args)?,
+        Command::MatrixElemCalc(args) => run_matrix_elem_calc_cli(args)?,
     }
 
     Ok(())
