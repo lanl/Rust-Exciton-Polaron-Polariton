@@ -123,8 +123,5 @@ pub fn from_dielectric_args(args: &DielectricArgs, reflectivity: f64) -> PhotonM
 }
 
 pub fn square_lattice_symmetry_points(a0: f64) -> (Vec<Vec<f64>>, Vec<String>) {
-    (
-        vec![vec![0.0, 0.0], vec![PI / a0, 0.0], vec![PI / a0, PI / a0]],
-        vec!["Γ".to_string(), "X".to_string(), "M".to_string()],
-    )
+    sim_common::kpath::square_lattice_symmetry_points(a0)
 }

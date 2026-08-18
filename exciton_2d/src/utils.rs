@@ -46,20 +46,10 @@ pub fn print_memory_usage(message: &str) {
 
 /// Applies one of the eight square-lattice point-group symmetry operations.
 pub fn apply_symmetry(k_point: &[f64], symmetry_op: usize) -> Vec<f64> {
-    let kx = k_point[0];
-    let ky = k_point[1];
-
-    match symmetry_op {
-        0 => vec![kx, ky],
-        1 => vec![-ky, kx],
-        2 => vec![-kx, -ky],
-        3 => vec![ky, -kx],
-        4 => vec![kx, -ky],
-        5 => vec![-kx, ky],
-        6 => vec![ky, kx],
-        7 => vec![-ky, -kx],
-        _ => panic!("Invalid symmetry operation: {}", symmetry_op),
-    }
+    sim_common::kpath::apply_square_symmetry(
+        k_point,
+        sim_common::kpath::SquareSymmetry::from_index(symmetry_op),
+    )
 }
 
 /// Calculates a matrix element efficiently.

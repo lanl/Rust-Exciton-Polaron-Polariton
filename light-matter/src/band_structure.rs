@@ -4,7 +4,6 @@ use matrix_ops::{
 use ndarray::{Array1, Array2, s};
 use ndarray_linalg::c64;
 use std::f64::EPSILON;
-use std::f64::consts::PI;
 use std::fs::File;
 use std::io::Write;
 use std::iter::Sum;
@@ -104,53 +103,7 @@ pub fn generate_band_k_points(
     a0: f64,
     zoomed: bool,
 ) -> Vec<Vec<f64>> {
-    if n_k_points == 0 {
-        return Vec::new();
-    }
-
-    if n_k_points == 1 {
-        return vec![vec![0.0, 0.0]];
-    }
-
-    if zoomed {
-        let start = vec![0.0, 0.0];
-        let end = vec![PI / a0 / 6.0, 0.0];
-
-        return (0..n_k_points)
-            .map(|k_ind| {
-                let t_frac = k_ind as f64 / (n_k_points - 1) as f64;
-                vec![
-                    start[0] + t_frac * (end[0] - start[0]),
-                    start[1] + t_frac * (end[1] - start[1]),
-                ]
-            })
-            .collect();
-    }
-
-    let n_sym = sym_points.len();
-    assert!(n_sym > 0, "sym_points must not be empty");
-
-    let points_per_seg = (n_k_points / n_sym).max(2);
-
-    let mut k_points: Vec<Vec<f64>> = sym_points
-        .iter()
-        .enumerate()
-        .flat_map(|(sym_ind, sym_point)| {
-            let sym_ind2 = (sym_ind + 1) % sym_points.len();
-
-            (0..points_per_seg).map(move |t| {
-                let t_frac = t as f64 / (points_per_seg - 1) as f64;
-
-                vec![
-                    sym_point[0] + t_frac * (sym_points[sym_ind2][0] - sym_point[0]),
-                    sym_point[1] + t_frac * (sym_points[sym_ind2][1] - sym_point[1]),
-                ]
-            })
-        })
-        .collect();
-
-    k_points.truncate(n_k_points);
-    k_points
+    sim_common::kpath::generic_closed_path(n_k_points, sym_points, a0, zoomed)
 }
 
 pub fn color_band_filename(
