@@ -14,11 +14,17 @@
 //!    showing contributions from each phonon Fock state (0, 1, 2, ..., n_fock).
 
 use crate::plot_photon_freqs;
+use crate::timed_println;
 use crate::utils::Vector3D;
 use ndarray::Array1;
 use ndarray_linalg::c64;
 use plotters::prelude::*;
 use std::f64::consts::PI;
+use crate::hamiltonians::{PPHamiltonian, SingExBosons};
+use exciton_2d::ExcitonConfig;
+use matrix_ops::ComposedOperator;
+use crate::utils::PPConfig;
+use crate::dielectric_function;
 
 /// Compute the weighted‑average colour fields for the dielectric function.
 ///
@@ -70,138 +76,6 @@ pub fn compute_weight_fields(
 
     (photonic_curve, phonon_curve)
 }
-
-// /// Plot the real part of the dielectric function with colour representing a
-// /// weight field (e.g., photonic character or phonon number).
-// ///
-// /// The plot is saved as an SVG at `save_path`.
-// /// Plot the dielectric function with colour representing a weight field.
-// ///
-// /// This function mirrors the signature of `visualization::plot_dielectric_function`
-// /// (directory handling, multiple coupling files, zoom, optional q‑values, etc.)
-// /// but adds a `weight` array that is used to colour each line segment.
-// /// The `weight` array must have the same length as the frequency grid (`omegas`).
-// pub fn plot_dielectric_with_color(
-//     dir_path: &str,                // Directory containing dielectric function data files
-//     save_path: Option<&str>,       // Path to save the plot
-//     plot_type: DielectricPlotType, // Which part of the dielectric function to plot
-//     omega_range: Option<(f64, f64)>, // Optional frequency range to plot
-//     coupling_values: &Array1<f64>,
-//     reference_params: Option<&DielectricParams>, // Optional reference parameters to match against
-//     zoomed: bool,
-//     q_values: Option<&Vec<Vector3D>>,
-//     weight: &Array1<f64>, // Weight field used for colour mapping (e.g., photonic character)
-// ) -> Result<(), Box<dyn std::error::Error>> {
-//     // The implementation mirrors `visualization::plot_dielectric_function` but
-//     // uses the provided `weight` array to colour each segment.
-
-//     // Load matching dielectric files (same logic as in plot_dielectric_function)
-//     let verbose = false;
-//     let dark_mode = false;
-//     let mut background = &WHITE;
-//     let mut text_color = &BLACK;
-//     if dark_mode { background = &BLACK; text_color = &WHITE; }
-
-//     // Collect files (reuse the same filtering logic as plot_dielectric_function)
-//     let dir = std::path::Path::new(dir_path);
-//     let mut files_with_params = std::fs::read_dir(dir)?
-//         .filter_map(|entry| {
-//             let entry = entry.ok()?;
-//             let path = entry.path();
-//             if path.is_file() && path.extension()?.to_str()? == "dat" {
-//                 if let Some(params) = extract_params_from_filename(&path) {
-//                     let coupling_match = coupling_values.iter().any(|&c| (c - params.lm_coupling).abs() < 1e-10);
-//                     let params_match = if let Some(ref_params) = reference_params {
-//                         (params.a0 - ref_params.a0).abs() < 1e-10 &&
-//                         (params.v0 - ref_params.v0).abs() < 1e-10 &&
-//                         params.n_rel == ref_params.n_rel &&
-//                         params.n_modes == ref_params.n_modes &&
-//                         (params.pn_coupling - ref_params.pn_coupling).abs() < 1e-10 &&
-//                         params.pn_n_fock == ref_params.pn_n_fock &&
-//                         params.n_eig == ref_params.n_eig &&
-//                         (params.gamma - ref_params.gamma).abs() < 1e-10
-//                     } else { true };
-//                     if coupling_match && params_match {
-//                         return Some((path, params));
-//                     }
-//                 }
-//             }
-//             None
-//         })
-//         .collect::<Vec<_>>();
-
-//     if files_with_params.is_empty() {
-//         return Err("No matching dielectric function data files found".into());
-//     }
-
-//     // Load the first matching file (for simplicity – weight is assumed to correspond to it)
-//     let (file_path, params) = &files_with_params[0];
-//     let (omegas_vec, re_eps, im_eps) = load_dielectric_data(file_path)?;
-//     let omegas = Array1::from_vec(omegas_vec.clone());
-//     let dielectric = match plot_type {
-//         DielectricPlotType::Real => Array1::from_vec(re_eps.clone()),
-//         DielectricPlotType::Imaginary => Array1::from_vec(im_eps.clone()),
-//         DielectricPlotType::Both => Array1::from_vec(re_eps.clone()), // only real part for colour plot
-//     };
-
-//     // Determine colour scaling from the supplied weight array
-//     let min_w = weight.iter().cloned().fold(f64::INFINITY, f64::min);
-//     let max_w = weight.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-//     let range = max_w - min_w;
-
-//     // Plot dimensions similar to plot_dielectric_function
-//     let resolution = if zoomed {(1600, 1000)} else {(1600*2, 1000*2)};
-//     let save_path = save_path.unwrap_or("dielectric_weighted.svg");
-//     let root = SVGBackend::new(save_path, resolution).into_drawing_area();
-//     root.fill(background)?;
-
-//     let x_min = omegas[0];
-//     let x_max = omegas[omegas.len() - 1];
-//     let y_min = dielectric.iter().cloned().fold(f64::INFINITY, f64::min);
-//     let y_max = dielectric.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
-
-//     let mut chart = ChartBuilder::on(&root)
-//         .caption(format!("{} (weight coloured)", match plot_type {
-//             DielectricPlotType::Real => "Real Part",
-//             DielectricPlotType::Imaginary => "Imaginary Part",
-//             DielectricPlotType::Both => "Dielectric Function",
-//         }), ("sans-serif", 24))
-//         .margin(15)
-//         .x_label_area_size(40)
-//         .y_label_area_size(50)
-//         .build_cartesian_2d(x_min..x_max, y_min..y_max)?;
-
-//     chart.configure_mesh().draw()?;
-
-//     // Draw stacked area segments based on weight. Each segment is rendered as an
-//     // AreaSeries that fills the region between the curve segment and the
-//     // baseline (y = 0). The colour of each segment is determined by the weight
-//     // value, producing a stacked‑area visualisation.
-//     for i in 0..(omegas.len() - 1) {
-//         let x0 = omegas[i];
-//         let x1 = omegas[i + 1];
-//         let y0 = dielectric[i];
-//         let y1 = dielectric[i + 1];
-//         let w = (weight[i] + weight[i + 1]) / 2.0;
-//         let ratio = if range.abs() < 1e-12 { 0.5 } else { (w - min_w) / range };
-//         let r = (ratio * 255.0) as u8;
-//         let b = ((1.0 - ratio) * 255.0) as u8;
-//         let colour = RGBColor(r, 0, b);
-//         // AreaSeries expects an iterator of (x, y) points and a baseline value.
-//         // We use a baseline of 0.0 to fill down to the x‑axis.
-//         chart.draw_series(AreaSeries::new(vec![(x0, y0), (x1, y1)], 0.0, &colour))?;
-//     }
-
-//     // Draw photon frequencies if provided (reuse macro from visualization.rs)
-//     if let Some(qs) = q_values {
-//         // Re‑use the macro by creating a temporary chart reference
-//         // Note: the macro expects a mutable chart reference; we can call it directly.
-//         plot_photon_freqs!(chart, y_min, y_max, qs);
-//     }
-
-//     root.present()?;
-//     Ok(())
-// }
 
 /// Plot the imaginary part of the dielectric function as a two-layer stacked area
 /// showing photonic (red) vs non-photonic (blue) contributions.
@@ -590,4 +464,224 @@ pub fn plot_dielectric_stacked_phonon(
 
     root.present()?;
     Ok(())
+}
+
+/// Helper function to generate stacked area plots for photonic and phonon contributions
+pub fn generate_stacked_plots(
+    coupling_values: &Array1<f64>,
+    all_mode_couplings: &Vec<Vec<f64>>,
+    all_q_values: &Vec<Vec<Vector3D>>,
+    reflectivities: &[f64],
+    e_config: &ExcitonConfig,
+    n_rel: usize,
+    n_ex_eig: usize,
+    omega_0: f64,
+    d_omega: f64,
+    omega_max: f64,
+    pn_coupling: f64,
+    pn_omega: f64,
+    pn_k: &Array1<f64>,
+    pn_n_fock: usize,
+    n_eig: usize,
+    omegas: &Array1<f64>,
+    gamma: f64,
+    save_dir: &str,
+    zoomed: bool,
+    omega_range: Option<(f64, f64)>,
+) {
+    if !crate::utils::is_mpi_rank0_env() {
+        return;
+    }
+
+    timed_println!("Generating stacked photonic character plots...");
+
+    // Load zero-coupling dielectric function for overlay (use first q_values set)
+    let zero_coupling_imag = {
+        let zero_couplings = vec![0.0; all_q_values[0].len()];
+        let pp_config_zero = PPConfig::new_with_effective_modes(
+            e_config.clone(),
+            n_rel,
+            n_ex_eig,
+            zero_couplings,
+            omega_0,
+            all_q_values[0].clone(),
+            pn_coupling,
+            pn_omega,
+            pn_k.clone(),
+            pn_n_fock,
+            1,
+            1,
+            d_omega,
+            omega_max,
+            reflectivities[0],
+        );
+
+        let pp_zero: PPHamiltonian<ComposedOperator<c64>, SingExBosons<ComposedOperator<c64>>> =
+            PPHamiltonian::from_config(&pp_config_zero);
+
+        let cache_filename_zero = dielectric_function::get_dielectric_cache_filename(
+            &pp_zero,
+            &pp_config_zero,
+            save_dir,
+            n_eig,
+        );
+
+        match dielectric_function::load_dielectric_cache(&cache_filename_zero) {
+            Ok((pp_vals_zero, x_pp_zero, _, _, gs_idx_zero)) => {
+                // Compute Im[ε] for zero coupling
+                let ground_state_energy = pp_vals_zero[gs_idx_zero];
+                let mut im_eps_zero = Array1::<f64>::zeros(omegas.len());
+
+                for (w_idx, &omega) in omegas.iter().enumerate() {
+                    let mut eps_contrib = c64::new(0.0, 0.0);
+
+                    for i in 0..pp_vals_zero.len() {
+                        if i == gs_idx_zero {
+                            continue;
+                        }
+                        let delta_e = pp_vals_zero[i] - ground_state_energy;
+                        let contrib =
+                            x_pp_zero[i] * x_pp_zero[i] / (omega - delta_e + c64::i() * gamma);
+                        eps_contrib += contrib;
+                    }
+
+                    im_eps_zero[w_idx] = (1.0 - 4.0 * PI * eps_contrib).im.abs();
+                }
+
+                Some(im_eps_zero)
+            }
+            Err(e) => {
+                timed_println!(
+                    "Warning: Could not load zero-coupling cache for overlay: {}",
+                    e
+                );
+                None
+            }
+        }
+    };
+
+    for (idx, &total_coupling) in coupling_values.iter().enumerate() {
+        if total_coupling.abs() < 1e-12 {
+            continue; // Skip zero coupling
+        }
+
+        // Use the actual mode couplings that were used during computation
+        let mode_couplings = &all_mode_couplings[idx];
+        let q_values = &all_q_values[idx];
+        let reflectivity = reflectivities[idx];
+
+        // Create PP config for this coupling with effective mode parameters
+        let pp_config_plot = PPConfig::new_with_effective_modes(
+            e_config.clone(),
+            n_rel,
+            n_ex_eig,
+            mode_couplings.clone(),
+            omega_0,
+            q_values.clone(),
+            pn_coupling,
+            pn_omega,
+            pn_k.clone(),
+            pn_n_fock,
+            1,
+            1,
+            d_omega,
+            omega_max,
+            reflectivity,
+        );
+
+        let pp_plot: PPHamiltonian<ComposedOperator<c64>, SingExBosons<ComposedOperator<c64>>> =
+            PPHamiltonian::from_config(&pp_config_plot);
+
+        // Load cached eigenstate data
+        let cache_filename = dielectric_function::get_dielectric_cache_filename(
+            &pp_plot,
+            &pp_config_plot,
+            save_dir,
+            n_eig,
+        );
+
+        match dielectric_function::load_dielectric_cache(&cache_filename) {
+            Ok((pp_vals, x_pp, photonic_chars, phonon_numbers, gs_idx)) => {
+                let n_photon_modes = q_values.len();
+
+                // Plot photonic character stacked area
+                let photonic_plot_name = format!(
+                    "{}/dielectric_photonic_stacked_a0{}_V0{}_nrel{}_lmcoup{:.6}_nmodes{}_pncoup{}_npn{}_neig{}_gamma{:.1e}.svg",
+                    save_dir,
+                    e_config.a0,
+                    e_config.v0,
+                    n_rel,
+                    total_coupling,
+                    n_photon_modes,
+                    pn_coupling,
+                    pn_n_fock,
+                    n_eig,
+                    gamma
+                );
+
+                match plot_dielectric_stacked_photonic(
+                    omegas,
+                    &pp_vals,
+                    &x_pp,
+                    &photonic_chars,
+                    gs_idx,
+                    gamma,
+                    &photonic_plot_name,
+                    zoomed,
+                    omega_range,
+                    Some(q_values),
+                    zero_coupling_imag.as_ref(),
+                ) {
+                    Ok(_) => timed_println!(
+                        "Successfully plotted photonic stacked area for coupling {:.6}",
+                        total_coupling
+                    ),
+                    Err(e) => timed_println!("Error plotting photonic stacked area: {}", e),
+                }
+
+                // Plot phonon Fock state stacked area
+                if pn_n_fock > 0 {
+                    let phonon_plot_name = format!(
+                        "{}/dielectric_phonon_stacked_a0{}_V0{}_nrel{}_lmcoup{:.6}_nmodes{}_pncoup{}_npn{}_neig{}_gamma{:.1e}.svg",
+                        save_dir,
+                        e_config.a0,
+                        e_config.v0,
+                        n_rel,
+                        total_coupling,
+                        n_photon_modes,
+                        pn_coupling,
+                        pn_n_fock,
+                        n_eig,
+                        gamma
+                    );
+
+                    match plot_dielectric_stacked_phonon(
+                        omegas,
+                        &pp_vals,
+                        &x_pp,
+                        &phonon_numbers,
+                        gs_idx,
+                        pn_n_fock,
+                        gamma,
+                        &phonon_plot_name,
+                        zoomed,
+                        omega_range,
+                        Some(q_values),
+                        zero_coupling_imag.as_ref(),
+                    ) {
+                        Ok(_) => timed_println!(
+                            "Successfully plotted phonon stacked area for coupling {:.6}",
+                            total_coupling
+                        ),
+                        Err(e) => timed_println!("Error plotting phonon stacked area: {}", e),
+                    }
+                }
+            }
+            Err(e) => timed_println!(
+                "Could not load cached data for coupling {:.6}: {}",
+                total_coupling,
+                e
+            ),
+        }
+    }
 }

@@ -12,14 +12,16 @@ set -euo pipefail
 
 source "${HOME}/env/matrix_ops_petsc_mpi.sh"
 
+TARGET_DIR="/vast/home/mike_tay/two_e_polaron-polariton/rust_sub/target"
+
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 export RAYON_NUM_THREADS=1
 
-cargo build --release
+# cargo build --release
 
-./target/release/light-matter \
+"${TARGET_DIR}/release/light-matter" \
     bandstructure \
     --method sparse \
     --parallel gather-chunks \
@@ -35,4 +37,3 @@ cargo build --release
     --q-max 0.001 \
     --pn-coupling 0.0 \
     --pn-n-fock 0 \
-    --zoomed true

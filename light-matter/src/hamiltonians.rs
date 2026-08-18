@@ -440,6 +440,22 @@ where
 
             let time_mat = Instant::now();
             let all_q_ind = self.photon.get_all_q_ind();
+            let (relative_hash, exciton_hash) = self.matrix_element_cache_hashes();
+
+            timed_println_rank0!(
+                "Matrix-element cache hashes: relative={:016x}, exciton_basis={:016x}, k={:?}, qk={:?}, k_quantum={}",
+                relative_hash,
+                exciton_hash,
+                self.exciton.exciton_ham.k,
+                self.exciton
+                    .exciton_ham
+                    .k
+                    .iter()
+                    .map(|&x| crate::utils::quantize_f64_for_hash(x))
+                    .collect::<Vec<_>>(),
+                crate::utils::K_HASH_QUANTUM,
+            );
+
             self.matrix_elements.populate_tay_mat_elements_with_cache(
                 &all_q_ind,
                 self.exciton.e_vecs.as_ref().unwrap(),
@@ -448,8 +464,10 @@ where
                 self.exciton.exciton_ham.rel_ham.mu,
                 self.cache_dir.as_deref(),
                 false,
-                self.config_hash,
+                relative_hash,
+                exciton_hash,
             );
+
             timed_println_rank0!("    Matrix elements calculation: {:?}", time_mat.elapsed());
 
             let time_p = Instant::now();
@@ -464,6 +482,38 @@ where
         }
 
         Ok(())
+    }
+
+    fn matrix_element_cache_hashes(&self) -> (u64, u64) {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        // Relative-basis Taylor matrix elements depend on photon modes, n_rel,
+        // and mu, but not on the exciton eigenvectors or current K.
+        //
+        // Keep this K-independent so the expensive relative-basis cache can be
+        // reused across all bandstructure K points.
+        let relative_hash = self.config_hash;
+
+        // Exciton-basis matrix elements depend on the exciton eigenvectors.
+        // The exciton eigenvectors depend on the current center-of-mass K point,
+        // so the final exciton-basis cache must include K.
+        //
+        // Important: hash quantized K values rather than raw f64 bits. This prevents
+        // harmless interpolation/formatting differences from causing cache misses.
+        let mut hasher = DefaultHasher::new();
+
+        self.config_hash.hash(&mut hasher);
+        "exciton_basis_quantized_k_v1".hash(&mut hasher);
+        crate::utils::K_HASH_QUANTUM.to_bits().hash(&mut hasher);
+
+        for &ki in self.exciton.exciton_ham.k.iter() {
+            crate::utils::hash_quantized_f64(ki, &mut hasher);
+        }
+
+        let exciton_hash = hasher.finish();
+
+        (relative_hash, exciton_hash)
     }
 
     pub fn compute_lm_matrix_elements_only(
@@ -503,6 +553,22 @@ where
 
         let time_mat = Instant::now();
 
+        let (relative_hash, exciton_hash) = self.matrix_element_cache_hashes();
+
+        timed_println_rank0!(
+            "Matrix-element cache hashes: relative={:016x}, exciton_basis={:016x}, k={:?}, qk={:?}, k_quantum={}",
+            relative_hash,
+            exciton_hash,
+            self.exciton.exciton_ham.k,
+            self.exciton
+                .exciton_ham
+                .k
+                .iter()
+                .map(|&x| crate::utils::quantize_f64_for_hash(x))
+                .collect::<Vec<_>>(),
+            crate::utils::K_HASH_QUANTUM,
+        );
+
         self.matrix_elements.populate_tay_mat_elements_with_cache(
             &all_q_ind,
             self.exciton.e_vecs.as_ref().unwrap(),
@@ -511,7 +577,8 @@ where
             self.exciton.exciton_ham.rel_ham.mu,
             self.cache_dir.as_deref(),
             force_recompute,
-            self.config_hash,
+            relative_hash,
+            exciton_hash,
         );
 
         timed_println_rank0!(

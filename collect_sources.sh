@@ -98,7 +98,7 @@ start_new_file() {
 CURRENT_LINE_COUNT=$(write_header "$OUTPUT_FILE" 1)
 
 # Build find command with conditional exclusions
-FIND_CMD="find . -type f \( -name \"*.rs\" -o -name \"*.h\" -o -name \"*.toml\" -o -name \"*.py\" \) ! -path \"*/target*/*\""
+FIND_CMD="find . -type f \( -name \"*.rs\" -o -name \"*.h\" -o -name \"*.toml\" -o -name \"*.py\" -o -name \"*.sh\" \) ! -path \"*/target*/*\""
 if [[ "$INCLUDE_EXAMPLES" == false ]]; then
     FIND_CMD="$FIND_CMD ! -path \"*/examples/*\""
 fi
@@ -110,7 +110,7 @@ for dir in "${IGNORE_DIRS[@]}"; do
     FIND_CMD="$FIND_CMD ! -path \"*/${dir}/*\""
 done
 
-# Find all .rs, .h, .toml, and .py files, excluding target directory and optionally examples/tests
+# Find all .rs, .h, .toml, .py, and .sh files, excluding target directory and optionally examples/tests
 eval $FIND_CMD | sort | while read -r file; do
     # Get relative path (remove leading ./)
     rel_path="${file#./}"
@@ -122,6 +122,8 @@ eval $FIND_CMD | sort | while read -r file; do
         lang="toml"
     elif [[ "$file" == *.py ]]; then
         lang="python"
+    elif [[ "$file" == *.sh ]]; then
+        lang="bash"
     else
         lang="c"
     fi
@@ -146,8 +148,8 @@ eval $FIND_CMD | sort | while read -r file; do
         
         # Filter comments if requested
         if [[ "$SKIP_COMMENTS" == true ]]; then
-            if [[ "$lang" == "toml" ]] || [[ "$lang" == "python" ]]; then
-                # TOML and Python comments start with #
+            if [[ "$lang" == "toml" ]] || [[ "$lang" == "python" ]] || [[ "$lang" == "bash" ]]; then
+                # TOML, Python, and Bash comments start with #
                 grep -v '^\s*#' "$TEMP_FILE" > "${TEMP_FILE}.tmp" && mv "${TEMP_FILE}.tmp" "$TEMP_FILE"
             else
                 # Rust and C comments: // and /* */ multi-line blocks

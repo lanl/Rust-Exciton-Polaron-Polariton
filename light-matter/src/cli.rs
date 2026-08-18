@@ -253,55 +253,21 @@ pub struct DielectricArgs {
 
 #[derive(Debug, Clone, Parser)]
 pub struct MatrixElemCalcArgs {
-    #[command(flatten)]
-    pub exciton: ExcitonArgs,
+    #[command(subcommand)]
+    pub target: MatrixElemCalcTarget,
+}
 
-    /// Number of relative-coordinate states.
-    #[arg(long, default_value_t = 16)]
-    pub n_rel: usize,
+#[derive(Debug, Clone, Subcommand)]
+pub enum MatrixElemCalcTarget {
+    /// Precompute LM matrix elements for a bandstructure calculation.
+    Bandstructure(MatrixElemBandstructureArgs),
 
-    /// Number of exciton eigenstates used as the LM basis.
-    #[arg(long, default_value_t = 16)]
-    pub n_ex_eig: usize,
+    /// Precompute LM matrix elements for a dielectric calculation.
+    Dielectric(MatrixElemDielectricArgs),
+}
 
-    /// Central photon frequency.
-    #[arg(long, default_value_t = 0.18)]
-    pub omega_0: f64,
-
-    /// Maximum photon frequency for effective-mode generation.
-    #[arg(long, default_value_t = 0.2)]
-    pub omega_max: f64,
-
-    /// Effective-mode frequency spacing.
-    #[arg(long, default_value_t = 1e-4)]
-    pub d_omega: f64,
-
-    /// Effective-mode target side length. Total target modes are n_modes*n_modes.
-    #[arg(long, default_value_t = 32)]
-    pub n_modes: usize,
-
-    /// Comma-separated reflectivity values.
-    #[arg(long, value_delimiter = ',', default_value = "0.0,0.999999,0.9999999")]
-    pub reflectivities: Vec<f64>,
-
-    /// Which reflectivity index to precompute.
-    /// Defaults to REFLECTIVITY_INDEX or SLURM_ARRAY_TASK_ID, then 0.
-    #[arg(long)]
-    pub reflectivity_index: Option<usize>,
-
-    /// Phonon coupling, included in PPConfig hash.
-    #[arg(long, default_value_t = 0.0)]
-    pub pn_coupling: f64,
-
-    #[arg(long, default_value_t = 0.0025)]
-    pub pn_omega: f64,
-
-    #[arg(long, default_value_t = 0.05)]
-    pub pn_k_x: f64,
-
-    #[arg(long, default_value_t = 1)]
-    pub pn_n_fock: usize,
-
+#[derive(Debug, Clone, Parser)]
+pub struct MatrixElemCommonArgs {
     /// Matrix-element cache directory.
     #[arg(long, default_value = "saved_data_lm/matrix_element_cache")]
     pub cache_dir: String,
@@ -309,4 +275,33 @@ pub struct MatrixElemCalcArgs {
     /// Force recomputation even if cache files exist.
     #[arg(long, default_value_t = false)]
     pub force_recompute: bool,
+}
+
+#[derive(Debug, Clone, Parser)]
+pub struct MatrixElemBandstructureArgs {
+    #[command(flatten)]
+    pub bandstructure: BandstructureArgs,
+
+    #[command(flatten)]
+    pub common: MatrixElemCommonArgs,
+
+    /// Precompute one K-point by global K index.
+    ///
+    /// Defaults to K_INDEX if set. If no chunk options are supplied, also falls
+    /// back to SLURM_ARRAY_TASK_ID.
+    #[arg(long)]
+    pub k_index: Option<usize>,
+
+    /// Precompute all K points in this job.
+    #[arg(long, default_value_t = false)]
+    pub all_k_points: bool,
+}
+
+#[derive(Debug, Clone, Parser)]
+pub struct MatrixElemDielectricArgs {
+    #[command(flatten)]
+    pub dielectric: DielectricArgs,
+
+    #[command(flatten)]
+    pub common: MatrixElemCommonArgs,
 }

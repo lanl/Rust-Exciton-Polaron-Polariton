@@ -280,8 +280,7 @@ impl LMMatrixElementArray {
         };
 
         let encoded = bincode::serialize(&serializable)?;
-        let mut file = File::create(filename)?;
-        file.write_all(&encoded)?;
+        crate::utils::atomic_write(filename, &encoded)?;
 
         info!(
             "Saved relative basis matrix elements to cache: {}",
@@ -333,17 +332,34 @@ impl LMMatrixElementArray {
         Ok((cos_mat, sin_mat, p_cos_mat))
     }
 
-    pub fn populate_tay_mat_elements(
-        &mut self,
-        all_q_ind: &Vec<ModeTask>,
-        e_vecs: &Array2<c64>,
-        modes: &Vec<BosonMode>,
-        n_com: usize,
-        mu: f64,
-    ) {
-        self.populate_tay_mat_elements_with_cache(
-            all_q_ind, e_vecs, modes, n_com, mu, None, false, 0,
-        );
+    fn has_all_required_relative_keys(
+        cos_rel: &HashMap<ModeKey, Array2<c64>>,
+        sin_rel: &HashMap<ModeKey, Array2<c64>>,
+        p_cos_rel: &HashMap<ModeKey, Array2<c64>>,
+        all_q_ind: &[ModeTask],
+    ) -> bool {
+        for task in all_q_ind {
+            match *task {
+                ModeTask::PhotonSingle { mode } => {
+                    let key = ModeKey::single(mode);
+
+                    if !sin_rel.contains_key(&key) || !p_cos_rel.contains_key(&key) {
+                        return false;
+                    }
+                }
+
+                ModeTask::PhotonPair { q1, q2 } => {
+                    let diff_key = ModeKey::diff(q1, q2);
+                    let sum_key = ModeKey::sum(q1, q2);
+
+                    if !cos_rel.contains_key(&diff_key) || !cos_rel.contains_key(&sum_key) {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        true
     }
 
     pub fn populate_tay_mat_elements_with_cache(
@@ -355,14 +371,15 @@ impl LMMatrixElementArray {
         mu: f64,
         cache_dir: Option<&str>,
         force_recompute: bool,
-        config_hash: u64,
+        relative_config_hash: u64,
+        exciton_config_hash: u64,
     ) {
         let n_rel = e_vecs.nrows() / n_com;
 
         // Try to load from cache if cache_dir is provided and not forcing recompute.
         if let Some(dir) = cache_dir {
             if !force_recompute {
-                let cache_file = Self::get_cache_filename(dir, mu, n_com, n_rel, config_hash);
+                let cache_file = Self::get_cache_filename(dir, mu, n_com, n_rel, exciton_config_hash);
 
                 if Path::new(&cache_file).exists() {
                     match Self::load_from_file(&cache_file) {
@@ -373,7 +390,7 @@ impl LMMatrixElementArray {
                             self.p_cos_mat = cached.p_cos_mat;
 
                             let cache_file_rel =
-                                Self::get_cache_filename_rel(dir, mu, n_rel, config_hash);
+                                Self::get_cache_filename_rel(dir, mu, n_rel, relative_config_hash);
                             if Path::new(&cache_file_rel).exists() {
                                 if let Ok((cos_rel, sin_rel, p_cos_rel)) =
                                     Self::load_rel_from_file(&cache_file_rel)
@@ -404,18 +421,28 @@ impl LMMatrixElementArray {
 
             if let Some(dir) = cache_dir {
                 if !force_recompute {
-                    let cache_file_rel = Self::get_cache_filename_rel(dir, mu, n_rel, config_hash);
+                    let cache_file_rel = Self::get_cache_filename_rel(dir, mu, n_rel, relative_config_hash);
 
                     if Path::new(&cache_file_rel).exists() {
                         match Self::load_rel_from_file(&cache_file_rel) {
                             Ok((cos_rel, sin_rel, p_cos_rel)) => {
-                                info!(
-                                    "Successfully loaded relative-basis matrix elements from cache"
-                                );
-                                self.cos_mat_rel = Some(cos_rel);
-                                self.sin_mat_rel = Some(sin_rel);
-                                self.p_cos_mat_rel = Some(p_cos_rel);
-                                loaded_from_cache = true;
+                                if Self::has_all_required_relative_keys(
+                                    &cos_rel,
+                                    &sin_rel,
+                                    &p_cos_rel,
+                                    all_q_ind,
+                                ) {
+                                    info!("Successfully loaded relative-basis matrix elements from cache");
+                                    self.cos_mat_rel = Some(cos_rel);
+                                    self.sin_mat_rel = Some(sin_rel);
+                                    self.p_cos_mat_rel = Some(p_cos_rel);
+                                    loaded_from_cache = true;
+                                } else {
+                                    warn!(
+                                        "Relative-basis cache {} is incomplete for this mode set; recomputing",
+                                        cache_file_rel
+                                    );
+                                }
                             }
                             Err(e) => {
                                 warn!("Failed to load relative-basis cache: {}. Recomputing...", e);
@@ -435,7 +462,7 @@ impl LMMatrixElementArray {
 
                 if crate::utils::is_mpi_rank0_env() {
                     if let Some(dir) = cache_dir {
-                        let cache_file_rel = Self::get_cache_filename_rel(dir, mu, n_rel, config_hash);
+                        let cache_file_rel = Self::get_cache_filename_rel(dir, mu, n_rel, relative_config_hash);
                         if let Err(e) = self.save_rel_to_file(&cache_file_rel) {
                             warn!("Failed to save relative-basis cache: {}", e);
                         }
@@ -512,7 +539,7 @@ impl LMMatrixElementArray {
 
         if crate::utils::is_mpi_rank0_env() {
             if let Some(dir) = cache_dir {
-                let cache_file = Self::get_cache_filename(dir, mu, n_com, n_rel, config_hash);
+                let cache_file = Self::get_cache_filename(dir, mu, n_com, n_rel, exciton_config_hash);
                 if let Err(e) = self.save_to_file(&cache_file) {
                     warn!("Failed to save matrix elements to cache: {}", e);
                 }

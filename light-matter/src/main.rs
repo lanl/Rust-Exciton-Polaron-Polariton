@@ -30,6 +30,7 @@ pub mod effective_modes;
 pub mod logging;
 
 pub mod visualization_dielectric;
+use crate::visualization_dielectric::generate_stacked_plots;
 
 pub mod hamiltonians;
 use crate::hamiltonians::{PPHamiltonian, SingExBosons};
@@ -62,7 +63,7 @@ fn run_bandstructure_with_args(
     let zoomed = args.zoomed;
 
     let total_coupling = args.total_coupling;
-    timed_println!("total_coupling = {}", total_coupling);
+    timed_println_rank0!("total_coupling = {}", total_coupling);
 
     let omega_0 = args.omega_0;
     let n_modes = args.n_modes;
@@ -134,11 +135,11 @@ fn run_bandstructure_with_args(
     let sym_points = vec![vec![0.0, 0.0], vec![PI / a0, 0.0], vec![PI / a0, PI / a0]];
     let sym_labels = vec!["Γ".to_string(), "X".to_string(), "M".to_string()];
 
-    timed_println!("Running with {} modes", photon_modes.len());
+    timed_println_rank0!("Running with {} modes", photon_modes.len());
 
     match method {
         Method::Sparse => {
-            timed_println!("Using sparse methods for light-matter coupling.");
+            timed_println_rank0!("Using sparse methods for light-matter coupling.");
 
             // Start timing the band structure calculation
             let start_time = Instant::now();
@@ -153,8 +154,8 @@ fn run_bandstructure_with_args(
                 let time1 = Instant::now();
 
                 // Calculate the band structure
-                timed_println!("Calculating {} eigenstates", n_eig);
-                timed_println!("Calculating color-coded band structure...");
+                timed_println_rank0!("Calculating {} eigenstates", n_eig);
+                timed_println_rank0!("Calculating color-coded band structure...");
                 (k_points_color, eigvals_list_color, photonic_character_list) =
                     run_bandstructure_parallel_mode(
                         &mut pp,
@@ -214,7 +215,7 @@ fn run_bandstructure_with_args(
         }
 
         Method::Dense => {
-            timed_println!("Using dense methods for light-matter coupling.");
+            timed_println_rank0!("Using dense methods for light-matter coupling.");
 
             // Start timing the band structure calculation
             let start_time = Instant::now();
@@ -229,8 +230,8 @@ fn run_bandstructure_with_args(
                 let time1 = Instant::now();
 
                 // Calculate the band structure
-                timed_println!("Calculating {} eigenstates", n_eig);
-                timed_println!("Calculating color-coded band structure...");
+                timed_println_rank0!("Calculating {} eigenstates", n_eig);
+                timed_println_rank0!("Calculating color-coded band structure...");
                 (k_points_color, eigvals_list_color, photonic_character_list) =
                     run_bandstructure_parallel_mode(
                         &mut pp,
@@ -290,7 +291,7 @@ fn run_bandstructure_with_args(
         }
 
         Method::LinOp => {
-            timed_println!("Using dense methods for light-matter coupling.");
+            timed_println_rank0!("Using linear operators methods for light-matter coupling.");
 
             // Start timing the band structure calculation
             let start_time = Instant::now();
@@ -305,8 +306,8 @@ fn run_bandstructure_with_args(
                 let time1 = Instant::now();
 
                 // Calculate the band structure
-                timed_println!("Calculating {} eigenstates", n_eig);
-                timed_println!("Calculating color-coded band structure...");
+                timed_println_rank0!("Calculating {} eigenstates", n_eig);
+                timed_println_rank0!("Calculating color-coded band structure...");
                 (k_points_color, eigvals_list_color, photonic_character_list) =
                     run_bandstructure_parallel_mode(
                         &mut pp,
@@ -441,230 +442,10 @@ where
     }
 }
 
-/// Helper function to generate stacked area plots for photonic and phonon contributions
-fn generate_stacked_plots(
-    coupling_values: &Array1<f64>,
-    all_mode_couplings: &Vec<Vec<f64>>,
-    all_q_values: &Vec<Vec<Vector3D>>,
-    reflectivities: &[f64],
-    e_config: &ExcitonConfig,
-    n_rel: usize,
-    n_ex_eig: usize,
-    omega_0: f64,
-    d_omega: f64,
-    omega_max: f64,
-    pn_coupling: f64,
-    pn_omega: f64,
-    pn_k: &Array1<f64>,
-    pn_n_fock: usize,
-    n_eig: usize,
-    omegas: &Array1<f64>,
-    gamma: f64,
-    save_dir: &str,
-    zoomed: bool,
-    omega_range: Option<(f64, f64)>,
-) {
-    if !crate::utils::is_mpi_rank0_env() {
-        return;
-    }
-
-    timed_println!("Generating stacked photonic character plots...");
-
-    // Load zero-coupling dielectric function for overlay (use first q_values set)
-    let zero_coupling_imag = {
-        let zero_couplings = vec![0.0; all_q_values[0].len()];
-        let pp_config_zero = PPConfig::new_with_effective_modes(
-            e_config.clone(),
-            n_rel,
-            n_ex_eig,
-            zero_couplings,
-            omega_0,
-            all_q_values[0].clone(),
-            pn_coupling,
-            pn_omega,
-            pn_k.clone(),
-            pn_n_fock,
-            1,
-            1,
-            d_omega,
-            omega_max,
-            reflectivities[0],
-        );
-
-        let pp_zero: PPHamiltonian<ComposedOperator<c64>, SingExBosons<ComposedOperator<c64>>> =
-            PPHamiltonian::from_config(&pp_config_zero);
-
-        let cache_filename_zero = dielectric_function::get_dielectric_cache_filename(
-            &pp_zero,
-            &pp_config_zero,
-            save_dir,
-            n_eig,
-        );
-
-        match dielectric_function::load_dielectric_cache(&cache_filename_zero) {
-            Ok((pp_vals_zero, x_pp_zero, _, _, gs_idx_zero)) => {
-                // Compute Im[ε] for zero coupling
-                let ground_state_energy = pp_vals_zero[gs_idx_zero];
-                let mut im_eps_zero = Array1::<f64>::zeros(omegas.len());
-
-                for (w_idx, &omega) in omegas.iter().enumerate() {
-                    let mut eps_contrib = c64::new(0.0, 0.0);
-
-                    for i in 0..pp_vals_zero.len() {
-                        if i == gs_idx_zero {
-                            continue;
-                        }
-                        let delta_e = pp_vals_zero[i] - ground_state_energy;
-                        let contrib =
-                            x_pp_zero[i] * x_pp_zero[i] / (omega - delta_e + c64::i() * gamma);
-                        eps_contrib += contrib;
-                    }
-
-                    im_eps_zero[w_idx] = (1.0 - 4.0 * PI * eps_contrib).im.abs();
-                }
-
-                Some(im_eps_zero)
-            }
-            Err(e) => {
-                timed_println!(
-                    "Warning: Could not load zero-coupling cache for overlay: {}",
-                    e
-                );
-                None
-            }
-        }
-    };
-
-    for (idx, &total_coupling) in coupling_values.iter().enumerate() {
-        if total_coupling.abs() < 1e-12 {
-            continue; // Skip zero coupling
-        }
-
-        // Use the actual mode couplings that were used during computation
-        let mode_couplings = &all_mode_couplings[idx];
-        let q_values = &all_q_values[idx];
-        let reflectivity = reflectivities[idx];
-
-        // Create PP config for this coupling with effective mode parameters
-        let pp_config_plot = PPConfig::new_with_effective_modes(
-            e_config.clone(),
-            n_rel,
-            n_ex_eig,
-            mode_couplings.clone(),
-            omega_0,
-            q_values.clone(),
-            pn_coupling,
-            pn_omega,
-            pn_k.clone(),
-            pn_n_fock,
-            1,
-            1,
-            d_omega,
-            omega_max,
-            reflectivity,
-        );
-
-        let pp_plot: PPHamiltonian<ComposedOperator<c64>, SingExBosons<ComposedOperator<c64>>> =
-            PPHamiltonian::from_config(&pp_config_plot);
-
-        // Load cached eigenstate data
-        let cache_filename = dielectric_function::get_dielectric_cache_filename(
-            &pp_plot,
-            &pp_config_plot,
-            save_dir,
-            n_eig,
-        );
-
-        match dielectric_function::load_dielectric_cache(&cache_filename) {
-            Ok((pp_vals, x_pp, photonic_chars, phonon_numbers, gs_idx)) => {
-                let n_photon_modes = q_values.len();
-
-                // Plot photonic character stacked area
-                let photonic_plot_name = format!(
-                    "{}/dielectric_photonic_stacked_a0{}_V0{}_nrel{}_lmcoup{:.6}_nmodes{}_pncoup{}_npn{}_neig{}_gamma{:.1e}.svg",
-                    save_dir,
-                    e_config.a0,
-                    e_config.v0,
-                    n_rel,
-                    total_coupling,
-                    n_photon_modes,
-                    pn_coupling,
-                    pn_n_fock,
-                    n_eig,
-                    gamma
-                );
-
-                match visualization_dielectric::plot_dielectric_stacked_photonic(
-                    omegas,
-                    &pp_vals,
-                    &x_pp,
-                    &photonic_chars,
-                    gs_idx,
-                    gamma,
-                    &photonic_plot_name,
-                    zoomed,
-                    omega_range,
-                    Some(q_values),
-                    zero_coupling_imag.as_ref(),
-                ) {
-                    Ok(_) => timed_println!(
-                        "Successfully plotted photonic stacked area for coupling {:.6}",
-                        total_coupling
-                    ),
-                    Err(e) => timed_println!("Error plotting photonic stacked area: {}", e),
-                }
-
-                // Plot phonon Fock state stacked area
-                if pn_n_fock > 0 {
-                    let phonon_plot_name = format!(
-                        "{}/dielectric_phonon_stacked_a0{}_V0{}_nrel{}_lmcoup{:.6}_nmodes{}_pncoup{}_npn{}_neig{}_gamma{:.1e}.svg",
-                        save_dir,
-                        e_config.a0,
-                        e_config.v0,
-                        n_rel,
-                        total_coupling,
-                        n_photon_modes,
-                        pn_coupling,
-                        pn_n_fock,
-                        n_eig,
-                        gamma
-                    );
-
-                    match visualization_dielectric::plot_dielectric_stacked_phonon(
-                        omegas,
-                        &pp_vals,
-                        &x_pp,
-                        &phonon_numbers,
-                        gs_idx,
-                        pn_n_fock,
-                        gamma,
-                        &phonon_plot_name,
-                        zoomed,
-                        omega_range,
-                        Some(q_values),
-                        zero_coupling_imag.as_ref(),
-                    ) {
-                        Ok(_) => timed_println!(
-                            "Successfully plotted phonon stacked area for coupling {:.6}",
-                            total_coupling
-                        ),
-                        Err(e) => timed_println!("Error plotting phonon stacked area: {}", e),
-                    }
-                }
-            }
-            Err(e) => timed_println!(
-                "Could not load cached data for coupling {:.6}: {}",
-                total_coupling,
-                e
-            ),
-        }
-    }
-}
-
 /// Main function demonstrating the use of the light-matter coupling framework
 /// Calculate dielectric function for a range of coupling strengths
 fn run_dielectric_scan(e_config: ExcitonConfig, args: cli::DielectricArgs) -> Result<()> {
-    timed_println!("Starting dielectric function scan...");
+    timed_println_rank0!("Starting dielectric function scan...");
 
     let calculate = args.calculate;
     let use_cached = args.use_cached;
@@ -1004,49 +785,88 @@ fn run_dielectric_scan(e_config: ExcitonConfig, args: cli::DielectricArgs) -> Re
     Ok(())
 }
 
-fn run_matrix_elem_calc_cli(args: cli::MatrixElemCalcArgs) -> Result<()> {
-    // This command is intended as a shared-cache CPU precompute.
-    // Avoid many MPI ranks writing the same cache files.
-    if !crate::utils::is_mpi_rank0_env() {
-        return Ok(());
-    }
+fn build_bandstructure_pp_config(
+    e_config: ExcitonConfig,
+    args: &cli::BandstructureArgs,
+) -> (PPConfig, Vec<Vec<f64>>, Vec<String>) {
+    let a0 = e_config.a0;
 
-    let mut e_config = args.exciton.to_config();
+    let n_rel = args.n_rel;
+    let n_ex_eig = args.n_ex_eig;
 
-    // Make the exciton save_dir consistent with the CLI.
-    e_config.save_dir = args.exciton.save_dir.clone();
+    let total_coupling = args.total_coupling;
+    let omega_0 = args.omega_0;
+    let n_modes = args.n_modes;
 
-    let refl_idx = args
-        .reflectivity_index
+    // Preserve existing convention.
+    let coupling = total_coupling / (n_modes as f64);
+
+    let qx_values = Array1::linspace(-args.q_max, args.q_max, n_modes);
+    let qy_values = Array1::linspace(-args.q_max, args.q_max, n_modes);
+
+    let qz = omega_0 / C;
+
+    let q_values: Vec<Vector3D> = qx_values
+        .iter()
+        .flat_map(|qx| {
+            qy_values.iter().map(|qy| Vector3D {
+                x: *qx,
+                y: *qy,
+                z: qz,
+            })
+        })
+        .collect();
+
+    let lm_couplings = vec![coupling; q_values.len()];
+
+    let pn_k = arr1(&[0.0, args.pn_k_y]);
+
+    let pp_config = PPConfig::new(
+        e_config,
+        n_rel,
+        n_ex_eig,
+        lm_couplings,
+        omega_0,
+        q_values,
+        args.pn_coupling,
+        args.pn_omega,
+        pn_k,
+        args.pn_n_fock,
+        args.n_k_points,
+        args.n_bands,
+    );
+
+    let sym_points = vec![
+        vec![0.0, 0.0],
+        vec![PI / a0, 0.0],
+        vec![PI / a0, PI / a0],
+    ];
+
+    let sym_labels = vec!["Γ".to_string(), "X".to_string(), "M".to_string()];
+
+    (pp_config, sym_points, sym_labels)
+}
+
+fn selected_dielectric_reflectivity_index(args: &cli::DielectricArgs) -> usize {
+    args.reflectivity_index
         .or_else(|| crate::utils::env_usize(&["REFLECTIVITY_INDEX", "SLURM_ARRAY_TASK_ID"]))
-        .unwrap_or(0);
+        .unwrap_or(0)
+}
 
+fn build_dielectric_pp_config_for_reflectivity(
+    e_config: ExcitonConfig,
+    args: &cli::DielectricArgs,
+    refl_idx: usize,
+) -> PPConfig {
     if refl_idx >= args.reflectivities.len() {
         panic!(
-            "reflectivity_index {} out of range 0..{}",
+            "Reflectivity index {} out of range 0..{}",
             refl_idx,
             args.reflectivities.len()
         );
     }
 
     let reflectivity = args.reflectivities[refl_idx];
-
-    timed_println!("Starting standalone LM matrix-element precompute");
-    timed_println!("  n_rel             = {}", args.n_rel);
-    timed_println!("  n_ex_eig          = {}", args.n_ex_eig);
-    timed_println!("  omega_0           = {}", args.omega_0);
-    timed_println!("  omega_max         = {}", args.omega_max);
-    timed_println!("  d_omega           = {}", args.d_omega);
-    timed_println!("  n_modes side      = {}", args.n_modes);
-    timed_println!("  target modes      = {}", args.n_modes * args.n_modes);
-    timed_println!("  reflectivity idx  = {}", refl_idx);
-    timed_println!("  reflectivity      = {}", reflectivity);
-    timed_println!("  cache_dir         = {}", args.cache_dir);
-    timed_println!("  force_recompute   = {}", args.force_recompute);
-
-    std::fs::create_dir_all(&args.cache_dir).unwrap_or_else(|e| {
-        panic!("Failed to create cache directory {}: {}", args.cache_dir, e);
-    });
 
     let (q_values, mode_couplings) = effective_modes::generate_modes(
         args.d_omega,
@@ -1056,17 +876,9 @@ fn run_matrix_elem_calc_cli(args: cli::MatrixElemCalcArgs) -> Result<()> {
         reflectivity,
     );
 
-    let total_coupling: f64 = mode_couplings.iter().sum();
-
-    timed_println!(
-        "Generated {} effective photon modes with total coupling {:.8}",
-        q_values.len(),
-        total_coupling
-    );
-
     let pn_k = arr1(&[args.pn_k_x, 0.0]);
 
-    let mut pp_config = PPConfig::new_with_effective_modes(
+    PPConfig::new_with_effective_modes(
         e_config,
         args.n_rel,
         args.n_ex_eig,
@@ -1082,29 +894,242 @@ fn run_matrix_elem_calc_cli(args: cli::MatrixElemCalcArgs) -> Result<()> {
         args.d_omega,
         args.omega_max,
         reflectivity,
+    )
+}
+
+fn matrix_elem_band_k_indices(
+    args: &cli::MatrixElemBandstructureArgs,
+    n_k_points_total: usize,
+) -> Vec<usize> {
+    if args.all_k_points {
+        return (0..n_k_points_total).collect();
+    }
+
+    // Explicit single-K selection.
+    if let Some(k_index) = args
+        .k_index
+        .or_else(|| crate::utils::env_usize(&["K_INDEX"]))
+    {
+        if k_index >= n_k_points_total {
+            panic!(
+                "K index {} out of range 0..{}",
+                k_index,
+                n_k_points_total
+            );
+        }
+
+        return vec![k_index];
+    }
+
+    // Chunked precompute selection.
+    let n_chunks = args
+        .bandstructure
+        .k_n_chunks
+        .or_else(|| crate::utils::env_usize(&["K_N_CHUNKS"]));
+
+    if let Some(n_chunks) = n_chunks {
+        let chunk_index = args
+            .bandstructure
+            .k_chunk_index
+            .or_else(|| crate::utils::env_usize(&["K_CHUNK_INDEX", "SLURM_ARRAY_TASK_ID"]))
+            .unwrap_or(0);
+
+        let (start, end) = crate::utils::chunk_bounds(n_k_points_total, chunk_index, n_chunks);
+
+        return (start..end).collect();
+    }
+
+    // Common Slurm-array case: one array task per K point.
+    if let Some(k_index) = crate::utils::env_usize(&["SLURM_ARRAY_TASK_ID"]) {
+        if k_index >= n_k_points_total {
+            panic!(
+                "SLURM_ARRAY_TASK_ID={} out of K-index range 0..{}",
+                k_index,
+                n_k_points_total
+            );
+        }
+
+        return vec![k_index];
+    }
+
+    // Safe local default.
+    vec![0]
+}
+
+fn run_matrix_elem_calc_bandstructure_cli(args: cli::MatrixElemBandstructureArgs) -> Result<()> {
+    // Matrix-element precompute should generally run as one process with many
+    // Rayon threads. Avoid many MPI ranks writing the same cache files.
+    if !crate::utils::is_mpi_rank0_env() {
+        return Ok(());
+    }
+
+    let e_config = args.bandstructure.exciton.to_config();
+
+    let (mut pp_config, sym_points, _sym_labels) =
+        build_bandstructure_pp_config(e_config, &args.bandstructure);
+
+    pp_config.cache_dir = Some(args.common.cache_dir.clone());
+
+    std::fs::create_dir_all(&args.common.cache_dir).unwrap_or_else(|e| {
+        panic!(
+            "Failed to create cache directory {}: {}",
+            args.common.cache_dir, e
+        );
+    });
+
+    let k_points = band_structure::generate_band_k_points(
+        args.bandstructure.n_k_points,
+        &sym_points,
+        pp_config.e_config.a0,
+        args.bandstructure.zoomed,
     );
 
-    pp_config.cache_dir = Some(args.cache_dir.clone());
+    let k_indices = matrix_elem_band_k_indices(&args, k_points.len());
 
+    timed_println!("Starting bandstructure LM matrix-element precompute");
+    timed_println!("  n_k_points        = {}", k_points.len());
+    timed_println!("  selected K inds   = {:?}", k_indices);
+    timed_println!("  n_rel             = {}", args.bandstructure.n_rel);
+    timed_println!("  n_ex_eig          = {}", args.bandstructure.n_ex_eig);
+    timed_println!("  omega_0           = {}", args.bandstructure.omega_0);
+    timed_println!("  n_modes side      = {}", args.bandstructure.n_modes);
     timed_println!(
-        "PPConfig hash for matrix-element cache: {:016x}",
+        "  photon modes      = {}",
+        pp_config.q_values.len()
+    );
+    timed_println!("  q_max             = {}", args.bandstructure.q_max);
+    timed_println!("  total coupling    = {}", args.bandstructure.total_coupling);
+    timed_println!("  cache_dir         = {}", args.common.cache_dir);
+    timed_println!("  force_recompute   = {}", args.common.force_recompute);
+    timed_println!(
+        "  base PP hash      = {:016x}",
         pp_config.get_config_hash()
     );
 
-    // Use the sparse backend for the precompute command.
-    // This is a CPU/Rayon precompute and should usually be run as one process
-    // with many Rayon threads, not as an MPI/SLEPc job.
-    let mut pp: PPHamiltonian<CsMat<c64>, SingExBosons<CsMat<c64>>> =
-        PPHamiltonian::from_config(&pp_config);
+    for &k_index in &k_indices {
+        let k_point = k_points[k_index].clone();
 
-    pp.polariton
-        .compute_lm_matrix_elements_only(None, args.force_recompute)?;
+        timed_println!(
+            "Precomputing matrix elements for K index {} / {}: {:?}",
+            k_index,
+            k_points.len(),
+            k_point
+        );
 
-    timed_println!("Standalone LM matrix-element precompute finished");
+        timed_println!(
+            "  quantized K       = {:?}, quantum={}",
+            k_point
+                .iter()
+                .map(|&x| crate::utils::quantize_f64_for_hash(x))
+                .collect::<Vec<_>>(),
+            crate::utils::K_HASH_QUANTUM,
+        );
+
+        let mut pp_config_k = pp_config.clone();
+        pp_config_k.e_config.k = k_point.clone();
+
+        let mut pp: PPHamiltonian<CsMat<c64>, SingExBosons<CsMat<c64>>> =
+            PPHamiltonian::from_config(&pp_config_k);
+
+        pp.polariton.compute_lm_matrix_elements_only(
+            Some(k_point),
+            args.common.force_recompute,
+        )?;
+
+        drop(pp);
+
+        timed_println!(
+            "Finished and dropped PPHamiltonian for K index {} / {}",
+            k_index,
+            k_points.len()
+        );
+    }
+
+    timed_println!("Bandstructure LM matrix-element precompute finished");
 
     Ok(())
 }
 
+fn run_matrix_elem_calc_dielectric_cli(args: cli::MatrixElemDielectricArgs) -> Result<()> {
+    // Matrix-element precompute should generally run as one process with many
+    // Rayon threads. Avoid many MPI ranks writing the same cache files.
+    if !crate::utils::is_mpi_rank0_env() {
+        return Ok(());
+    }
+
+    let mut e_config = args.dielectric.exciton.to_config();
+
+    // Dielectric calculation is currently a Gamma-point calculation.
+    let k_point = vec![0.0, 0.0];
+    e_config.k = k_point.clone();
+
+    let refl_idx = selected_dielectric_reflectivity_index(&args.dielectric);
+
+    let mut pp_config =
+        build_dielectric_pp_config_for_reflectivity(e_config, &args.dielectric, refl_idx);
+
+    pp_config.cache_dir = Some(args.common.cache_dir.clone());
+
+    std::fs::create_dir_all(&args.common.cache_dir).unwrap_or_else(|e| {
+        panic!(
+            "Failed to create cache directory {}: {}",
+            args.common.cache_dir, e
+        );
+    });
+
+    let reflectivity = args.dielectric.reflectivities[refl_idx];
+    let total_coupling: f64 = pp_config.lm_couplings.iter().sum();
+
+    timed_println!("Starting dielectric LM matrix-element precompute");
+    timed_println!("  k point           = {:?}", k_point);
+    timed_println!(
+        "  quantized K       = {:?}, quantum={}",
+        k_point
+            .iter()
+            .map(|&x| crate::utils::quantize_f64_for_hash(x))
+            .collect::<Vec<_>>(),
+        crate::utils::K_HASH_QUANTUM,
+    );
+    timed_println!("  reflectivity idx  = {}", refl_idx);
+    timed_println!("  reflectivity      = {}", reflectivity);
+    timed_println!("  n_rel             = {}", args.dielectric.n_rel);
+    timed_println!("  n_ex_eig          = {}", args.dielectric.n_ex_eig);
+    timed_println!("  omega_0           = {}", args.dielectric.omega_0);
+    timed_println!("  omega_max         = {}", args.dielectric.omega_max);
+    timed_println!("  d_omega           = {}", args.dielectric.d_omega);
+    timed_println!("  n_modes target    = {}", args.dielectric.n_modes);
+    timed_println!("  photon modes      = {}", pp_config.q_values.len());
+    timed_println!("  total coupling    = {:.8}", total_coupling);
+    timed_println!("  cache_dir         = {}", args.common.cache_dir);
+    timed_println!("  force_recompute   = {}", args.common.force_recompute);
+    timed_println!(
+        "  base PP hash      = {:016x}",
+        pp_config.get_config_hash()
+    );
+
+    let mut pp: PPHamiltonian<CsMat<c64>, SingExBosons<CsMat<c64>>> =
+        PPHamiltonian::from_config(&pp_config);
+
+    pp.polariton.compute_lm_matrix_elements_only(
+        Some(k_point),
+        args.common.force_recompute,
+    )?;
+
+    timed_println!("Dielectric LM matrix-element precompute finished");
+
+    Ok(())
+}
+
+fn run_matrix_elem_calc_cli(args: cli::MatrixElemCalcArgs) -> Result<()> {
+    match args.target {
+        cli::MatrixElemCalcTarget::Bandstructure(args) => {
+            run_matrix_elem_calc_bandstructure_cli(args)
+        }
+        cli::MatrixElemCalcTarget::Dielectric(args) => {
+            run_matrix_elem_calc_dielectric_cli(args)
+        }
+    }
+}
 
 fn method_from_arg(method: MethodArg) -> Method {
     match method {

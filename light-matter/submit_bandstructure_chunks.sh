@@ -11,11 +11,12 @@
 ####SBATCH --qos=long
 #SBATCH --array=0-15
 
-set -euo pipefail
+# set -euo pipefail
+
+export RUST_BACKTRACE=full
 
 source "${HOME}/env/matrix_ops_petsc_mpi.sh"
 
-export K_CHUNK_INDEX=${SLURM_ARRAY_TASK_ID}
 export K_N_CHUNKS=16
 
 export OMP_NUM_THREADS=1
@@ -32,18 +33,18 @@ mpirun -np "${SLURM_NTASKS}" \
     --bind-to hwthread \
     "${TARGET_DIR}/release/light-matter" \
     bandstructure \
-    --method sparse \
+    --method linop \
     --parallel distributed-chunks \
-    --k-chunk-index "${K_CHUNK_INDEX}" \
+    --k-chunk-index "${SLURM_ARRAY_TASK_ID}" \
     --k-n-chunks "${K_N_CHUNKS}" \
     --n-k-points 128 \
-    --n-eig 512 \
+    --n-eig 128 \
     --n-bands 16 \
     --n-rel 16 \
     --n-ex-eig 32 \
     --total-coupling 0.003 \
     --omega-0 0.15 \
-    --n-modes 23 \
+    --n-modes 11 \
     --q-max 0.001 \
     --pn-coupling 0.0 \
     --pn-n-fock 0 
