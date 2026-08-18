@@ -13,7 +13,7 @@ use std::process::Command;
 use crate::timed_println;
 
 use crate::hamiltonians::{Boson, PPHamiltonian};
-use crate::utils::PPConfig;
+use crate::config::PPConfig;
 
 /// Calculate the photonic character of an eigenstate
 /// Returns a value between 0 (purely excitonic) and 1 (purely photonic)

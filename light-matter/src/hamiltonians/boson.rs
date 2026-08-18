@@ -1,5 +1,5 @@
 use crate::matrix_elements::ModeTask;
-use crate::utils::BosonMode;
+use crate::modes::types::BosonMode;
 use matrix_ops::{ConvertFrom, MatrixOps, MatrixOpsError, Sqrt};
 use num_traits::One;
 use sprs::TriMat;

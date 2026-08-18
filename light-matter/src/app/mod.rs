@@ -14,7 +14,7 @@ use crate::{timed_println, timed_println_rank0};
 
 use crate::cli::{BandParallelModeArg, Cli, Command, MethodArg};
 
-use crate::utils::PPConfig;
+use crate::config::PPConfig;
 
 use crate::visualization_dielectric::generate_stacked_plots;
 

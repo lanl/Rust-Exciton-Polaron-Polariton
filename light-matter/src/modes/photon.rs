@@ -3,7 +3,7 @@ use std::f64::consts::PI;
 
 use crate::cli::{BandstructureArgs, DielectricArgs, PhotonModeArg};
 use crate::modes::effective;
-use crate::utils::Vector3D;
+use crate::types::Vector3D;
 
 const C: f64 = 137.036;
 

@@ -1,4 +1,4 @@
-use crate::utils::Vector3D;
+use crate::types::Vector3D;
 
 // Speed of light in atomic units
 const C: f64 = 137.036;

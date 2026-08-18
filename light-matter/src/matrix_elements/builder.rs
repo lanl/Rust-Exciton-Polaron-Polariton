@@ -1,4 +1,4 @@
-use crate::utils::BosonMode;
+use crate::modes::types::BosonMode;
 use log::{info, warn};
 use ndarray::Array2;
 use ndarray_linalg::c64;

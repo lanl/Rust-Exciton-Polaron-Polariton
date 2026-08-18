@@ -1,7 +1,7 @@
 use super::builder::LMMatrixElementArray;
 use super::keys::{ModeKey, ModeTask};
 
-use crate::utils::BosonMode;
+use crate::modes::types::BosonMode;
 use ndarray::{Array1, Array2};
 use ndarray_linalg::{Norm, c64};
 use num_traits::Zero;

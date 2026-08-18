@@ -11,7 +11,7 @@ use std::f64::consts::PI;
 use std::iter::Sum;
 
 use crate::hamiltonians::{Boson, PPHamiltonian};
-use crate::utils::PPConfig;
+use crate::config::PPConfig;
 
 /// Result of dielectric‑function calculation including composition data.
 /// The real and imaginary parts of the dielectric function are returned as
