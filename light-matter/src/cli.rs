@@ -121,7 +121,7 @@ pub struct BandstructureArgs {
     #[arg(long, default_value_t = false)]
     pub use_cached: bool,
 
-    #[arg(long, default_value_t = true)]
+    #[arg(long, default_value_t = false)]
     pub zoomed: bool,
 
     #[arg(long, default_value_t = 16)]

@@ -18,6 +18,14 @@ pub fn plot_n_colored_band_structure(
         return Err("No band data to plot".into());
     }
 
+    if k_points.len() < 2 || eigvals_list.is_empty() || eigvals_list[0].is_empty() {
+        return Err("No n-colored band data to plot".into());
+    }
+
+    if n_expectation_list.len() != eigvals_list.len() {
+        return Err("n_expectation_list length does not match eigvals_list length".into());
+    }
+
     let dark = false;
 
     // Create x-axis for the plot (path length)

@@ -23,18 +23,18 @@ export RAYON_NUM_THREADS=1
 
 "${TARGET_DIR}/release/light-matter" \
     bandstructure \
-    --method sparse \
+    --method linop \
     --parallel gather-chunks \
-    --k-n-chunks 16 \
+    --k-n-chunks 4 \
     --n-k-points 128 \
-    --n-eig 512 \
+    --n-eig 128 \
     --n-bands 16 \
     --n-rel 16 \
     --n-ex-eig 32 \
     --total-coupling 0.003 \
     --omega-0 0.15 \
     --photon-modes cartesian \
-    --n-modes 23 \
+    --n-modes 11 \
     --q-max 0.001 \
     --pn-coupling 0.0 \
-    --pn-n-fock 0 \
+    --pn-n-fock 0 

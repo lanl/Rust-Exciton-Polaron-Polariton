@@ -412,7 +412,18 @@ pub fn plot_dielectric_function(
             let (omegas, re_eps, _, params) = &all_data[key];
 
             // Create a color gradient from blue to red
-            let color = interpolate_colormap(&ref_colors, if couplings.len() > 1 { i as f64 / (couplings.len() - 1) as f64 } else { 0.0 });
+            let color = interpolate_colormap(
+                &ref_colors,
+                if couplings.len() > 1 {
+                    if couplings.len() > 1 {
+                        i as f64 / (couplings.len() - 1) as f64
+                    } else {
+                        0.0
+                    }
+                } else {
+                    0.0
+                },
+            );
             // let color = colors[i];
 
             // Filter data points within the omega range and apply symlog transformation
@@ -509,7 +520,18 @@ pub fn plot_dielectric_function(
         for (i, (key, coupling)) in couplings.iter().enumerate().rev() {
             let (omegas, _, im_eps, params) = &all_data[key];
 
-            let color = interpolate_colormap(&ref_colors, if couplings.len() > 1 { i as f64 / (couplings.len() - 1) as f64 } else { 0.0 });
+            let color = interpolate_colormap(
+                &ref_colors,
+                if couplings.len() > 1 {
+                    if couplings.len() > 1 {
+                        i as f64 / (couplings.len() - 1) as f64
+                    } else {
+                        0.0
+                    }
+                } else {
+                    0.0
+                },
+            );
             // let color = colors[i];
 
             // Filter data points within the omega range

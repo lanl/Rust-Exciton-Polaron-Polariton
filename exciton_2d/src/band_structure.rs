@@ -5,7 +5,6 @@
 
 use crate::hamiltonian::FullHamiltonian;
 use crate::utils::{apply_symmetry, exciton_flat_index};
-use core::panic;
 use indicatif::{ProgressBar, ProgressStyle};
 use log::info;
 use matrix_ops::{ConvertFrom, Diagonalize, MatrixOps, MatrixOpsError};
@@ -374,7 +373,10 @@ where
                 }
                 Err(e) => {
                     if self.verbose {
-                        info!("Failed to load cached band structure data: {}; recalculating", e);
+                        info!(
+                            "Failed to load cached band structure data: {}; recalculating",
+                            e
+                        );
                     }
                 }
             }

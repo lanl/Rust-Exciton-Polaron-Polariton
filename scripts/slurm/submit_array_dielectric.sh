@@ -54,5 +54,3 @@ mpirun -np "${SLURM_NTASKS}" \
     --omega-max-scan 0.3 \
     --n-omega-points 100000 \
     --output-dir dielectric_scan/effective_modes
-
-rm -rf "${TARGET_DIR}"

@@ -9,7 +9,7 @@
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=0
 ####SBATCH --qos=long
-#SBATCH --array=0-15
+#SBATCH --array=0-3
 
 # set -euo pipefail
 
@@ -17,7 +17,7 @@ export RUST_BACKTRACE=full
 
 source "${HOME}/env/matrix_ops_petsc_mpi.sh"
 
-export K_N_CHUNKS=16
+export K_N_CHUNKS=4
 
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
@@ -49,5 +49,3 @@ mpirun -np "${SLURM_NTASKS}" \
     --q-max 0.001 \
     --pn-coupling 0.0 \
     --pn-n-fock 0 
-
-rm -rf "${TARGET_DIR}"

@@ -13,9 +13,9 @@ pub use stacked::{
 
 #[macro_export]
 macro_rules! plot_photon_freqs {
-    ($chart:ident,$y_min:expr, $y_max:expr,$qs:expr) => {{
+    ($chart:expr,$y_min:expr, $y_max:expr,$qs:expr) => {{
         let line_style = plotters::style::ShapeStyle {
-            color: plotters::style::RGBAColor(200, 200, 200, 0.8),
+            color: plotters::style::RGBColor(200, 200, 200).mix(0.8),
             filled: false,
             stroke_width: 1,
         };
@@ -23,12 +23,12 @@ macro_rules! plot_photon_freqs {
         const C: f64 = 137.036;
 
         let freqs: Vec<f64> = $qs.iter().map(|q| q.magnitude() * C).collect();
-        let x_range =$chart.x_range();
+        let x_range = $chart.x_range();
 
         for &freq in freqs.iter() {
             if freq >= x_range.start && freq <= x_range.end {
                 $chart.draw_series(plotters::prelude::LineSeries::new(
-                    vec![(freq,$y_min), (freq, $y_max)],
+                    vec![(freq, $y_min), (freq, $y_max)],
                     line_style.clone(),
                 ))?;
             }

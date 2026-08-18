@@ -53,7 +53,7 @@ pub fn construct_cartesian_modes(
     let per_mode = if q_values.is_empty() {
         0.0
     } else {
-        total_coupling / q_values.len() as f64
+        total_coupling / n_modes_side as f64
     };
 
     PhotonModeSet {

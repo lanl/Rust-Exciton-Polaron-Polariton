@@ -19,6 +19,18 @@ pub fn plot_color_band_structure(
     coupling: f64,
     zoomed: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    if k_points.len() < 2
+        || sym_points.is_empty()
+        || eigvals_list.is_empty()
+        || eigvals_list[0].is_empty()
+    {
+        return Err("No color band data to plot".into());
+    }
+
+    if photonic_character_list.len() != eigvals_list.len() {
+        return Err("photonic_character_list length does not match eigvals_list length".into());
+    }
+
     let dark = false;
 
     // Create x-axis for the plot (path length)

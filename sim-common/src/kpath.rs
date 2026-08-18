@@ -79,7 +79,6 @@ pub fn interpolate_segment(start: Vec2, end: Vec2, n: usize) -> Vec<Vec<f64>> {
     }
 }
 
-
 fn closed_polyline_path(vertices: &[Vec2], n_points: usize) -> Vec<Vec<f64>> {
     if n_points == 0 {
         return Vec::new();
@@ -104,10 +103,7 @@ fn closed_polyline_path(vertices: &[Vec2], n_points: usize) -> Vec<Vec<f64>> {
             let a = vertices[seg];
             let b = vertices[(seg + 1) % n_segments];
 
-            vec![
-                a[0] + t * (b[0] - a[0]),
-                a[1] + t * (b[1] - a[1]),
-            ]
+            vec![a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])]
         })
         .collect()
 }
@@ -152,10 +148,7 @@ pub fn generic_closed_path(
 
     assert!(!sym_points.is_empty(), "sym_points must not be empty");
 
-    let vertices: Vec<Vec2> = sym_points
-        .iter()
-        .map(|p| [p[0], p[1]])
-        .collect();
+    let vertices: Vec<Vec2> = sym_points.iter().map(|p| [p[0], p[1]]).collect();
 
     closed_polyline_path(&vertices, n_k_points)
 }

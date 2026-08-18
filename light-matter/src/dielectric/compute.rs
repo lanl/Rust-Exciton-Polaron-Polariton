@@ -25,13 +25,7 @@ pub struct DielectricResult {
     pub phonon_numbers: Vec<f64>,
 }
 
-/// Generates a filename for the cached diagonalization data (pp_vals and x_pp)
-/// Prefers using hand-entered effective mode parameters if available, otherwise falls back to coupling sum
-/// Generates a filename for the dielectric function data
-/// Prefers using hand-entered effective mode parameters if available, otherwise falls back to coupling sum
-/// Save the cached diagonalization data (pp_vals, x_pp, photonic_chars, phonon_numbers)
-/// Load the cached diagonalization data (pp_vals, x_pp, photonic_chars, phonon_numbers)
-/// Calculate the dielectric function from cached or newly computed pp_vals and x_pp
+/// Calculate the dielectric function from cached or newly computed pp_vals and x_pp.
 pub fn get_dielectric_function<M, B>(
     pp_config: &PPConfig,
     pp: &mut PPHamiltonian<M, B>,
