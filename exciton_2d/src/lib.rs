@@ -44,12 +44,11 @@
 //! let (rel_eigvals, rel_eigvecs, rel_pars) = system.solve_rel_hamiltonian(16);
 //!
 //! // Calculate band structure
-//! let (k_points, eigvals_list, parities_list) = system.calculate_band_structure(
+//! let (k_points, eigvals_list) = system.calculate_band_structure(
 //!     60,  // n_points
 //!     9,   // n_rel_states
 //!     16,  // n_bands
 //!     true, // recalculate_bands
-//!     0,    // select_parity (0: both, 1: even, -1: odd)
 //! );
 //! ```
 
@@ -57,6 +56,7 @@ pub mod band_structure;
 pub mod config;
 pub mod grid;
 pub mod hamiltonian;
+pub mod lattice;
 pub mod matrix_elements;
 pub mod system;
 pub mod utils;

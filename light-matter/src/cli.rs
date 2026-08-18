@@ -31,15 +31,17 @@ pub enum BandParallelModeArg {
     /// One process/rank computes all K points.
     Serial,
 
-    /// Old behavior: MPI ranks split K points independently.
-    /// Unsafe with PETSc COMM_WORLD collective eigensolvers unless using COMM_SELF.
-    KpointMpiLegacy,
-
     /// Slurm array chunks K points; all MPI ranks in each array task solve each K collectively.
     DistributedChunks,
 
     /// Merge previously computed chunk files.
     GatherChunks,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
+pub enum PhotonModeArg {
+    Cartesian,
+    Effective,
 }
 
 #[derive(Debug, Clone, Parser)]
@@ -110,6 +112,9 @@ pub struct BandstructureArgs {
     #[arg(long, value_enum, default_value_t = BandParallelModeArg::DistributedChunks)]
     pub parallel: BandParallelModeArg,
 
+    #[arg(long, value_enum, default_value_t = PhotonModeArg::Cartesian)]
+    pub photon_modes: PhotonModeArg,
+
     #[arg(long, default_value_t = true)]
     pub calculate: bool,
 
@@ -148,6 +153,18 @@ pub struct BandstructureArgs {
     #[arg(long, default_value_t = 0.001)]
     pub q_max: f64,
 
+    /// Effective-mode maximum photon frequency. Used with --photon-modes effective.
+    #[arg(long, default_value_t = 0.2)]
+    pub omega_max: f64,
+
+    /// Effective-mode frequency spacing. Used with --photon-modes effective.
+    #[arg(long, default_value_t = 1e-4)]
+    pub d_omega: f64,
+
+    /// Effective-mode reflectivity. Used with --photon-modes effective.
+    #[arg(long, default_value_t = 0.999999)]
+    pub reflectivity: f64,
+
     #[arg(long, default_value_t = 0.0)]
     pub pn_coupling: f64,
 
@@ -179,6 +196,9 @@ pub struct DielectricArgs {
     #[arg(long, default_value_t = true)]
     pub calculate: bool,
 
+    #[arg(long, value_enum, default_value_t = PhotonModeArg::Effective)]
+    pub photon_modes: PhotonModeArg,
+
     #[arg(long, default_value_t = false)]
     pub use_cached: bool,
 
@@ -205,6 +225,14 @@ pub struct DielectricArgs {
 
     #[arg(long, default_value_t = 32)]
     pub n_modes: usize,
+
+    /// Cartesian mode q cutoff. Used with --photon-modes cartesian.
+    #[arg(long, default_value_t = 0.001)]
+    pub q_max: f64,
+
+    /// Cartesian total coupling. Used with --photon-modes cartesian.
+    #[arg(long, default_value_t = 0.003)]
+    pub total_coupling: f64,
 
     /// Comma-separated reflectivity values to scan.
     #[arg(long, value_delimiter = ',', default_value = "0.0,0.999999,0.9999999")]

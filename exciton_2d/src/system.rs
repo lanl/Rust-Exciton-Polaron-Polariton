@@ -8,6 +8,7 @@ use crate::band_structure::calculate_n_colored_band_structure;
 use crate::config::ExcitonConfig;
 use crate::grid::Grid;
 use crate::hamiltonian::{FullHamiltonian, RelativeHamiltonian};
+use crate::lattice::KappaKey;
 use crate::matrix_elements::MatrixElementCalculator;
 use crate::utils::print_memory_usage;
 use crate::visualization::{plot_band_structure, plot_rel_eigenstate, plot_spectrum};
@@ -17,7 +18,6 @@ use matrix_ops::MatrixOps;
 use matrix_ops::{ConvertFrom, Diagonalize, MatrixOpsError};
 use ndarray::{Array1, Array2};
 use num_complex::Complex64;
-use ordered_float::OrderedFloat;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -53,8 +53,8 @@ pub struct Exciton2DGridSystem<M: MatrixOps> {
     pub mu: f64,
     pub grid: Grid,
     pub kappa_vectors: Vec<Vec<f64>>,
-    pub w_kappa: HashMap<(OrderedFloat<f64>, OrderedFloat<f64>), f64>,
-    pub vector_sum_to_index: HashMap<(usize, (OrderedFloat<f64>, OrderedFloat<f64>)), usize>,
+    pub w_kappa: HashMap<KappaKey, f64>,
+    pub vector_sum_to_index: HashMap<(usize, KappaKey), usize>,
     pub matrix_elem_calc: MatrixElementCalculator,
     pub rel_ham: RelativeHamiltonian,
     pub full_ham: FullHamiltonian<M>,
@@ -143,6 +143,7 @@ where
             kappa_vectors.clone(),
             vector_sum_to_index.clone(),
             w_kappa.clone(),
+            a0,
             m,
             k.clone(),
             verbose,
@@ -152,7 +153,7 @@ where
             BandStructureCalculator::new(full_ham.clone(), a0, save_dir.clone(), verbose);
 
         // Precompute potential terms
-        matrix_elem_calc.precompute_potential_terms(&w_kappa);
+        matrix_elem_calc.precompute_potential_terms(&w_kappa, a0);
 
         // Check memory usage
         if verbose {
@@ -236,102 +237,70 @@ where
         v0: f64,
         verbose: bool,
     ) -> (
-        Vec<Vec<f64>>,                                                   // kappa_vectors
-        HashMap<(OrderedFloat<f64>, OrderedFloat<f64>), f64>,            // w_kappa
-        HashMap<(usize, (OrderedFloat<f64>, OrderedFloat<f64>)), usize>, // vector_sum_to_index
+        Vec<Vec<f64>>,
+        HashMap<KappaKey, f64>,
+        HashMap<(usize, KappaKey), usize>,
     ) {
-        // Define reciprocal lattice vectors (for a 2D system)
-        let b1 = 2.0 * std::f64::consts::PI / a0; // First reciprocal lattice vector
-        let b2 = 2.0 * std::f64::consts::PI / a0; // Second reciprocal lattice vector
+        let n_max = n_kappa as i32 / 2;
 
-        // Define range for reciprocal lattice indices
-        let n_max = n_kappa as i32 / 2; // Maximum index for reciprocal lattice vectors
-
-        // Calculate all reciprocal lattice vectors κ = n1*b1 + n2*b2
+        let mut kappa_keys = Vec::new();
         let mut kappa_vectors = Vec::new();
+
         for n1 in -n_max..=n_max {
             for n2 in -n_max..=n_max {
-                kappa_vectors.push(vec![n1 as f64 * b1, n2 as f64 * b2]);
+                let key = KappaKey::new(n1, n2);
+                let vec = key.vector(a0);
+                kappa_keys.push(key);
+                kappa_vectors.push(vec![vec[0], vec[1]]);
             }
         }
 
-        // Fourier coefficients for the periodic potential
         let mut w_kappa = HashMap::new();
 
-        // Define a relative tolerance for floating-point comparisons
-        const REL_TOL: f64 = 1e-9;
-        const ABS_TOL: f64 = 1e-12;
+        for &key in &kappa_keys {
+            let first_order_x = key.n1.abs() == 1 && key.n2 == 0;
+            let first_order_y = key.n1 == 0 && key.n2.abs() == 1;
 
-        // Helper function for approximate floating-point equality
-        let approx_eq = |a: f64, b: f64| -> bool {
-            let abs_diff = (a - b).abs();
-            abs_diff < ABS_TOL || abs_diff / a.abs().max(b.abs()) < REL_TOL
-        };
+            if first_order_x || first_order_y {
+                w_kappa.insert(key, v0 / 2.0);
 
-        for vec in &kappa_vectors {
-            let kx = OrderedFloat::<f64>::from(vec[0]);
-            let ky = OrderedFloat::<f64>::from(vec[1]);
-
-            // Check if this is a first-order reciprocal lattice vector using proper comparison
-            if (approx_eq(kx.abs(), b1) && approx_eq(ky.abs(), 0.0))
-                || (approx_eq(kx.abs(), 0.0) && approx_eq(ky.abs(), b2))
-            {
-                w_kappa.insert((kx, ky), v0 / 2.0);
                 if verbose {
+                    let vec = key.vector(a0);
                     info!(
-                        "Added potential term for kappa = [{}, {}] with V = {}",
-                        kx,
-                        ky,
+                        "Added potential term for kappa index ({}, {}) = [{}, {}] with V = {}",
+                        key.n1,
+                        key.n2,
+                        vec[0],
+                        vec[1],
                         v0 / 2.0
                     );
                 }
             }
         }
 
-        // Precompute a lookup table for vector sums to indices
         if verbose {
-            info!("Building vector sum lookup table...");
+            info!("Building integer reciprocal-lattice lookup table...");
         }
 
         let start_time = Instant::now();
 
-        // Create a dictionary mapping vector tuples to their indices for fast lookup
-        let mut kappa_vector_to_index = HashMap::new();
-        for (i, vec) in kappa_vectors.iter().enumerate() {
-            kappa_vector_to_index.insert(
-                (
-                    OrderedFloat::<f64>::from(vec[0]),
-                    OrderedFloat::<f64>::from(vec[1]),
-                ),
-                i,
-            );
+        let mut key_to_index = HashMap::new();
+        for (i, &key) in kappa_keys.iter().enumerate() {
+            key_to_index.insert(key, i);
         }
 
-        // More efficient lookup table construction with proper floating-point comparisons
         let mut vector_sum_to_index = HashMap::new();
 
-        for (i, k_vec_i) in kappa_vectors.iter().enumerate() {
-            for (&(kx, ky), _) in &w_kappa {
-                // Calculate the sum vector
-                let k_vec_sum_x = k_vec_i[0] + **OrderedFloat(kx);
-                let k_vec_sum_y = k_vec_i[1] + **OrderedFloat(ky);
+        for (i, &base) in kappa_keys.iter().enumerate() {
+            for &transfer in w_kappa.keys() {
+                let target = base.add(transfer);
 
-                // Find the matching vector using proper tolerance-based comparison
-                let mut found = false;
-                for (&(vx, vy), &j) in &kappa_vector_to_index {
-                    if approx_eq(vx.into_inner(), k_vec_sum_x)
-                        && approx_eq(vy.into_inner(), k_vec_sum_y)
-                    {
-                        vector_sum_to_index.insert((i, (kx, ky)), j);
-                        found = true;
-                        break;
-                    }
-                }
-
-                if !found && verbose {
+                if let Some(&j) = key_to_index.get(&target) {
+                    vector_sum_to_index.insert((i, transfer), j);
+                } else if verbose {
                     warn!(
-                        "No matching vector found for sum: [{}, {}]",
-                        k_vec_sum_x, k_vec_sum_y
+                        "No matching reciprocal-lattice index found for ({}, {}) + ({}, {})",
+                        base.n1, base.n2, transfer.n1, transfer.n2
                     );
                 }
             }
@@ -339,7 +308,7 @@ where
 
         if verbose {
             info!(
-                "Lookup table built in {:.2} seconds.",
+                "Integer lookup table built in {:.2} seconds.",
                 start_time.elapsed().as_secs_f64()
             );
         }

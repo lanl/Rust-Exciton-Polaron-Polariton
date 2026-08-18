@@ -4,6 +4,7 @@
 //! Hamiltonians for exciton simulations.
 
 use crate::grid::Grid;
+use crate::lattice::KappaKey;
 use crate::matrix_elements::MatrixElementCalculator;
 use crate::utils::exciton_flat_index;
 
@@ -13,7 +14,6 @@ use ndarray::{Array1, Array2};
 use num_complex::Complex64;
 use std::collections::HashMap;
 // use std::path::Path;
-use ordered_float::OrderedFloat;
 use sprs::TriMat;
 use std::time::Instant;
 
@@ -430,8 +430,9 @@ pub struct FullHamiltonian<M: MatrixOps> {
     pub rel_ham: RelativeHamiltonian,
     pub matrix_elem_calc: MatrixElementCalculator,
     pub kappa_vectors: Vec<Vec<f64>>,
-    pub vector_sum_to_index: HashMap<(usize, (OrderedFloat<f64>, OrderedFloat<f64>)), usize>,
-    pub w_kappa: HashMap<(OrderedFloat<f64>, OrderedFloat<f64>), f64>,
+    pub vector_sum_to_index: HashMap<(usize, KappaKey), usize>,
+    pub w_kappa: HashMap<KappaKey, f64>,
+    pub a0: f64,
     pub m: f64,
     pub k: Vec<f64>,
     pub verbose: bool,
@@ -481,8 +482,9 @@ where
         rel_ham: RelativeHamiltonian,
         matrix_elem_calc: MatrixElementCalculator,
         kappa_vectors: Vec<Vec<f64>>,
-        vector_sum_to_index: HashMap<(usize, (OrderedFloat<f64>, OrderedFloat<f64>)), usize>,
-        w_kappa: HashMap<(OrderedFloat<f64>, OrderedFloat<f64>), f64>,
+        vector_sum_to_index: HashMap<(usize, KappaKey), usize>,
+        w_kappa: HashMap<KappaKey, f64>,
+        a0: f64,
         m: f64,
         k: Vec<f64>,
         verbose: bool,
@@ -493,6 +495,7 @@ where
             kappa_vectors,
             vector_sum_to_index,
             w_kappa,
+            a0,
             m,
             k,
             verbose,
@@ -607,9 +610,11 @@ where
         }
 
         // Calculate or load matrix elements
-        let v_rel = self
-            .matrix_elem_calc
-            .calculate_matrix_elements(&w_kappa_tuples, n_rel_states_used);
+        let v_rel = self.matrix_elem_calc.calculate_matrix_elements(
+            &w_kappa_tuples,
+            n_rel_states_used,
+            self.a0,
+        );
 
         // Build the full Hamiltonian matrix
         if self.verbose {
@@ -628,10 +633,7 @@ where
 
         // Group sparse relative-coordinate sine matrix elements by transferred kappa.
         // This avoids scanning all relative-state pairs for every CoM state.
-        let mut v_rel_by_kappa: HashMap<
-            (OrderedFloat<f64>, OrderedFloat<f64>),
-            Vec<(usize, usize, f64)>,
-        > = HashMap::new();
+        let mut v_rel_by_kappa: HashMap<KappaKey, Vec<(usize, usize, f64)>> = HashMap::new();
 
         for (&(bra_rel, ket_rel, kappa_pot_tuple), &matrix_element) in &v_rel {
             v_rel_by_kappa.entry(kappa_pot_tuple).or_default().push((

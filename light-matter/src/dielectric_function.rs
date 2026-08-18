@@ -95,7 +95,7 @@ where
         pp_config.reflectivity,
     ) {
         let total_coupling = pp_config.lm_couplings.iter().sum::<f64>();
-        
+
         format!(
             "{}/dielectric_a0{}_V0{}_nrel{}_omega0{:.6}_domega{:.1e}_omegamax{:.6}_refl{:.7}_lmcoup{:.6}_nmodes{}_pncoup{:.6}_npn{}_neig{}_gamma{:.1e}.dat",
             save_dir,

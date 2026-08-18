@@ -33,6 +33,7 @@ mpirun -np "${SLURM_NTASKS}" \
     --bind-to hwthread \
     "${TARGET_DIR}/release/light-matter" \
     dielectric \
+    --photon-modes effective \
     --a0 16.0 \
     --v0 0.05 \
     --n-kappa 7 \

@@ -1,5 +1,4 @@
 use bincode::{deserialize, serialize};
-use colored::Colorize;
 use matrix_ops::{
     ConvertFrom, DiagonalizationOptions, Diagonalize, MatrixOps, MatrixOpsError, Sqrt,
 };
@@ -14,7 +13,6 @@ use std::io::Write;
 use std::iter::Sum;
 use std::path::Path;
 use std::process::Command;
-use std::time::Instant;
 
 use crate::timed_println;
 
@@ -290,17 +288,11 @@ where
     let save_dir = "pp_data";
     std::fs::create_dir_all(save_dir).ok();
 
-    let k_points = generate_band_k_points(
-        n_k_points,
-        sym_points,
-        pp_config.e_config.a0,
-        zoomed,
-    );
+    let k_points = generate_band_k_points(n_k_points, sym_points, pp_config.e_config.a0, zoomed);
 
     let total_k_points = k_points.len();
 
-    let (start_idx, end_idx) =
-        crate::utils::chunk_bounds(total_k_points, chunk_index, n_chunks);
+    let (start_idx, end_idx) = crate::utils::chunk_bounds(total_k_points, chunk_index, n_chunks);
 
     let chunk_filename = color_band_chunk_filename(
         pp_config,
@@ -396,11 +388,11 @@ where
             chunk_photonic.clone(),
         );
 
-        chunk_data.save_to_file(&chunk_filename).map_err(|e| {
-            MatrixOpsError::Other {
+        chunk_data
+            .save_to_file(&chunk_filename)
+            .map_err(|e| MatrixOpsError::Other {
                 message: format!("Failed to save band chunk {}: {}", chunk_filename, e),
-            }
-        })?;
+            })?;
 
         timed_println!("Saved band chunk to {}", chunk_filename);
 
@@ -437,11 +429,10 @@ pub fn gather_color_band_structure_chunks(
 
         timed_println!("Loading band chunk {}", chunk_filename);
 
-        let data = ColorBandData::load_from_file(&chunk_filename).map_err(|e| {
-            MatrixOpsError::Other {
+        let data =
+            ColorBandData::load_from_file(&chunk_filename).map_err(|e| MatrixOpsError::Other {
                 message: format!("Failed to load chunk file {}: {}", chunk_filename, e),
-            }
-        })?;
+            })?;
 
         let (k, eig, phot) = data.to_results();
 
@@ -450,13 +441,7 @@ pub fn gather_color_band_structure_chunks(
         all_photonic.extend(phot);
     }
 
-    let final_filename = color_band_filename(
-        pp_config,
-        save_dir,
-        n_k_points,
-        n_eig,
-        zoomed,
-    );
+    let final_filename = color_band_filename(pp_config, save_dir, n_k_points, n_eig, zoomed);
 
     let final_data = ColorBandData::from_results(
         all_k_points.clone(),
@@ -464,379 +449,18 @@ pub fn gather_color_band_structure_chunks(
         all_photonic.clone(),
     );
 
-    final_data.save_to_file(&final_filename).map_err(|e| {
-        MatrixOpsError::Other {
-            message: format!("Failed to save gathered bandstructure {}: {}", final_filename, e),
-        }
-    })?;
+    final_data
+        .save_to_file(&final_filename)
+        .map_err(|e| MatrixOpsError::Other {
+            message: format!(
+                "Failed to save gathered bandstructure {}: {}",
+                final_filename, e
+            ),
+        })?;
 
     timed_println!("Saved gathered bandstructure to {}", final_filename);
 
     Ok((all_k_points, all_eigvals, all_photonic))
-}
-
-/// Calculate band structure with MPI parallelization (alternative implementation)
-///
-/// This version uses a simpler approach that's compatible with systems where
-/// MPI might already be initialized by other libraries (like PETSc/SLEPc).
-///
-/// It falls back to environment variables if the mpi crate has issues.
-pub fn calculate_color_band_structure_mpi<M, B>(
-    pp: &mut PPHamiltonian<M, B>,
-    n_k_points: usize,
-    n_eig: usize,
-    sym_points: &Vec<Vec<f64>>,
-    pp_config: &PPConfig,
-    use_cached: bool,
-    zoomed: bool,
-) -> Result<(Vec<Vec<f64>>, Vec<Array1<f64>>, Vec<Vec<f64>>), MatrixOpsError>
-where
-    M: MatrixOps + Diagonalize,
-    M::Scalar: Sqrt + Sum + ConvertFrom<f64> + ConvertFrom<c64>,
-    B: Boson<M>,
-{
-    use std::env;
-
-    // Debug: Print all MPI-related environment variables
-    timed_println!("\n=== MPI Environment Variables ===");
-    let mpi_vars = vec![
-        "PMI_SIZE",
-        "PMI_RANK",
-        "PMIX_SIZE",
-        "PMIX_RANK",
-        "I_MPI_SIZE",
-        "I_MPI_RANK",
-        "I_MPI_WORLD_SIZE",
-        "I_MPI_WORLD_RANK",
-        "OMPI_COMM_WORLD_SIZE",
-        "OMPI_COMM_WORLD_RANK",
-        "SLURM_NTASKS",
-        "SLURM_PROCID",
-        "SLURM_NPROCS",
-        "MPI_LOCALNRANKS",
-        "MPI_LOCALRANKID",
-    ];
-    for var in &mpi_vars {
-        match env::var(var) {
-            Ok(val) => timed_println!("  {} = {}", var, val),
-            Err(_) => timed_println!("  {} = <not set>", var),
-        }
-    }
-    timed_println!("=================================\n");
-
-    // Get MPI rank and size from environment variables
-    // Try multiple environment variable names for different MPI implementations
-    let world_size: usize = env::var("PMI_SIZE")
-        .or_else(|_| env::var("PMIX_SIZE"))
-        .or_else(|_| env::var("I_MPI_SIZE"))
-        .or_else(|_| env::var("OMPI_COMM_WORLD_SIZE"))
-        .or_else(|_| env::var("SLURM_NTASKS"))
-        .expect("Could not find MPI world size in environment variables. Tried: PMI_SIZE, PMIX_SIZE, I_MPI_SIZE, OMPI_COMM_WORLD_SIZE, SLURM_NTASKS")
-        .parse()
-        .expect("Failed to parse world size as integer");
-
-    let rank: usize = env::var("PMI_RANK")
-        .or_else(|_| env::var("PMIX_RANK"))
-        .or_else(|_| env::var("I_MPI_RANK"))
-        .or_else(|_| env::var("OMPI_COMM_WORLD_RANK"))
-        .or_else(|_| env::var("SLURM_PROCID"))
-        .expect("Could not find MPI rank in environment variables. Tried: PMI_RANK, PMIX_RANK, I_MPI_RANK, OMPI_COMM_WORLD_RANK, SLURM_PROCID")
-        .parse()
-        .expect("Failed to parse rank as integer");
-
-    if rank == 0 {
-        timed_println!("Running with {} MPI ranks (simple mode)", world_size);
-    }
-
-    // Start timer on rank 0
-    let start_time = if rank == 0 {
-        Some(Instant::now())
-    } else {
-        None
-    };
-
-    let save_dir = "pp_data".to_string();
-    std::fs::create_dir_all(&save_dir).unwrap_or_else(|_| {});
-
-    // Generate filename for the color band structure data
-    let mut filename = format!(
-        "{}/color_band_a0{}_V0{}_nrel{}_nbands{}_npoints{}_phcoup{}_nmodes{}_pncoup{}_npn{}_neig{}",
-        save_dir,
-        pp_config.e_config.a0,
-        pp_config.e_config.v0,
-        pp_config.n_rel,
-        pp_config.n_bands,
-        n_k_points,
-        pp_config.lm_couplings.iter().sum::<f64>(),
-        pp.polariton.photon.boson.get_modes().len(),
-        pp_config.pn_coupling,
-        pp_config.pn_n_fock,
-        n_eig
-    );
-
-    filename += if zoomed { "_zoomed.bin" } else { ".bin" };
-
-    // Check if cached data exists and should be used (only rank 0)
-    if use_cached && Path::new(&filename).exists() {
-        if rank == 0 {
-            timed_println!("Loading cached color band structure data from {}", filename);
-            match ColorBandData::load_from_file(&filename) {
-                Ok(data) => return Ok(data.to_results()),
-                Err(e) => timed_println!("Failed to load cached data: {}, recalculating...", e),
-            }
-        } else {
-            return Ok((vec![], vec![], vec![]));
-        }
-    }
-
-    // Calculate points per segment of the path
-    let points_per_seg = n_k_points / sym_points.len();
-
-    // Generate k-points along the path
-    let k_points: Vec<Vec<f64>>;
-    if zoomed {
-        let start = vec![0., 0.];
-        let end = vec![PI / pp_config.e_config.a0 / 6., 0.];
-
-        timed_println!(
-            "Performing zoomed in band structure from k = {:?} to {:?}",
-            start,
-            end
-        );
-        k_points = (0..n_k_points)
-            .map(|k_ind| {
-                let t_frac = k_ind as f64 / (n_k_points - 1) as f64;
-
-                vec![
-                    start[0] + t_frac * (end[0] - start[0]),
-                    start[1] + t_frac * (end[1] - start[1]),
-                ]
-            })
-            .collect()
-    } else {
-        k_points = sym_points
-            .iter()
-            .enumerate()
-            .flat_map(|(sym_ind, sym_point)| {
-                let sym_ind2 = (sym_ind + 1) % sym_points.len();
-                (0..points_per_seg).map(move |t| {
-                    // Interpolate between symmetry points
-                    let t_frac = t as f64 / (points_per_seg - 1) as f64;
-                    let x = sym_point[0] + t_frac * (sym_points[sym_ind2][0] - sym_point[0]);
-                    let y = sym_point[1] + t_frac * (sym_points[sym_ind2][1] - sym_point[1]);
-
-                    vec![x, y]
-                })
-            })
-            .collect();
-    }
-
-    // Distribute k-points across ranks
-    let total_k_points = k_points.len();
-    let k_per_rank = (total_k_points + world_size - 1) / world_size;
-    let start_idx = rank * k_per_rank;
-    let end_idx = ((rank + 1) * k_per_rank).min(total_k_points);
-
-    let my_k_points: Vec<(usize, Vec<f64>)> = k_points[start_idx..end_idx]
-        .iter()
-        .enumerate()
-        .map(|(local_idx, k)| (start_idx + local_idx, k.clone()))
-        .collect();
-
-    if rank == 0 {
-        timed_println!(
-            "Processing {} k-points across {} ranks",
-            total_k_points,
-            world_size
-        );
-    }
-    timed_println!(
-        "Rank {}: Processing k-points {} to {}",
-        rank,
-        start_idx,
-        end_idx - 1
-    );
-
-    // Calculate eigenvalues and photonic character for this rank's k-points
-    let mut local_results: Vec<(usize, Array1<f64>, Vec<f64>)> =
-        Vec::with_capacity(my_k_points.len());
-    let mut prev_eigvecs: Option<Array2<c64>> = None;
-
-    for (global_idx, k) in my_k_points.iter() {
-        // pp.update_k(k.clone());
-        let h_pp = pp.build_pp_hamiltonian(Some(k.clone()))?;
-
-        let mut option = DiagonalizationOptions::smallest_real(n_eig);
-        option.initial_guess = prev_eigvecs.clone();
-
-        let result = h_pp.diagonalize(option)?;
-
-        let (eigvals, eigvecs) = result.into_arrays_hermitian();
-
-        let photonic_character: Vec<f64> = (0..n_eig)
-            .map(|i| calculate_photonic_character(&pp, &eigvecs.column(i).to_owned()))
-            .collect();
-
-        prev_eigvecs = Some(eigvecs);
-        local_results.push((*global_idx, eigvals, photonic_character));
-
-        // Calculate ETA on rank 0
-        if let Some(start) = start_time {
-            let elapsed_secs = start.elapsed().as_secs_f64();
-            let completed_k_points = local_results.len();
-            if completed_k_points > 0 {
-                let avg_time_per_k_point = elapsed_secs / completed_k_points as f64;
-                let remaining_k_points_this_rank = my_k_points.len() - completed_k_points;
-                let eta = avg_time_per_k_point * remaining_k_points_this_rank as f64;
-
-                if rank == 0 {
-                    let eta_str = format_time(eta);
-                    let elapsed_str = format_time(elapsed_secs);
-
-                    timed_println!(
-                        "\n\n{}\n⏱️ ETA: {} | Rank: {} | K-point: {}/{} | Elapsed: {}\n\n",
-                        "ETA UPDATE".red(),
-                        eta_str.red(),
-                        rank,
-                        completed_k_points,
-                        my_k_points.len(),
-                        elapsed_str.red()
-                    );
-                }
-            }
-        }
-    }
-
-    timed_println!("Rank {}: Completed {} k-points", rank, local_results.len());
-
-    // Save local results to temporary files (file-based communication)
-    // Make temp_dir unique per job using SLURM_JOB_ID or process ID
-    let job_id = env::var("SLURM_JOB_ID")
-        .or_else(|_| env::var("SLURM_JOBID"))
-        .unwrap_or_else(|_| std::process::id().to_string());
-    let temp_dir = format!("{}/mpi_temp_{}", save_dir, job_id);
-    std::fs::create_dir_all(&temp_dir).unwrap_or_else(|_| {});
-    let temp_filename = format!("{}/rank_{}.bin", temp_dir, rank);
-
-    let local_data = ColorBandData::from_results(
-        local_results
-            .iter()
-            .map(|(idx, _, _)| k_points[*idx].clone())
-            .collect(),
-        local_results
-            .iter()
-            .map(|(_, eigvals, _)| eigvals.clone())
-            .collect(),
-        local_results
-            .iter()
-            .map(|(_, _, photonic)| photonic.clone())
-            .collect(),
-    );
-
-    if let Err(e) = local_data.save_to_file(&temp_filename) {
-        timed_println!("Rank {}: Failed to save temporary data: {}", rank, e);
-    }
-
-    // Improved barrier synchronization with unique job-specific directory
-    let barrier_dir = format!("{}/barriers", temp_dir);
-    std::fs::create_dir_all(&barrier_dir).unwrap();
-    let barrier_file = format!("{}/rank_{}.done", barrier_dir, rank);
-
-    // Write rank completion marker with timestamp to avoid stale files
-    std::fs::write(
-        &barrier_file,
-        format!(
-            "{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_secs()
-        ),
-    )
-    .unwrap();
-
-    if rank == 0 {
-        timed_println!("Rank 0: Waiting for all ranks to finish...");
-        let mut last_count = 0;
-        loop {
-            let mut completed_count = 0;
-            for r in 0..world_size {
-                let barrier_check = format!("{}/rank_{}.done", barrier_dir, r);
-                if Path::new(&barrier_check).exists() {
-                    completed_count += 1;
-                }
-            }
-            if completed_count != last_count {
-                timed_println!(
-                    "Rank 0: {} of {} ranks completed",
-                    completed_count,
-                    world_size
-                );
-                last_count = completed_count;
-            }
-            if completed_count == world_size {
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(500));
-        }
-        timed_println!("Rank 0: All ranks finished, gathering results...");
-    }
-
-    // Gather results on rank 0
-    if rank == 0 {
-        let mut all_results: Vec<(usize, Array1<f64>, Vec<f64>)> = Vec::with_capacity(n_k_points);
-
-        for r in 0..world_size {
-            let rank_file = format!("{}/rank_{}.bin", temp_dir, r);
-            if let Ok(rank_data) = ColorBandData::load_from_file(&rank_file) {
-                let (_, eigvals, photonic) = rank_data.to_results();
-                let start = r * k_per_rank;
-                let _end = ((r + 1) * k_per_rank).min(n_k_points);
-
-                for (local_idx, (eigval, phot)) in eigvals.iter().zip(photonic.iter()).enumerate() {
-                    let global_idx = start + local_idx;
-                    if global_idx < n_k_points {
-                        all_results.push((global_idx, eigval.clone(), phot.clone()));
-                    }
-                }
-            }
-
-            // Progress update (no ETA during gathering)
-            if r % 1 == 0 {
-                timed_println!(
-                    "Rank 0: Gathered results from rank {}/{}",
-                    r + 1,
-                    world_size
-                );
-            }
-        }
-
-        all_results.sort_by_key(|(idx, _, _)| *idx);
-
-        let mut sorted_eigvals = vec![Array1::<f64>::zeros(0); total_k_points];
-        let mut sorted_photonic = vec![Vec::<f64>::new(); total_k_points];
-
-        for (idx, eigvals, photonic) in all_results {
-            sorted_eigvals[idx] = eigvals;
-            sorted_photonic[idx] = photonic;
-        }
-
-        let band_data = ColorBandData::from_results(
-            k_points.clone(),
-            sorted_eigvals.clone(),
-            sorted_photonic.clone(),
-        );
-        match band_data.save_to_file(&filename) {
-            Ok(_) => timed_println!("Color band structure data saved to {}", filename),
-            Err(e) => timed_println!("Failed to save color band structure data: {}", e),
-        }
-
-        let _ = std::fs::remove_dir_all(&temp_dir);
-
-        Ok((k_points, sorted_eigvals, sorted_photonic))
-    } else {
-        Ok((vec![], vec![], vec![]))
-    }
 }
 
 /// Plot band structure with color-coded photonic character using gnuplot
@@ -1093,12 +717,4 @@ pub fn plot_color_band_structure(
 
     timed_println!("Band structure plot saved to {}", save_path);
     Ok(())
-}
-
-fn format_time(secs: f64) -> String {
-    let hours = (secs / 3600.0).floor() as u64;
-    let minutes = ((secs % 3600.0) / 60.0).floor() as u64;
-    let seconds = (secs % 60.0).round() as u64;
-
-    format!("{} hrs {} min {:.2} sec", hours, minutes, seconds)
 }

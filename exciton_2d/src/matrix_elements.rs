@@ -18,10 +18,10 @@
 //! This separation lets the matrix-element calculator work with real numbers,
 //! while the Hamiltonian builder handles the complex prefactor and CoM momentum shift.
 use crate::grid::Grid;
+use crate::lattice::KappaKey;
 use crate::utils::fast_matrix_element_calc;
 use log::{info, warn};
 use ndarray::Array2;
-use ordered_float::OrderedFloat;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
@@ -37,8 +37,7 @@ pub struct MatrixElementCalculator {
     grid: Grid,
     save_dir: String,
     recalculate: bool,
-    matrix_element_cache:
-        Arc<RwLock<HashMap<(usize, usize, (OrderedFloat<f64>, OrderedFloat<f64>)), f64>>>,
+    matrix_element_cache: Arc<RwLock<HashMap<(usize, usize, KappaKey), f64>>>,
     precomputed: Arc<RwLock<HashMap<String, Array2<f64>>>>,
     cached_eigvecs: Arc<RwLock<Option<Array2<f64>>>>,
     pub verbose: bool,
@@ -74,10 +73,7 @@ impl MatrixElementCalculator {
     ///
     /// # Arguments
     /// * `w_kappa` - Map of reciprocal lattice vectors to potential coefficients
-    pub fn precompute_potential_terms(
-        &self,
-        w_kappa: &HashMap<(OrderedFloat<f64>, OrderedFloat<f64>), f64>,
-    ) {
+    pub fn precompute_potential_terms(&self, w_kappa: &HashMap<KappaKey, f64>, a0: f64) {
         // Precompute x and y grid points for potential calculation
         let mut pre = self.precomputed.write().unwrap();
 
@@ -94,7 +90,8 @@ impl MatrixElementCalculator {
         pre.insert("y_grid".to_string(), y_grid);
 
         // Precompute potential terms for common kappa values
-        for &(kx, ky) in w_kappa.keys() {
+        for &kappa_key in w_kappa.keys() {
+            let [kx, ky] = kappa_key.vector(a0);
             let mut sin_term = Array2::zeros((self.grid.grid_size, self.grid.grid_size));
 
             for iy in 0..self.grid.grid_size {
@@ -140,9 +137,10 @@ impl MatrixElementCalculator {
     /// The matrix element <i|sin(kappa·r)|j> (real)
     pub fn cached_potential_matrix_element(
         &self,
-        kappa_pot: (OrderedFloat<f64>, OrderedFloat<f64>),
+        kappa_pot: KappaKey,
         i: usize,
         j: usize,
+        a0: f64,
     ) -> f64 {
         let cache_key = (i, j, kappa_pot);
 
@@ -155,7 +153,8 @@ impl MatrixElementCalculator {
             .as_ref()
             .expect("Eigenvectors must be calculated before using cached matrix elements");
 
-        let sin_term_key = format!("sin_term_{:.6}_{:.6}", kappa_pot.0.0, kappa_pot.1.0);
+        let [kx, ky] = kappa_pot.vector(a0);
+        let sin_term_key = format!("sin_term_{:.6}_{:.6}", kx, ky);
 
         let sin_term = {
             let precomputed = self.precomputed.read().unwrap();
@@ -172,7 +171,7 @@ impl MatrixElementCalculator {
                         let x = self.grid.x[ix];
                         let y = self.grid.y[iy];
 
-                        sin_term[[iy, ix]] = ((kappa_pot.0.0 * x + kappa_pot.1.0 * y) / 2.0).sin();
+                        sin_term[[iy, ix]] = ((kx * x + ky * y) / 2.0).sin();
                     }
                 }
 
@@ -226,9 +225,10 @@ impl MatrixElementCalculator {
     /// The matrix element <i|sin(kappa·r)|j> (real)
     fn _calculate_matrix_element_directly(
         &self,
-        kappa_pot: (OrderedFloat<f64>, OrderedFloat<f64>),
+        kappa_pot: KappaKey,
         i: usize,
         j: usize,
+        a0: f64,
         eigvecs: &Array2<f64>,
     ) -> f64 {
         // Get the eigenvectors for states i and j
@@ -245,13 +245,14 @@ impl MatrixElementCalculator {
 
         // Calculate the sine term
         let mut sin_term = Array2::zeros((self.grid.grid_size, self.grid.grid_size));
+        let [kx, ky] = kappa_pot.vector(a0);
 
         for iy in 0..self.grid.grid_size {
             for ix in 0..self.grid.grid_size {
                 let x = self.grid.x[ix];
                 let y = self.grid.y[iy];
 
-                sin_term[[iy, ix]] = ((kappa_pot.0.0 * x + kappa_pot.1.0 * y) / 2.0).sin();
+                sin_term[[iy, ix]] = ((kx * x + ky * y) / 2.0).sin();
             }
         }
 
@@ -281,12 +282,8 @@ impl MatrixElementCalculator {
         j: usize,
         rel_eigvecs: &Array2<f64>,
     ) -> f64 {
-        let kappa_pot_tuple = (OrderedFloat(kappa_pot[0]), OrderedFloat(kappa_pot[1]));
-        let cache_key = (i, j, kappa_pot_tuple);
-
-        if let Some(&result) = self.matrix_element_cache.read().unwrap().get(&cache_key) {
-            return result;
-        }
+        // Direct float-vector path intentionally bypasses the integer-key cache.
+        // Prefer the KappaKey-based cached path for lattice-generated vectors.
 
         // Get the eigenvectors for states i and j
         let psi_i: Array2<f64> = rel_eigvecs
@@ -324,12 +321,6 @@ impl MatrixElementCalculator {
         let matrix_element =
             fast_matrix_element_calc(psi_i.view(), psi_j.view(), sin_term.view(), self.grid.dx);
 
-        // Cache the result
-        self.matrix_element_cache
-            .write()
-            .unwrap()
-            .insert(cache_key, matrix_element);
-
         matrix_element
     }
 
@@ -350,9 +341,10 @@ impl MatrixElementCalculator {
     /// A map from (i, j, kappa) to the corresponding matrix element <i|sin(kappa·r)|j> (real)
     pub fn calculate_matrix_elements(
         &self,
-        w_kappa_tuples: &HashMap<(OrderedFloat<f64>, OrderedFloat<f64>), f64>,
+        w_kappa_tuples: &HashMap<KappaKey, f64>,
         n_rel_states: usize,
-    ) -> HashMap<(usize, usize, (OrderedFloat<f64>, OrderedFloat<f64>)), f64> {
+        a0: f64,
+    ) -> HashMap<(usize, usize, KappaKey), f64> {
         let matrix_elements_filename = format!(
             "{}/matrix_elements_grid{}_box{}_nrel{}.json",
             self.save_dir, self.grid.grid_size, self.grid.box_size, n_rel_states
@@ -372,7 +364,7 @@ impl MatrixElementCalculator {
             for i in 0..n_rel_states {
                 for j in i..n_rel_states {
                     let matrix_element =
-                        self.cached_potential_matrix_element(kappa_pot_tuple, i, j);
+                        self.cached_potential_matrix_element(kappa_pot_tuple, i, j, a0);
 
                     if matrix_element.abs() > 1e-12 {
                         v_rel.insert((i, j, kappa_pot_tuple), matrix_element);

@@ -23,7 +23,33 @@ all_sources*
 /.cargo/
 /.vscode/
 /crates/
+/_old/
 
 # Exception: Keep tracking rust directory
 !/light-matter/src/**
 !/exciton/src/**
+
+/target/
+/target_*/
+/.cargo/config.toml
+
+# generated data/cache
+/saved_data/
+/saved_data_lm/
+/pp_data/
+/gnuplot_data/
+/dielectric_scan/
+/output_figures/
+/logs/
+
+# temp/cache files
+*.tmp.*
+*.profraw
+
+# generated source dumps
+/all_sources*.md
+
+# editor/system
+.DS_Store
+.vscode/
+.idea/

@@ -399,11 +399,7 @@ pub fn quantize_f64_for_hash(x: f64) -> i64 {
         );
     }
 
-    if q == 0.0 {
-        0
-    } else {
-        q as i64
-    }
+    if q == 0.0 { 0 } else { q as i64 }
 }
 
 pub fn hash_quantized_f64<H: std::hash::Hasher>(x: f64, hasher: &mut H) {

@@ -33,6 +33,7 @@ export RAYON_NUM_THREADS=1
     --n-ex-eig 32 \
     --total-coupling 0.003 \
     --omega-0 0.15 \
+    --photon-modes cartesian \
     --n-modes 23 \
     --q-max 0.001 \
     --pn-coupling 0.0 \

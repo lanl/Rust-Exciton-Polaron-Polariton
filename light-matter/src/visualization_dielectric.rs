@@ -13,18 +13,18 @@
 //! 3. `plot_dielectric_stacked_phonon` – creates a multi-layer stacked area plot
 //!    showing contributions from each phonon Fock state (0, 1, 2, ..., n_fock).
 
+use crate::dielectric_function;
+use crate::hamiltonians::{PPHamiltonian, SingExBosons};
 use crate::plot_photon_freqs;
 use crate::timed_println;
+use crate::utils::PPConfig;
 use crate::utils::Vector3D;
+use exciton_2d::ExcitonConfig;
+use matrix_ops::ComposedOperator;
 use ndarray::Array1;
 use ndarray_linalg::c64;
 use plotters::prelude::*;
 use std::f64::consts::PI;
-use crate::hamiltonians::{PPHamiltonian, SingExBosons};
-use exciton_2d::ExcitonConfig;
-use matrix_ops::ComposedOperator;
-use crate::utils::PPConfig;
-use crate::dielectric_function;
 
 /// Compute the weighted‑average colour fields for the dielectric function.
 ///
