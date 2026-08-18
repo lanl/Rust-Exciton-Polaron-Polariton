@@ -1,5 +1,5 @@
 pub mod app;
-pub mod band_structure;
+pub mod bands;
 pub mod cli;
 pub mod config;
 pub mod dielectric;
