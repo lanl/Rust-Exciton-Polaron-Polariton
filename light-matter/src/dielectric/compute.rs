@@ -493,7 +493,7 @@ where
         );
     }
 
-    let mut photon_character = bands::calculate_photonic_character(&pp, &vec0.to_owned());
+    let mut photon_character = bands::calculate_photonic_character(pp, &vec0.to_owned());
     let mut ground_state_index = 0;
 
     while photon_character > 0.1 {
@@ -504,7 +504,7 @@ where
             );
         }
         vec0 = pp_vecs.column(ground_state_index);
-        photon_character = bands::calculate_photonic_character(&pp, &vec0.to_owned());
+        photon_character = bands::calculate_photonic_character(pp, &vec0.to_owned());
     }
 
     // We store the magnitude of the scalar transition dipole,
@@ -561,7 +561,7 @@ where
 
         // Photonic character: sum_i <ψ|a_i† a_i|ψ>
         photonic_chars.push(bands::calculate_photonic_character(
-            &pp,
+            pp,
             &pp_vecs.column(idx).to_owned(),
         ));
 

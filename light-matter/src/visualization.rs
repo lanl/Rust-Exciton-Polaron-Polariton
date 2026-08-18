@@ -750,12 +750,7 @@ pub fn plot_band_structure(
         root.fill(background).unwrap();
 
         // Create x-axis for the plot (path length)
-        let mut x = vec![0.0; k_points.len()];
-        for i in 1..k_points.len() {
-            let dx = k_points[i][0] - k_points[i - 1][0];
-            let dy = k_points[i][1] - k_points[i - 1][1];
-            x[i] = x[i - 1] + (dx * dx + dy * dy).sqrt();
-        }
+        let x = sim_common::kpath::path_distances(k_points);
 
         let dx = k_points[1][0] - k_points[0][0];
 

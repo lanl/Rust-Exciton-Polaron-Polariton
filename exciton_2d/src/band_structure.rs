@@ -120,50 +120,8 @@ where
         }
     }
 
-    // Define high-symmetry points in the Brillouin zone
-    // For a 2D square lattice:
-    let b1 = 2.0 * std::f64::consts::PI / a0; // Reciprocal lattice constant
-
-    // High-symmetry points
-    let gamma = vec![0.0, 0.0]; // Γ point (center of BZ)
-    let m = vec![b1 / 2.0, b1 / 2.0]; // M point (corner of BZ)
-    let k = vec![b1 / 2.0, 0.0]; // K point (edge midpoint of BZ)
-
-    // Create segments of the path
-    let points_per_segment = n_points / 3;
-
-    // Γ → K
-    let mut segment1 = Vec::new();
-    for t in 0..points_per_segment {
-        let t_frac = t as f64 / (points_per_segment - 1) as f64;
-        let x = gamma[0] + t_frac * (k[0] - gamma[0]);
-        let y = gamma[1] + t_frac * (k[1] - gamma[1]);
-        segment1.push(vec![x, y]);
-    }
-
-    // K → M
-    let mut segment2 = Vec::new();
-    for t in 0..points_per_segment {
-        let t_frac = t as f64 / (points_per_segment - 1) as f64;
-        let x = k[0] + t_frac * (m[0] - k[0]);
-        let y = k[1] + t_frac * (m[1] - k[1]);
-        segment2.push(vec![x, y]);
-    }
-
-    // M → Γ
-    let mut segment3 = Vec::new();
-    for t in 0..points_per_segment {
-        let t_frac = t as f64 / (points_per_segment - 1) as f64;
-        let x = m[0] + t_frac * (gamma[0] - m[0]);
-        let y = m[1] + t_frac * (gamma[1] - m[1]);
-        segment3.push(vec![x, y]);
-    }
-
-    // Combine all segments
-    let mut k_points = Vec::new();
-    k_points.extend(segment1);
-    k_points.extend(segment2);
-    k_points.extend(segment3);
+    // Generate Γ → X → M → Γ path for a square lattice.
+    let k_points = sim_common::kpath::square_lattice_path(a0, n_points);
 
     // Use symmetry to reduce calculations
     // For a square lattice, we have 8 symmetry operations
@@ -412,50 +370,8 @@ where
             panic!("Loading data not implemented yet");
         }
 
-        // Define high-symmetry points in the Brillouin zone
-        // For a 2D square lattice:
-        let b1 = 2.0 * std::f64::consts::PI / self.a0; // Reciprocal lattice constant
-
-        // High-symmetry points
-        let gamma = vec![0.0, 0.0]; // Γ point (center of BZ)
-        let m = vec![b1 / 2.0, b1 / 2.0]; // M point (corner of BZ)
-        let k = vec![b1 / 2.0, 0.0]; // K point (edge midpoint of BZ)
-
-        // Create segments of the path
-        let points_per_segment = n_points / 3;
-
-        // Γ → K
-        let mut segment1 = Vec::new();
-        for t in 0..points_per_segment {
-            let t_frac = t as f64 / (points_per_segment - 1) as f64;
-            let x = gamma[0] + t_frac * (k[0] - gamma[0]);
-            let y = gamma[1] + t_frac * (k[1] - gamma[1]);
-            segment1.push(vec![x, y]);
-        }
-
-        // K → M
-        let mut segment2 = Vec::new();
-        for t in 0..points_per_segment {
-            let t_frac = t as f64 / (points_per_segment - 1) as f64;
-            let x = k[0] + t_frac * (m[0] - k[0]);
-            let y = k[1] + t_frac * (m[1] - k[1]);
-            segment2.push(vec![x, y]);
-        }
-
-        // M → Γ
-        let mut segment3 = Vec::new();
-        for t in 0..points_per_segment {
-            let t_frac = t as f64 / (points_per_segment - 1) as f64;
-            let x = m[0] + t_frac * (gamma[0] - m[0]);
-            let y = m[1] + t_frac * (gamma[1] - m[1]);
-            segment3.push(vec![x, y]);
-        }
-
-        // Combine all segments
-        let mut k_points = Vec::new();
-        k_points.extend(segment1);
-        k_points.extend(segment2);
-        k_points.extend(segment3);
+        // Generate Γ → X → M → Γ path for a square lattice.
+        let k_points = sim_common::kpath::square_lattice_path(self.a0, n_points);
 
         // Use symmetry to reduce calculations
         // For a square lattice, we have 8 symmetry operations

@@ -364,14 +364,7 @@ impl RelativeHamiltonian {
     /// # Returns
     /// * Value of the polynomial at x
     fn eval_laguerre(&self, n: i32, alpha: i32, x: f64) -> f64 {
-        // Simple implementation of associated Laguerre polynomial
-        // In a real implementation, we would use a more efficient algorithm
-        let mut result = 0.0;
-        for i in 0..=n {
-            let binomial = self.binomial(n + alpha, n - i);
-            result += binomial as f64 * (-x).powi(i) / self.factorial(i) as f64;
-        }
-        result
+        crate::relative::laguerre::laguerre_assoc(n, alpha, x)
     }
 
     /// Computes the factorial of n
@@ -382,40 +375,7 @@ impl RelativeHamiltonian {
     /// # Returns
     /// * n!
     fn factorial(&self, n: i32) -> u64 {
-        if n <= 1 {
-            return 1;
-        }
-        let mut result = 1;
-        for i in 2..=n {
-            result *= i as u64;
-        }
-        result
-    }
-
-    /// Computes the binomial coefficient (n choose k)
-    ///
-    /// # Arguments
-    /// * `n` - Upper parameter
-    /// * `k` - Lower parameter
-    ///
-    /// # Returns
-    /// * Binomial coefficient n choose k
-    fn binomial(&self, n: i32, k: i32) -> u64 {
-        if k < 0 || k > n {
-            return 0;
-        }
-        if k == 0 || k == n {
-            return 1;
-        }
-
-        // Use symmetry to reduce computation
-        let k = std::cmp::min(k, n - k);
-
-        let mut result = 1;
-        for i in 0..k {
-            result = result * (n - i) as u64 / (i + 1) as u64;
-        }
-        result
+        crate::relative::laguerre::factorial(n)
     }
 }
 

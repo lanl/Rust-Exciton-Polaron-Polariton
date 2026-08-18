@@ -24,7 +24,8 @@ macro_rules! timed_println {
 #[macro_export]
 macro_rules! timed_println_rank0 {
     ($($arg:tt)*) => {{
-        if sim_common::mpi::is_mpi_rank0_env() {$crate::timed_println!($($arg)*);
+        if sim_common::mpi::is_mpi_rank0_env() {
+            $crate::timed_println!($($arg)*);
         }
     }};
 }

@@ -157,12 +157,7 @@ pub fn plot_band_structure(
         root.fill(&WHITE).unwrap();
 
         // Create x-axis for the plot (path length)
-        let mut x = vec![0.0; k_points.len()];
-        for i in 1..k_points.len() {
-            let dx = k_points[i][0] - k_points[i - 1][0];
-            let dy = k_points[i][1] - k_points[i - 1][1];
-            x[i] = x[i - 1] + (dx * dx + dy * dy).sqrt();
-        }
+        let x = sim_common::kpath::path_distances(k_points);
 
         // Define the high-symmetry points
         let _b1 = 2.0 * std::f64::consts::PI / a0;
@@ -281,12 +276,7 @@ pub fn plot_n_colored_band_structure(
     let dark = false;
 
     // Create x-axis for the plot (path length)
-    let mut x = vec![0.0; k_points.len()];
-    for i in 1..k_points.len() {
-        let dx = k_points[i][0] - k_points[i - 1][0];
-        let dy = k_points[i][1] - k_points[i - 1][1];
-        x[i] = x[i - 1] + (dx * dx + dy * dy).sqrt();
-    }
+    let x = sim_common::kpath::path_distances(k_points);
 
     // Define the high-symmetry points
     let points_per_segment = k_points.len() / 3;
