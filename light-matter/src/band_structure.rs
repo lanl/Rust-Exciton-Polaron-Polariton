@@ -1,11 +1,8 @@
-use bincode::{deserialize, serialize};
 use matrix_ops::{
     ConvertFrom, DiagonalizationOptions, Diagonalize, MatrixOps, MatrixOpsError, Sqrt,
 };
 use ndarray::{Array1, Array2, s};
 use ndarray_linalg::c64;
-use serde::{Deserialize, Serialize};
-use std::error::Error;
 use std::f64::EPSILON;
 use std::f64::consts::PI;
 use std::fs::File;
@@ -61,61 +58,7 @@ where
     photonic_prob / total_prob
 }
 
-/// Data structure for saving/loading color band structure data
-#[derive(Serialize, Deserialize)]
-pub struct ColorBandData {
-    pub k_points: Vec<Vec<f64>>,
-    pub eigenvalues: Vec<Vec<f64>>, // Flattened Array1 to make serialization easier
-    pub photonic_character: Vec<Vec<f64>>,
-}
-
-impl ColorBandData {
-    /// Convert from calculation results to serializable format
-    pub fn from_results(
-        k_points: Vec<Vec<f64>>,
-        eigenvalues: Vec<Array1<f64>>,
-        photonic_character: Vec<Vec<f64>>,
-    ) -> Self {
-        // Convert Array1 to Vec for serialization
-        let eigenvalues_vec: Vec<Vec<f64>> = eigenvalues.iter().map(|arr| arr.to_vec()).collect();
-
-        Self {
-            k_points,
-            eigenvalues: eigenvalues_vec,
-            photonic_character,
-        }
-    }
-
-    /// Convert back to calculation result format
-    pub fn to_results(&self) -> (Vec<Vec<f64>>, Vec<Array1<f64>>, Vec<Vec<f64>>) {
-        // Convert Vec back to Array1
-        let eigenvalues: Vec<Array1<f64>> = self
-            .eigenvalues
-            .iter()
-            .map(|vec| Array1::from_vec(vec.clone()))
-            .collect();
-
-        (
-            self.k_points.clone(),
-            eigenvalues,
-            self.photonic_character.clone(),
-        )
-    }
-
-    /// Save data to file
-    pub fn save_to_file(&self, filename: &str) -> Result<(), Box<dyn Error>> {
-        let data = serialize(&self)?;
-        crate::utils::atomic_write(filename, &data)?;
-        Ok(())
-    }
-
-    /// Load data from file
-    pub fn load_from_file(filename: &str) -> Result<Self, Box<dyn Error>> {
-        let data = std::fs::read(filename)?;
-        let band_data: Self = deserialize(&data)?;
-        Ok(band_data)
-    }
-}
+pub type ColorBandData = sim_common::data::ColoredBandData;
 
 pub fn load_color_band_structure<M, B: Boson<M>>(
     pp: &PPHamiltonian<M, B>,

@@ -5,108 +5,17 @@
 
 use crate::hamiltonian::FullHamiltonian;
 use crate::utils::{apply_symmetry, exciton_flat_index};
-use bincode::{deserialize, serialize};
 use core::panic;
 use indicatif::{ProgressBar, ProgressStyle};
 use log::info;
 use matrix_ops::{ConvertFrom, Diagonalize, MatrixOps, MatrixOpsError};
 use ndarray::{Array1, Array2};
 use num_complex::Complex64;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::error::Error;
 use std::path::Path;
 use std::time::Instant;
 
-/// Data structure for saving/loading band structure data with n-expectation values
-///
-/// This struct provides serialization and deserialization functionality for band structure
-/// data, including eigenvalues and n-expectation values at each k-point. It handles
-/// conversion between the serializable format and the format used in calculations.
-#[derive(Serialize, Deserialize)]
-pub struct ColorBandData {
-    pub k_points: Vec<Vec<f64>>,
-    pub eigenvalues: Vec<Vec<f64>>, // Flattened Array1 to make serialization easier
-    pub n_expectation: Vec<Vec<f64>>,
-}
-
-impl ColorBandData {
-    /// Creates a new ColorBandData instance from calculation results
-    ///
-    /// # Arguments
-    /// * `k_points` - List of k-points along the path in the Brillouin zone
-    /// * `eigenvalues` - List of eigenvalues at each k-point
-    /// * `n_expectation` - List of n-expectation values at each k-point
-    ///
-    /// # Returns
-    /// A new ColorBandData instance containing the provided data
-    /// Convert from calculation results to serializable format
-    pub fn from_results(
-        k_points: Vec<Vec<f64>>,
-        eigenvalues: Vec<Array1<f64>>,
-        n_expectation: Vec<Vec<f64>>,
-    ) -> Self {
-        // Convert Array1 to Vec for serialization
-        let eigenvalues_vec: Vec<Vec<f64>> = eigenvalues.iter().map(|arr| arr.to_vec()).collect();
-
-        Self {
-            k_points,
-            eigenvalues: eigenvalues_vec,
-            n_expectation,
-        }
-    }
-
-    /// Convert back to calculation result format
-    /// Converts the stored data back to the format used in calculations
-    ///
-    /// # Returns
-    /// A tuple containing:
-    /// * List of k-points
-    /// * List of eigenvalues at each k-point
-    /// * List of n-expectation values at each k-point
-    pub fn to_results(&self) -> (Vec<Vec<f64>>, Vec<Array1<f64>>, Vec<Vec<f64>>) {
-        // Convert Vec back to Array1
-        let eigenvalues: Vec<Array1<f64>> = self
-            .eigenvalues
-            .iter()
-            .map(|vec| Array1::from_vec(vec.clone()))
-            .collect();
-
-        (
-            self.k_points.clone(),
-            eigenvalues,
-            self.n_expectation.clone(),
-        )
-    }
-
-    /// Save data to file
-    /// Saves the band structure data to a binary file
-    ///
-    /// # Arguments
-    /// * `filename` - Path to the file where data should be saved
-    ///
-    /// # Returns
-    /// Result indicating success or an error
-    pub fn save_to_file(&self, filename: &str) -> Result<(), Box<dyn Error>> {
-        let data = serialize(&self)?;
-        std::fs::write(filename, data)?;
-        Ok(())
-    }
-
-    /// Load data from file
-    /// Loads band structure data from a binary file
-    ///
-    /// # Arguments
-    /// * `filename` - Path to the file containing saved data
-    ///
-    /// # Returns
-    /// Result containing the loaded data or an error
-    pub fn load_from_file(filename: &str) -> Result<Self, Box<dyn Error>> {
-        let data = std::fs::read(filename)?;
-        let band_data: Self = deserialize(&data)?;
-        Ok(band_data)
-    }
-}
+pub type ColorBandData = sim_common::data::ColoredBandData;
 
 /// Calculates the expectation value of the principal quantum number (n) for an eigenstate
 ///
