@@ -1,4 +1,4 @@
-use crate::{band_structure, timed_println};
+use crate::{bands, timed_println};
 use matrix_ops::{
     ConvertFrom, DiagonalizationOptions, Diagonalize, HermitianConjugate, MatrixOps,
     MatrixOpsError, Norm, Sqrt,
@@ -10,8 +10,8 @@ use rayon::prelude::*;
 use std::f64::consts::PI;
 use std::iter::Sum;
 
-use crate::hamiltonian::{Boson, PPHamiltonian};
 use crate::config::PPConfig;
+use crate::hamiltonian::{Boson, PPHamiltonian};
 
 /// Result of dielectric‑function calculation including composition data.
 /// The real and imaginary parts of the dielectric function are returned as
@@ -493,7 +493,7 @@ where
         );
     }
 
-    let mut photon_character = band_structure::calculate_photonic_character(&pp, &vec0.to_owned());
+    let mut photon_character = bands::calculate_photonic_character(&pp, &vec0.to_owned());
     let mut ground_state_index = 0;
 
     while photon_character > 0.1 {
@@ -504,7 +504,7 @@ where
             );
         }
         vec0 = pp_vecs.column(ground_state_index);
-        photon_character = band_structure::calculate_photonic_character(&pp, &vec0.to_owned());
+        photon_character = bands::calculate_photonic_character(&pp, &vec0.to_owned());
     }
 
     // We store the magnitude of the scalar transition dipole,
@@ -560,7 +560,7 @@ where
         let vec_dag: Array1<M::Scalar> = vec.iter().map(|x| x.dag()).collect();
 
         // Photonic character: sum_i <ψ|a_i† a_i|ψ>
-        photonic_chars.push(band_structure::calculate_photonic_character(
+        photonic_chars.push(bands::calculate_photonic_character(
             &pp,
             &pp_vecs.column(idx).to_owned(),
         ));

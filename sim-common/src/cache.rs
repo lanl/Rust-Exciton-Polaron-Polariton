@@ -21,10 +21,7 @@ pub fn atomic_write(path: impl AsRef<Path>, bytes: &[u8]) -> std::io::Result<()>
     let array_task = std::env::var("SLURM_ARRAY_TASK_ID").unwrap_or_else(|_| "notask".to_string());
 
     let mut tmp = PathBuf::from(path);
-    let file_name = path
-        .file_name()
-        .and_then(|s| s.to_str())
-        .unwrap_or("cache");
+    let file_name = path.file_name().and_then(|s| s.to_str()).unwrap_or("cache");
 
     tmp.set_file_name(format!(
         "{}.tmp.{}.{}.{}.{}",
@@ -45,10 +42,7 @@ pub fn atomic_write(path: impl AsRef<Path>, bytes: &[u8]) -> std::io::Result<()>
     Ok(())
 }
 
-pub fn save_bincode_atomic<T: Serialize>(
-    path: impl AsRef<Path>,
-    value: &T,
-) -> CacheResult<()> {
+pub fn save_bincode_atomic<T: Serialize>(path: impl AsRef<Path>, value: &T) -> CacheResult<()> {
     let encoded = bincode::serialize(value)?;
     atomic_write(path, &encoded)?;
     Ok(())

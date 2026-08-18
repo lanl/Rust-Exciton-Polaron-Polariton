@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use crate::cli;
 use crate::visualization::{DielectricPlotType, plot_dielectric_function};
-use crate::{band_structure, dielectric_function, hamiltonian, visualization};
+use crate::{bands, dielectric, hamiltonian, visualization};
 use crate::{timed_println, timed_println_rank0};
 
 use crate::cli::{BandParallelModeArg, Cli, Command, MethodArg};
@@ -170,7 +170,7 @@ where
         );
     } else {
         (k_points_color, eigvals_list_color, photonic_character_list) =
-            band_structure::load_color_band_structure(&pp, n_k_points, n_eig, pp_config, zoomed);
+            bands::load_color_band_structure(&pp, n_k_points, n_eig, pp_config, zoomed);
     }
 
     timed_println!("Calc dispersion in {:?}", start_time.elapsed());
@@ -182,7 +182,7 @@ where
         && sim_common::mpi::is_mpi_rank0_env()
         && !matches!(args.parallel, BandParallelModeArg::DistributedChunks)
     {
-        if let Err(e) = band_structure::plot_color_band_structure(
+        if let Err(e) = bands::plot_color_band_structure(
             &k_points_color,
             sym_points,
             sym_labels,
@@ -225,12 +225,12 @@ where
     match parallel {
         BandParallelModeArg::Serial => {
             // Serial is equivalent to a single distributed chunk.
-            band_structure::calculate_color_band_structure_distributed_chunk(
+            bands::calculate_color_band_structure_distributed_chunk(
                 pp, n_k_points, n_eig, sym_points, pp_config, use_cached, zoomed, 0, 1,
             )
         }
         BandParallelModeArg::DistributedChunks => {
-            band_structure::calculate_color_band_structure_distributed_chunk(
+            bands::calculate_color_band_structure_distributed_chunk(
                 pp,
                 n_k_points,
                 n_eig,
@@ -243,7 +243,7 @@ where
             )
         }
 
-        BandParallelModeArg::GatherChunks => band_structure::gather_color_band_structure_chunks(
+        BandParallelModeArg::GatherChunks => bands::gather_color_band_structure_chunks(
             n_k_points, n_eig, pp_config, zoomed, n_chunks,
         ),
     }
@@ -514,7 +514,7 @@ fn run_dielectric_scan(e_config: ExcitonConfig, args: cli::DielectricArgs) -> Re
     let mut pp: PPHamiltonian<ComposedOperator<c64>, SingExBosons<ComposedOperator<c64>>> =
         PPHamiltonian::from_config(&pp_config);
 
-    let result = dielectric_function::get_dielectric_function(
+    let result = dielectric::get_dielectric_function(
         &pp_config,
         &mut pp,
         n_eig,
@@ -524,9 +524,8 @@ fn run_dielectric_scan(e_config: ExcitonConfig, args: cli::DielectricArgs) -> Re
         use_cached,
     )?;
 
-    let filename = dielectric_function::get_dielectric_function_filename(
-        &pp, &pp_config, save_dir, n_eig, gamma,
-    );
+    let filename =
+        dielectric::get_dielectric_function_filename(&pp, &pp_config, save_dir, n_eig, gamma);
 
     if sim_common::mpi::is_mpi_rank0_env() {
         timed_println!("Saving dielectric function data to {}", filename);
@@ -747,7 +746,7 @@ fn run_matrix_elem_calc_bandstructure_cli(args: cli::MatrixElemBandstructureArgs
         );
     });
 
-    let k_points = band_structure::generate_band_k_points(
+    let k_points = bands::generate_band_k_points(
         args.bandstructure.n_k_points,
         &sym_points,
         pp_config.e_config.a0,

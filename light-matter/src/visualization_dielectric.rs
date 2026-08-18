@@ -13,11 +13,11 @@
 //! 3. `plot_dielectric_stacked_phonon` – creates a multi-layer stacked area plot
 //!    showing contributions from each phonon Fock state (0, 1, 2, ..., n_fock).
 
+use crate::config::PPConfig;
 use crate::dielectric;
 use crate::hamiltonian::{PPHamiltonian, SingExBosons};
 use crate::plot_photon_freqs;
 use crate::timed_println;
-use crate::config::PPConfig;
 use crate::types::Vector3D;
 use exciton_2d::ExcitonConfig;
 use matrix_ops::ComposedOperator;
@@ -519,14 +519,10 @@ pub fn generate_stacked_plots(
         let pp_zero: PPHamiltonian<ComposedOperator<c64>, SingExBosons<ComposedOperator<c64>>> =
             PPHamiltonian::from_config(&pp_config_zero);
 
-        let cache_filename_zero = dielectric_function::get_dielectric_cache_filename(
-            &pp_zero,
-            &pp_config_zero,
-            save_dir,
-            n_eig,
-        );
+        let cache_filename_zero =
+            dielectric::get_dielectric_cache_filename(&pp_zero, &pp_config_zero, save_dir, n_eig);
 
-        match dielectric_function::load_dielectric_cache(&cache_filename_zero) {
+        match dielectric::load_dielectric_cache(&cache_filename_zero) {
             Ok((pp_vals_zero, x_pp_zero, _, _, gs_idx_zero)) => {
                 // Compute Im[ε] for zero coupling
                 let ground_state_energy = pp_vals_zero[gs_idx_zero];
@@ -593,14 +589,10 @@ pub fn generate_stacked_plots(
             PPHamiltonian::from_config(&pp_config_plot);
 
         // Load cached eigenstate data
-        let cache_filename = dielectric_function::get_dielectric_cache_filename(
-            &pp_plot,
-            &pp_config_plot,
-            save_dir,
-            n_eig,
-        );
+        let cache_filename =
+            dielectric::get_dielectric_cache_filename(&pp_plot, &pp_config_plot, save_dir, n_eig);
 
-        match dielectric_function::load_dielectric_cache(&cache_filename) {
+        match dielectric::load_dielectric_cache(&cache_filename) {
             Ok((pp_vals, x_pp, photonic_chars, phonon_numbers, gs_idx)) => {
                 let n_photon_modes = q_values.len();
 

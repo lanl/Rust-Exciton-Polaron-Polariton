@@ -119,17 +119,18 @@ where
                 crate::utils::K_HASH_QUANTUM,
             );
 
-            self.matrix_elements.populate_taylor_matrix_elements_with_cache(
-                &all_q_ind,
-                self.exciton.e_vecs.as_ref().unwrap(),
-                self.photon.boson.get_modes(),
-                self.exciton.exciton_ham.kappa_vectors.len(),
-                self.exciton.exciton_ham.rel_ham.mu,
-                self.cache_dir.as_deref(),
-                false,
-                relative_hash,
-                exciton_hash,
-            );
+            self.matrix_elements
+                .populate_taylor_matrix_elements_with_cache(
+                    &all_q_ind,
+                    self.exciton.e_vecs.as_ref().unwrap(),
+                    self.photon.boson.get_modes(),
+                    self.exciton.exciton_ham.kappa_vectors.len(),
+                    self.exciton.exciton_ham.rel_ham.mu,
+                    self.cache_dir.as_deref(),
+                    false,
+                    relative_hash,
+                    exciton_hash,
+                );
 
             timed_println_rank0!("    Matrix elements calculation: {:?}", time_mat.elapsed());
 
@@ -232,17 +233,18 @@ where
             crate::utils::K_HASH_QUANTUM,
         );
 
-        self.matrix_elements.populate_taylor_matrix_elements_with_cache(
-            &all_q_ind,
-            self.exciton.e_vecs.as_ref().unwrap(),
-            self.photon.boson.get_modes(),
-            self.exciton.exciton_ham.kappa_vectors.len(),
-            self.exciton.exciton_ham.rel_ham.mu,
-            self.cache_dir.as_deref(),
-            force_recompute,
-            relative_hash,
-            exciton_hash,
-        );
+        self.matrix_elements
+            .populate_taylor_matrix_elements_with_cache(
+                &all_q_ind,
+                self.exciton.e_vecs.as_ref().unwrap(),
+                self.photon.boson.get_modes(),
+                self.exciton.exciton_ham.kappa_vectors.len(),
+                self.exciton.exciton_ham.rel_ham.mu,
+                self.cache_dir.as_deref(),
+                force_recompute,
+                relative_hash,
+                exciton_hash,
+            );
 
         timed_println_rank0!(
             "LM matrix-element precompute completed in {:?}",

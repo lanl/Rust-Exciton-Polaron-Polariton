@@ -1,5 +1,4 @@
 use ndarray::Array1;
-use std::f64::consts::PI;
 
 use crate::cli::{BandstructureArgs, DielectricArgs, PhotonModeArg};
 use crate::modes::effective;

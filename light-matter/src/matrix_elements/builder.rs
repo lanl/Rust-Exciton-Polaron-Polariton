@@ -1,3 +1,4 @@
+use super::keys::{ModeKey, ModeTask};
 use crate::modes::types::BosonMode;
 use log::{info, warn};
 use ndarray::Array2;
@@ -5,7 +6,6 @@ use ndarray_linalg::c64;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::path::Path;
-use super::keys::{ModeKey, ModeTask};
 
 #[derive(Clone)]
 pub struct LMMatrixElementArray {

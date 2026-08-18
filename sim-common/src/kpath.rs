@@ -81,11 +81,7 @@ pub fn interpolate_segment(start: Vec2, end: Vec2, n: usize) -> Vec<Vec<f64>> {
 
 pub fn square_lattice_symmetry_points(a0: f64) -> (Vec<Vec<f64>>, Vec<String>) {
     (
-        vec![
-            vec![0.0, 0.0],
-            vec![PI / a0, 0.0],
-            vec![PI / a0, PI / a0],
-        ],
+        vec![vec![0.0, 0.0], vec![PI / a0, 0.0], vec![PI / a0, PI / a0]],
         vec!["Γ".to_string(), "X".to_string(), "M".to_string()],
     )
 }

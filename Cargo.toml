@@ -1,8 +1,8 @@
 [workspace]
 members = [
-  "./sim-common",
-  "./exciton_2d",
-  "./light-matter",
+  "sim-common",
+  "exciton_2d",
+  "light-matter",
 ]
 resolver = "3"
 

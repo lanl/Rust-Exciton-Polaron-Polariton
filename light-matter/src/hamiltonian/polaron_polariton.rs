@@ -1,8 +1,10 @@
 use super::{Boson, BosonicHamiltonian, ExcitonicHamiltonian, FullBosons, LMHamiltonian};
+use crate::config::PPConfig;
 use crate::matrix_elements::{LMMatrixElementArray, ModeKey};
+use crate::modes::types::{BosonMode, Polarization};
 use crate::timed_println;
 use crate::timed_println_rank0;
-use crate::utils::{BosonMode, PPConfig, Polarization, Vector3D};
+use crate::types::Vector3D;
 use exciton_2d::Exciton2DGridSystem;
 use matrix_ops::{ConvertFrom, Diagonalize, MatrixOps, MatrixOpsError, Sqrt};
 use ndarray::arr1;
