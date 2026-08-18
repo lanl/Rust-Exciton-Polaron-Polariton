@@ -12,7 +12,7 @@ use std::process::Command;
 
 use crate::timed_println;
 
-use crate::hamiltonians::{Boson, PPHamiltonian};
+use crate::hamiltonian::{Boson, PPHamiltonian};
 use crate::config::PPConfig;
 
 /// Calculate the photonic character of an eigenstate

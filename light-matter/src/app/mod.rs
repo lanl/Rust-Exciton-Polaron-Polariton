@@ -9,7 +9,7 @@ use std::time::Instant;
 
 use crate::cli;
 use crate::visualization::{DielectricPlotType, plot_dielectric_function};
-use crate::{band_structure, dielectric_function, hamiltonians, visualization};
+use crate::{band_structure, dielectric_function, hamiltonian, visualization};
 use crate::{timed_println, timed_println_rank0};
 
 use crate::cli::{BandParallelModeArg, Cli, Command, MethodArg};
@@ -18,7 +18,7 @@ use crate::config::PPConfig;
 
 use crate::visualization_dielectric::generate_stacked_plots;
 
-use crate::hamiltonians::{PPHamiltonian, SingExBosons};
+use crate::hamiltonian::{PPHamiltonian, SingExBosons};
 
 pub enum Method {
     Sparse,
@@ -134,7 +134,7 @@ where
         + std::iter::Sum
         + matrix_ops::ConvertFrom<f64>
         + matrix_ops::ConvertFrom<c64>,
-    SingExBosons<M>: hamiltonians::Boson<M>,
+    SingExBosons<M>: hamiltonian::Boson<M>,
 {
     timed_println_rank0!("Using {} backend for light-matter coupling.", backend_name);
 
@@ -220,7 +220,7 @@ where
         + std::iter::Sum
         + matrix_ops::ConvertFrom<f64>
         + matrix_ops::ConvertFrom<c64>,
-    B: hamiltonians::Boson<M>,
+    B: hamiltonian::Boson<M>,
 {
     match parallel {
         BandParallelModeArg::Serial => {

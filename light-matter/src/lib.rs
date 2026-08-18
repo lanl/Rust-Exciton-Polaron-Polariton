@@ -3,7 +3,7 @@ pub mod band_structure;
 pub mod cli;
 pub mod config;
 pub mod dielectric_function;
-pub mod hamiltonians;
+pub mod hamiltonian;
 pub mod logging;
 pub mod matrix_elements;
 pub mod modes;

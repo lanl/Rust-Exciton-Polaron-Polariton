@@ -10,7 +10,7 @@ use rayon::prelude::*;
 use std::f64::consts::PI;
 use std::iter::Sum;
 
-use crate::hamiltonians::{Boson, PPHamiltonian};
+use crate::hamiltonian::{Boson, PPHamiltonian};
 use crate::config::PPConfig;
 
 /// Result of dielectric‑function calculation including composition data.

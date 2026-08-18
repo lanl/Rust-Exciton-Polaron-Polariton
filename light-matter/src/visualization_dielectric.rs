@@ -14,7 +14,7 @@
 //!    showing contributions from each phonon Fock state (0, 1, 2, ..., n_fock).
 
 use crate::dielectric_function;
-use crate::hamiltonians::{PPHamiltonian, SingExBosons};
+use crate::hamiltonian::{PPHamiltonian, SingExBosons};
 use crate::plot_photon_freqs;
 use crate::timed_println;
 use crate::config::PPConfig;
