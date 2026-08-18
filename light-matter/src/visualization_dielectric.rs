@@ -489,7 +489,7 @@ pub fn generate_stacked_plots(
     zoomed: bool,
     omega_range: Option<(f64, f64)>,
 ) {
-    if !crate::utils::is_mpi_rank0_env() {
+    if !sim_common::mpi::is_mpi_rank0_env() {
         return;
     }
 

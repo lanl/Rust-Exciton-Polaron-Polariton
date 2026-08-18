@@ -179,7 +179,7 @@ where
     save_path += if zoomed { "_zoomed.pdf" } else { ".pdf" };
 
     if !k_points_color.is_empty()
-        && crate::utils::is_mpi_rank0_env()
+        && sim_common::mpi::is_mpi_rank0_env()
         && !matches!(args.parallel, BandParallelModeArg::DistributedChunks)
     {
         if let Err(e) = band_structure::plot_color_band_structure(
@@ -385,7 +385,7 @@ fn run_dielectric_scan(e_config: ExcitonConfig, args: cli::DielectricArgs) -> Re
     );
 
     if !calculate {
-        if !crate::utils::is_mpi_rank0_env() {
+        if !sim_common::mpi::is_mpi_rank0_env() {
             return Ok(());
         }
 
@@ -482,7 +482,7 @@ fn run_dielectric_scan(e_config: ExcitonConfig, args: cli::DielectricArgs) -> Re
     // PETSc/SLEPc solves are collective over COMM_WORLD, so use job arrays for scan parallelism.
     let refl_idx: usize = args
         .reflectivity_index
-        .or_else(|| crate::utils::env_usize(&["REFLECTIVITY_INDEX", "SLURM_ARRAY_TASK_ID"]))
+        .or_else(|| sim_common::mpi::env_usize(&["REFLECTIVITY_INDEX", "SLURM_ARRAY_TASK_ID"]))
         .unwrap_or(0);
 
     if refl_idx >= reflectivities.len() {
@@ -528,7 +528,7 @@ fn run_dielectric_scan(e_config: ExcitonConfig, args: cli::DielectricArgs) -> Re
         &pp, &pp_config, save_dir, n_eig, gamma,
     );
 
-    if crate::utils::is_mpi_rank0_env() {
+    if sim_common::mpi::is_mpi_rank0_env() {
         timed_println!("Saving dielectric function data to {}", filename);
 
         let mut file = File::create(&filename).unwrap();
@@ -610,7 +610,7 @@ fn build_bandstructure_pp_config(
 
 fn selected_dielectric_reflectivity_index(args: &cli::DielectricArgs) -> usize {
     args.reflectivity_index
-        .or_else(|| crate::utils::env_usize(&["REFLECTIVITY_INDEX", "SLURM_ARRAY_TASK_ID"]))
+        .or_else(|| sim_common::mpi::env_usize(&["REFLECTIVITY_INDEX", "SLURM_ARRAY_TASK_ID"]))
         .unwrap_or(0)
 }
 
@@ -683,7 +683,7 @@ fn matrix_elem_band_k_indices(
     // Explicit single-K selection.
     if let Some(k_index) = args
         .k_index
-        .or_else(|| crate::utils::env_usize(&["K_INDEX"]))
+        .or_else(|| sim_common::mpi::env_usize(&["K_INDEX"]))
     {
         if k_index >= n_k_points_total {
             panic!("K index {} out of range 0..{}", k_index, n_k_points_total);
@@ -696,22 +696,22 @@ fn matrix_elem_band_k_indices(
     let n_chunks = args
         .bandstructure
         .k_n_chunks
-        .or_else(|| crate::utils::env_usize(&["K_N_CHUNKS"]));
+        .or_else(|| sim_common::mpi::env_usize(&["K_N_CHUNKS"]));
 
     if let Some(n_chunks) = n_chunks {
         let chunk_index = args
             .bandstructure
             .k_chunk_index
-            .or_else(|| crate::utils::env_usize(&["K_CHUNK_INDEX", "SLURM_ARRAY_TASK_ID"]))
+            .or_else(|| sim_common::mpi::env_usize(&["K_CHUNK_INDEX", "SLURM_ARRAY_TASK_ID"]))
             .unwrap_or(0);
 
-        let (start, end) = crate::utils::chunk_bounds(n_k_points_total, chunk_index, n_chunks);
+        let (start, end) = sim_common::mpi::chunk_bounds(n_k_points_total, chunk_index, n_chunks);
 
         return (start..end).collect();
     }
 
     // Common Slurm-array case: one array task per K point.
-    if let Some(k_index) = crate::utils::env_usize(&["SLURM_ARRAY_TASK_ID"]) {
+    if let Some(k_index) = sim_common::mpi::env_usize(&["SLURM_ARRAY_TASK_ID"]) {
         if k_index >= n_k_points_total {
             panic!(
                 "SLURM_ARRAY_TASK_ID={} out of K-index range 0..{}",
@@ -729,7 +729,7 @@ fn matrix_elem_band_k_indices(
 fn run_matrix_elem_calc_bandstructure_cli(args: cli::MatrixElemBandstructureArgs) -> Result<()> {
     // Matrix-element precompute should generally run as one process with many
     // Rayon threads. Avoid many MPI ranks writing the same cache files.
-    if !crate::utils::is_mpi_rank0_env() {
+    if !sim_common::mpi::is_mpi_rank0_env() {
         return Ok(());
     }
 
@@ -818,7 +818,7 @@ fn run_matrix_elem_calc_bandstructure_cli(args: cli::MatrixElemBandstructureArgs
 fn run_matrix_elem_calc_dielectric_cli(args: cli::MatrixElemDielectricArgs) -> Result<()> {
     // Matrix-element precompute should generally run as one process with many
     // Rayon threads. Avoid many MPI ranks writing the same cache files.
-    if !crate::utils::is_mpi_rank0_env() {
+    if !sim_common::mpi::is_mpi_rank0_env() {
         return Ok(());
     }
 
@@ -903,12 +903,12 @@ fn run_bandstructure_cli(args: cli::BandstructureArgs) -> Result<()> {
 
     let chunk_index = args
         .k_chunk_index
-        .or_else(|| crate::utils::env_usize(&["K_CHUNK_INDEX", "SLURM_ARRAY_TASK_ID"]))
+        .or_else(|| sim_common::mpi::env_usize(&["K_CHUNK_INDEX", "SLURM_ARRAY_TASK_ID"]))
         .unwrap_or(0);
 
     let n_chunks = args
         .k_n_chunks
-        .or_else(|| crate::utils::env_usize(&["K_N_CHUNKS", "SLURM_ARRAY_TASK_COUNT"]))
+        .or_else(|| sim_common::mpi::env_usize(&["K_N_CHUNKS", "SLURM_ARRAY_TASK_COUNT"]))
         .unwrap_or(1);
 
     run_bandstructure_with_args(method, e_config, args, chunk_index, n_chunks)

@@ -310,7 +310,7 @@ where
             }
             let cache_data = compute_dielectric_cache(pp_config, pp, n_eig)?;
 
-            if crate::utils::is_mpi_rank0_env() {
+            if sim_common::mpi::is_mpi_rank0_env() {
                 timed_println!("Saving cache to {}", cache_filename);
 
                 if let Err(e) = save_dielectric_cache(

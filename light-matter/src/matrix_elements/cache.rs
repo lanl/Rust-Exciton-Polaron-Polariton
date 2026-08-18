@@ -114,7 +114,7 @@ impl LMMatrixElementArray {
         };
 
         let encoded = bincode::serialize(&serializable)?;
-        crate::utils::atomic_write(filename, &encoded)?;
+        sim_common::cache::atomic_write(filename, &encoded)?;
 
         info!("Saved matrix elements to cache: {}", filename);
         Ok(())
@@ -204,7 +204,7 @@ impl LMMatrixElementArray {
         };
 
         let encoded = bincode::serialize(&serializable)?;
-        crate::utils::atomic_write(filename, &encoded)?;
+        sim_common::cache::atomic_write(filename, &encoded)?;
 
         info!(
             "Saved relative basis matrix elements to cache: {}",

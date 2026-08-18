@@ -178,8 +178,8 @@ where
     M::Scalar: Sqrt + Sum + ConvertFrom<f64> + ConvertFrom<c64>,
     B: Boson<M>,
 {
-    let rank = crate::utils::mpi_rank_env_or_zero();
-    let world_size = crate::utils::mpi_size_env_or_one();
+    let rank = sim_common::mpi::mpi_rank_env_or_zero();
+    let world_size = sim_common::mpi::mpi_size_env_or_one();
 
     let save_dir = "pp_data";
     std::fs::create_dir_all(save_dir).ok();
@@ -188,7 +188,7 @@ where
 
     let total_k_points = k_points.len();
 
-    let (start_idx, end_idx) = crate::utils::chunk_bounds(total_k_points, chunk_index, n_chunks);
+    let (start_idx, end_idx) = sim_common::mpi::chunk_bounds(total_k_points, chunk_index, n_chunks);
 
     let chunk_filename = color_band_chunk_filename(
         pp_config,

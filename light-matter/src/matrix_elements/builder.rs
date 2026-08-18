@@ -144,7 +144,7 @@ impl LMMatrixElementArray {
                 self.sin_mat_rel = Some(sin_mat_rel);
                 self.p_cos_mat_rel = Some(p_cos_mat_rel);
 
-                if crate::utils::is_mpi_rank0_env() {
+                if sim_common::mpi::is_mpi_rank0_env() {
                     if let Some(dir) = cache_dir {
                         let cache_file_rel =
                             Self::get_cache_filename_rel(dir, mu, n_rel, relative_config_hash);
@@ -222,7 +222,7 @@ impl LMMatrixElementArray {
             }
         }
 
-        if crate::utils::is_mpi_rank0_env() {
+        if sim_common::mpi::is_mpi_rank0_env() {
             if let Some(dir) = cache_dir {
                 let cache_file =
                     Self::get_cache_filename(dir, mu, n_com, n_rel, exciton_config_hash);
