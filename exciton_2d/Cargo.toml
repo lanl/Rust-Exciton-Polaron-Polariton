@@ -4,28 +4,32 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-matrix-ops = {path = "/vast/home/mike_tay/matrix_ops"}
-slepc-rs = {path = "/vast/home/mike_tay/slepc_rust"}
-sprs = "*"
-indicatif = { version = "0.18", features = ["rayon"] } 
+matrix-ops = { path = "../matrix_ops" }
+slepc-rs = { path = "../slepc_rust" }
+
+sim-common = { path = "../sim-common" }
+
+sprs = { workspace = true }
+indicatif = { workspace = true }
 ndarray = { workspace = true }
 ndarray-linalg = { workspace = true }
-plotters = "0.3"
-rayon = "1.12.0"
-num-complex = "0.4"
-num-traits = "0.2"
-log = "0.4.32"
-env_logger = "0.11.8"
-anyhow = "1.0"
-thiserror = "2.0.18"
-clap = { version = "4.6.1", features = ["derive"] }
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0"
-bincode = "1.3"
+plotters = { workspace = true }
+rayon = { workspace = true }
+num-complex = { workspace = true }
+num-traits = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+bincode = { workspace = true }
 
 [[bin]]
 name = "exciton_2d"
 path = "src/bin/main.rs"
+
 [[example]]
 name = "simple"
 path = "examples/simple.rs"
