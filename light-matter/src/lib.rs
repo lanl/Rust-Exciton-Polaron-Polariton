@@ -2,7 +2,7 @@ pub mod app;
 pub mod band_structure;
 pub mod cli;
 pub mod config;
-pub mod dielectric_function;
+pub mod dielectric;
 pub mod hamiltonian;
 pub mod logging;
 pub mod matrix_elements;

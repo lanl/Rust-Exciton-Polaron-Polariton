@@ -58,6 +58,7 @@ pub mod grid;
 pub mod hamiltonian;
 pub mod lattice;
 pub mod matrix_elements;
+pub mod results;
 pub mod relative;
 pub mod system;
 pub mod utils;
@@ -78,3 +79,5 @@ pub use utils::{
     print_memory_usage,
 };
 pub use visualization::{plot_band_structure, plot_rel_eigenstate, plot_spectrum};
+
+pub use results::{BandResult, ColoredBandResult, ExcitonDiagonalization, RelativeSolution};
