@@ -26,6 +26,10 @@ pub fn plot_band_structure(
         text_color = &WHITE;
     }
 
+    if k_points.len() < 2 || eigvals_list_full.is_empty() || eigvals_list_full[0].is_empty() {
+        return;
+    }
+
     if let Some(path) = save_path {
         info!("Saving band structure plot to {}", path);
 
@@ -60,7 +64,7 @@ pub fn plot_band_structure(
         // Extract the bands to plot
         let eigvals_list: &Vec<Array1<f64>> = &eigvals_list_full
             .iter()
-            .map(|eigvals| eigvals.slice(s![0..n_bands - 1]).to_owned())
+            .map(|eigvals| eigvals.slice(s![0..n_bands]).to_owned())
             .collect();
 
         // Find energy range

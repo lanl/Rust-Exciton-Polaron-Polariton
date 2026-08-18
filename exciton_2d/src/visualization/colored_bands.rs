@@ -14,6 +14,10 @@ pub fn plot_n_colored_band_structure(
     save_path: &str,
     v0: f64,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    if k_points.len() < 2 || eigvals_list.is_empty() || eigvals_list[0].is_empty() {
+        return Err("No band data to plot".into());
+    }
+
     let dark = false;
 
     // Create x-axis for the plot (path length)

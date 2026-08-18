@@ -105,7 +105,7 @@ where
     // Generate filename for the color band structure data
     let filename = format!(
         "{}/n_colored_band_a0{}_V0{}_nrel{}_nbands{}_npoints{}.bin",
-        save_dir, full_ham.rel_ham.grid.box_size, v0, n_rel_states, n_bands, n_points
+        save_dir, a0, v0, n_rel_states, n_bands, n_points
     );
 
     // Check if cached data exists and should be used
@@ -295,7 +295,7 @@ where
         v0: f64,
     ) -> String {
         format!(
-            "{}/band_a0{}_V0{}_grid{}_box{}_nrel{}_nbands{}_npoints{}.json",
+            "{}/band_a0{}_V0{}_grid{}_box{}_nrel{}_nbands{}_npoints{}.bin",
             self.save_dir,
             self.a0,
             v0,
@@ -367,7 +367,17 @@ where
                 info!("Loading band structure data from {}", filename);
             }
 
-            panic!("Loading data not implemented yet");
+            match ColorBandData::load_from_file(&filename) {
+                Ok(data) => {
+                    let (k_points, eigvals_list, _) = data.to_results();
+                    return (k_points, eigvals_list);
+                }
+                Err(e) => {
+                    if self.verbose {
+                        info!("Failed to load cached band structure data: {}; recalculating", e);
+                    }
+                }
+            }
         }
 
         // Generate Γ → X → M → Γ path for a square lattice.
@@ -490,7 +500,17 @@ where
             info!("Saving band structure data to {}", filename);
         }
 
-        // In a real implementation, we'd serialize to JSON
+        let band_data = ColorBandData::from_results(
+            k_points.clone(),
+            eigvals_list.clone(),
+            vec![Vec::new(); k_points.len()],
+        );
+
+        if let Err(e) = band_data.save_to_file(&filename) {
+            if self.verbose {
+                info!("Failed to save band structure data to {}: {}", filename, e);
+            }
+        }
 
         (k_points, eigvals_list)
     }

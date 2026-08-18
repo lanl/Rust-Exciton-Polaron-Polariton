@@ -11,6 +11,10 @@ pub fn plot_band_structure(
 ) {
     // This is a placeholder for the band structure plotting functionality
 
+    if k_points.len() < 2 || eigvals_list.is_empty() || eigvals_list[0].is_empty() {
+        return;
+    }
+
     if let Some(path) = save_path {
         info!("Saving band structure plot to {}", path);
 

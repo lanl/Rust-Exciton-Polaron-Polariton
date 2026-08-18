@@ -79,6 +79,39 @@ pub fn interpolate_segment(start: Vec2, end: Vec2, n: usize) -> Vec<Vec<f64>> {
     }
 }
 
+
+fn closed_polyline_path(vertices: &[Vec2], n_points: usize) -> Vec<Vec<f64>> {
+    if n_points == 0 {
+        return Vec::new();
+    }
+
+    if vertices.is_empty() {
+        return vec![vec![0.0, 0.0]; n_points];
+    }
+
+    if n_points == 1 {
+        return vec![vec![vertices[0][0], vertices[0][1]]];
+    }
+
+    let n_segments = vertices.len();
+
+    (0..n_points)
+        .map(|idx| {
+            let u = idx as f64 * n_segments as f64 / (n_points - 1) as f64;
+            let seg = (u.floor() as usize).min(n_segments - 1);
+            let t = u - seg as f64;
+
+            let a = vertices[seg];
+            let b = vertices[(seg + 1) % n_segments];
+
+            vec![
+                a[0] + t * (b[0] - a[0]),
+                a[1] + t * (b[1] - a[1]),
+            ]
+        })
+        .collect()
+}
+
 pub fn square_lattice_symmetry_points(a0: f64) -> (Vec<Vec<f64>>, Vec<String>) {
     (
         vec![vec![0.0, 0.0], vec![PI / a0, 0.0], vec![PI / a0, PI / a0]],
@@ -87,28 +120,13 @@ pub fn square_lattice_symmetry_points(a0: f64) -> (Vec<Vec<f64>>, Vec<String>) {
 }
 
 pub fn square_lattice_path(a0: f64, n_points: usize) -> Vec<Vec<f64>> {
-    if n_points == 0 {
-        return Vec::new();
-    }
-
-    if n_points == 1 {
-        return vec![vec![0.0, 0.0]];
-    }
-
     let b = 2.0 * PI / a0;
 
     let gamma = [0.0, 0.0];
     let x = [b / 2.0, 0.0];
     let m = [b / 2.0, b / 2.0];
 
-    let points_per_segment = (n_points / 3).max(2);
-
-    let mut points = Vec::new();
-    points.extend(interpolate_segment(gamma, x, points_per_segment));
-    points.extend(interpolate_segment(x, m, points_per_segment));
-    points.extend(interpolate_segment(m, gamma, points_per_segment));
-    points.truncate(n_points);
-    points
+    closed_polyline_path(&[gamma, x, m], n_points)
 }
 
 pub fn generic_closed_path(
@@ -134,22 +152,12 @@ pub fn generic_closed_path(
 
     assert!(!sym_points.is_empty(), "sym_points must not be empty");
 
-    let points_per_seg = (n_k_points / sym_points.len()).max(2);
+    let vertices: Vec<Vec2> = sym_points
+        .iter()
+        .map(|p| [p[0], p[1]])
+        .collect();
 
-    let mut points = Vec::new();
-
-    for i in 0..sym_points.len() {
-        let j = (i + 1) % sym_points.len();
-
-        points.extend(interpolate_segment(
-            [sym_points[i][0], sym_points[i][1]],
-            [sym_points[j][0], sym_points[j][1]],
-            points_per_seg,
-        ));
-    }
-
-    points.truncate(n_k_points);
-    points
+    closed_polyline_path(&vertices, n_k_points)
 }
 
 pub fn path_distances(k_points: &[Vec<f64>]) -> Vec<f64> {

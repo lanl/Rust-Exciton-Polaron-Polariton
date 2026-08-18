@@ -31,6 +31,8 @@
   - `visualization/spectrum.rs`
   - `visualization/bands.rs`
   - `visualization/colored_bands.rs`
+- Fixed square-lattice path generation to return the requested number of points.
+- Fixed basic band-structure cache loading/saving for plain exciton bands.
 
 ### `light-matter`
 
@@ -64,6 +66,7 @@
   - `visualization/bands.rs`
   - `visualization/stacked.rs`
 - Removed old compatibility module names from main crate exports.
+- Fixed basic visualization indexing issues found during review.
 
 ### Tests
 
@@ -76,7 +79,7 @@
   - `KappaKey::add`,
   - product-Fock index/occupation round trips.
 
-## Still To Do
+## Remaining To Do
 
 ### API cleanup
 

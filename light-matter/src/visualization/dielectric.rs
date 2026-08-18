@@ -405,14 +405,14 @@ pub fn plot_dielectric_function(
             .draw()?;
 
         if let Some(qs) = q_values {
-            plot_photon_freqs!(&mut chart, transformed_min, transformed_max, qs);
+            plot_photon_freqs!(chart, transformed_min, transformed_max, qs);
         }
 
         for (i, (key, coupling)) in couplings.iter().enumerate() {
             let (omegas, re_eps, _, params) = &all_data[key];
 
             // Create a color gradient from blue to red
-            let color = interpolate_colormap(&ref_colors, i as f64 / (couplings.len() - 1) as f64);
+            let color = interpolate_colormap(&ref_colors, if couplings.len() > 1 { i as f64 / (couplings.len() - 1) as f64 } else { 0.0 });
             // let color = colors[i];
 
             // Filter data points within the omega range and apply symlog transformation
@@ -509,7 +509,7 @@ pub fn plot_dielectric_function(
         for (i, (key, coupling)) in couplings.iter().enumerate().rev() {
             let (omegas, _, im_eps, params) = &all_data[key];
 
-            let color = interpolate_colormap(&ref_colors, i as f64 / (couplings.len() - 1) as f64);
+            let color = interpolate_colormap(&ref_colors, if couplings.len() > 1 { i as f64 / (couplings.len() - 1) as f64 } else { 0.0 });
             // let color = colors[i];
 
             // Filter data points within the omega range
@@ -548,7 +548,7 @@ pub fn plot_dielectric_function(
         println!("Plotted Couplings");
 
         if let Some(qs) = q_values {
-            plot_photon_freqs!(&mut chart, e_min, e_max, qs);
+            plot_photon_freqs!(chart, e_min, e_max, qs);
         }
 
         // if plot_type == DielectricPlotType::Imaginary && !zoomed{
