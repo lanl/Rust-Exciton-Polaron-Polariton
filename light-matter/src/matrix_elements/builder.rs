@@ -5,18 +5,7 @@ use ndarray_linalg::c64;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::path::Path;
-use serde::{Deserialize, Serialize};
-
 use super::keys::{ModeKey, ModeTask};
-
-/// Serializable version of matrix element arrays for caching.
-#[derive(Serialize, Deserialize)]
-struct SerializableMatrixElements {
-    cos_mat: Vec<(ModeKey, Vec<c64>)>,
-    sin_mat: Vec<(ModeKey, Vec<c64>)>,
-    p_cos_mat: Vec<(ModeKey, Vec<c64>)>,
-    matrix_shape: (usize, usize),
-}
 
 #[derive(Clone)]
 pub struct LMMatrixElementArray {
