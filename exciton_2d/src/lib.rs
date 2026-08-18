@@ -58,6 +58,7 @@ pub mod grid;
 pub mod hamiltonian;
 pub mod lattice;
 pub mod matrix_elements;
+pub mod relative;
 pub mod system;
 pub mod utils;
 pub mod visualization;
