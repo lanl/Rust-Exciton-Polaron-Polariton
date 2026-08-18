@@ -26,3 +26,33 @@ pub fn index_from_occupations(occ: &[usize], dims: &[usize]) -> usize {
         .zip(dims.iter())
         .fold(0usize, |acc, (&n, &dim)| acc * dim + n)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{index_from_occupations, occupations_from_index};
+
+    #[test]
+    fn fock_index_round_trip() {
+        let dims = vec![2, 3, 4];
+        let dim: usize = dims.iter().product();
+
+        for idx in 0..dim {
+            let occ = occupations_from_index(idx, &dims);
+            assert_eq!(index_from_occupations(&occ, &dims), idx);
+        }
+    }
+
+    #[test]
+    fn fock_order_matches_expected_mixed_radix() {
+        let dims = vec![2, 3, 4];
+
+        assert_eq!(occupations_from_index(0, &dims), vec![0, 0, 0]);
+        assert_eq!(occupations_from_index(1, &dims), vec![0, 0, 1]);
+        assert_eq!(occupations_from_index(4, &dims), vec![0, 1, 0]);
+        assert_eq!(occupations_from_index(12, &dims), vec![1, 0, 0]);
+
+        assert_eq!(index_from_occupations(&[1, 0, 0], &dims), 12);
+        assert_eq!(index_from_occupations(&[0, 1, 0], &dims), 4);
+        assert_eq!(index_from_occupations(&[0, 0, 1], &dims), 1);
+    }
+}

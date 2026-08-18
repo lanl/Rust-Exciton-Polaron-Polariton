@@ -9,8 +9,8 @@ use std::time::Instant;
 use super::config::build_dielectric_pp_config_for_reflectivity;
 use crate::cli;
 use crate::hamiltonian::{PPHamiltonian, SingExBosons};
+use crate::visualization::generate_stacked_plots;
 use crate::visualization::{DielectricPlotType, plot_dielectric_function};
-use crate::visualization_dielectric::generate_stacked_plots;
 use crate::{dielectric, timed_println, timed_println_rank0, visualization};
 
 fn run_dielectric_scan(e_config: ExcitonConfig, args: cli::DielectricArgs) -> Result<()> {

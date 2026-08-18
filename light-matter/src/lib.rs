@@ -10,7 +10,6 @@ pub mod modes;
 pub mod types;
 pub mod utils;
 pub mod visualization;
-pub mod visualization_dielectric;
 
 pub use config::PPConfig;
 pub use modes::types::{BosonMode, Polarization};
