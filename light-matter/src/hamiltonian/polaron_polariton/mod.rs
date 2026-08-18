@@ -1,3 +1,5 @@
+mod fock;
+
 use super::{Boson, BosonicHamiltonian, ExcitonicHamiltonian, FullBosons, LMHamiltonian};
 use crate::config::PPConfig;
 use crate::matrix_elements::{LMMatrixElementArray, ModeKey};
@@ -212,29 +214,9 @@ where
     /// This matches the tensor-product order used by `FullBosons::a`, where
     /// mode 0 is the slowest-varying index and the last mode is fastest-varying:
     ///
-    ///     index = (((n0 * d1 + n1) * d2 + n2) ...)
-    #[inline]
-    fn phonon_occupations_from_index(mut idx: usize, dims: &[usize]) -> Vec<usize> {
-        let mut occ = vec![0; dims.len()];
-
-        for mode_idx in (0..dims.len()).rev() {
-            let dim = dims[mode_idx];
-            occ[mode_idx] = idx % dim;
-            idx /= dim;
-        }
-
-        occ
-    }
 
     /// Converts product-Fock occupations into a flat index.
     ///
-    /// This is the inverse of `phonon_occupations_from_index`.
-    #[inline]
-    fn phonon_index_from_occupations(occ: &[usize], dims: &[usize]) -> usize {
-        occ.iter()
-            .zip(dims.iter())
-            .fold(0usize, |acc, (&n, &dim)| acc * dim + n)
-    }
 
     /// Lazy-safe PP interaction construction.
     ///
@@ -453,7 +435,7 @@ where
         }
 
         let occupations: Vec<Vec<usize>> = (0..pn_dim)
-            .map(|idx| Self::phonon_occupations_from_index(idx, &dims))
+            .map(|idx| fock::occupations_from_index(idx, &dims))
             .collect();
 
         let mut pairs: Vec<(M, M)> = Vec::new();
@@ -500,7 +482,7 @@ where
                 if n > 0 {
                     let mut occ_to = occ.clone();
                     occ_to[mode_idx] -= 1;
-                    let pn_to = Self::phonon_index_from_occupations(&occ_to, &dims);
+                    let pn_to = fock::index_from_occupations(&occ_to, &dims);
 
                     let amp = -2.0 * self.pn_coupling * (n as f64).sqrt();
 
@@ -518,7 +500,7 @@ where
                 if n + 1 < dims[mode_idx] {
                     let mut occ_to = occ.clone();
                     occ_to[mode_idx] += 1;
-                    let pn_to = Self::phonon_index_from_occupations(&occ_to, &dims);
+                    let pn_to = fock::index_from_occupations(&occ_to, &dims);
 
                     let amp = -2.0 * self.pn_coupling * ((n + 1) as f64).sqrt();
 

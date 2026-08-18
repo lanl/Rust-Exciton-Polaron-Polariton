@@ -1,0 +1,252 @@
+use exciton_2d::ExcitonConfig;
+use matrix_ops::{ComposedOperator, MatrixOps, Result};
+use ndarray::{Array1, Array2};
+use ndarray_linalg::c64;
+use sprs::CsMat;
+use std::time::Instant;
+
+use super::config::{Method, build_bandstructure_pp_config, method_from_arg};
+use crate::cli;
+use crate::cli::BandParallelModeArg;
+use crate::config::PPConfig;
+use crate::hamiltonian::{self, PPHamiltonian, SingExBosons};
+use crate::{bands, timed_println, timed_println_rank0};
+
+fn run_bandstructure_with_args(
+    method: Method,
+    e_config: ExcitonConfig,
+    args: cli::BandstructureArgs,
+    chunk_index: usize,
+    n_chunks: usize,
+) -> Result<()> {
+    let a0 = e_config.a0;
+    let v0 = e_config.v0;
+    let n_eig = args.n_eig;
+    let n_k_points = args.n_k_points;
+    let zoomed = args.zoomed;
+    let total_coupling = args.total_coupling;
+
+    timed_println_rank0!("total_coupling = {}", total_coupling);
+
+    let (pp_config, sym_points, sym_labels) = build_bandstructure_pp_config(e_config, &args);
+
+    let n_modes = pp_config.q_values.len();
+    let coupling = if n_modes == 0 {
+        0.0
+    } else {
+        pp_config.lm_couplings.iter().sum::<f64>() / n_modes as f64
+    };
+
+    timed_println_rank0!("Running with {} photon modes", n_modes);
+
+    match method {
+        Method::Sparse => run_bandstructure_for_backend::<CsMat<c64>>(
+            "sparse",
+            &args,
+            &pp_config,
+            &sym_points,
+            &sym_labels,
+            n_k_points,
+            n_eig,
+            a0,
+            v0,
+            total_coupling,
+            n_modes,
+            coupling,
+            zoomed,
+            chunk_index,
+            n_chunks,
+        ),
+
+        Method::Dense => run_bandstructure_for_backend::<Array2<c64>>(
+            "dense",
+            &args,
+            &pp_config,
+            &sym_points,
+            &sym_labels,
+            n_k_points,
+            n_eig,
+            a0,
+            v0,
+            total_coupling,
+            n_modes,
+            coupling,
+            zoomed,
+            chunk_index,
+            n_chunks,
+        ),
+
+        Method::LinOp => run_bandstructure_for_backend::<ComposedOperator<c64>>(
+            "linear-operator",
+            &args,
+            &pp_config,
+            &sym_points,
+            &sym_labels,
+            n_k_points,
+            n_eig,
+            a0,
+            v0,
+            total_coupling,
+            n_modes,
+            coupling,
+            zoomed,
+            chunk_index,
+            n_chunks,
+        ),
+    }
+}
+
+fn run_bandstructure_for_backend<M>(
+    backend_name: &str,
+    args: &cli::BandstructureArgs,
+    pp_config: &PPConfig,
+    sym_points: &Vec<Vec<f64>>,
+    sym_labels: &Vec<String>,
+    n_k_points: usize,
+    n_eig: usize,
+    a0: f64,
+    v0: f64,
+    total_coupling: f64,
+    n_modes: usize,
+    coupling: f64,
+    zoomed: bool,
+    chunk_index: usize,
+    n_chunks: usize,
+) -> Result<()>
+where
+    M: MatrixOps + matrix_ops::Diagonalize,
+    M::Scalar: matrix_ops::Sqrt
+        + std::iter::Sum
+        + matrix_ops::ConvertFrom<f64>
+        + matrix_ops::ConvertFrom<c64>,
+    SingExBosons<M>: hamiltonian::Boson<M>,
+{
+    timed_println_rank0!("Using {} backend for light-matter coupling.", backend_name);
+
+    let start_time = Instant::now();
+
+    let mut pp: PPHamiltonian<M, SingExBosons<M>> = PPHamiltonian::from_config(pp_config);
+
+    let (k_points_color, eigvals_list_color, photonic_character_list);
+
+    if args.calculate {
+        let time1 = Instant::now();
+
+        timed_println_rank0!("Calculating {} eigenstates", n_eig);
+        timed_println_rank0!("Calculating color-coded band structure...");
+
+        (k_points_color, eigvals_list_color, photonic_character_list) =
+            run_bandstructure_parallel_mode(
+                &mut pp,
+                args.parallel,
+                n_k_points,
+                n_eig,
+                sym_points,
+                pp_config,
+                args.use_cached,
+                zoomed,
+                chunk_index,
+                n_chunks,
+            )?;
+
+        timed_println!(
+            "Calculated band structure in {:?}",
+            Instant::now().duration_since(time1)
+        );
+    } else {
+        (k_points_color, eigvals_list_color, photonic_character_list) =
+            bands::load_color_band_structure(&pp, n_k_points, n_eig, pp_config, zoomed);
+    }
+
+    timed_println!("Calc dispersion in {:?}", start_time.elapsed());
+
+    let mut save_path = format!("sing_ex_color_disp_plot_{}_n{}", total_coupling, n_modes);
+    save_path += if zoomed { "_zoomed.pdf" } else { ".pdf" };
+
+    if !k_points_color.is_empty()
+        && sim_common::mpi::is_mpi_rank0_env()
+        && !matches!(args.parallel, BandParallelModeArg::DistributedChunks)
+    {
+        if let Err(e) = bands::plot_color_band_structure(
+            &k_points_color,
+            sym_points,
+            sym_labels,
+            &eigvals_list_color,
+            &photonic_character_list,
+            n_eig,
+            a0,
+            &save_path,
+            v0,
+            coupling,
+            zoomed,
+        ) {
+            timed_println!("Error plotting color-coded band structure: {}", e);
+        }
+    }
+
+    Ok(())
+}
+
+fn run_bandstructure_parallel_mode<M, B>(
+    pp: &mut PPHamiltonian<M, B>,
+    parallel: BandParallelModeArg,
+    n_k_points: usize,
+    n_eig: usize,
+    sym_points: &Vec<Vec<f64>>,
+    pp_config: &PPConfig,
+    use_cached: bool,
+    zoomed: bool,
+    chunk_index: usize,
+    n_chunks: usize,
+) -> Result<(Vec<Vec<f64>>, Vec<Array1<f64>>, Vec<Vec<f64>>)>
+where
+    M: MatrixOps + matrix_ops::Diagonalize,
+    M::Scalar: matrix_ops::Sqrt
+        + std::iter::Sum
+        + matrix_ops::ConvertFrom<f64>
+        + matrix_ops::ConvertFrom<c64>,
+    B: hamiltonian::Boson<M>,
+{
+    match parallel {
+        BandParallelModeArg::Serial => {
+            // Serial is equivalent to a single distributed chunk.
+            bands::calculate_color_band_structure_distributed_chunk(
+                pp, n_k_points, n_eig, sym_points, pp_config, use_cached, zoomed, 0, 1,
+            )
+        }
+        BandParallelModeArg::DistributedChunks => {
+            bands::calculate_color_band_structure_distributed_chunk(
+                pp,
+                n_k_points,
+                n_eig,
+                sym_points,
+                pp_config,
+                use_cached,
+                zoomed,
+                chunk_index,
+                n_chunks,
+            )
+        }
+
+        BandParallelModeArg::GatherChunks => bands::gather_color_band_structure_chunks(
+            n_k_points, n_eig, pp_config, zoomed, n_chunks,
+        ),
+    }
+}
+
+pub(super) fn run_bandstructure_cli(args: cli::BandstructureArgs) -> Result<()> {
+    let e_config = args.exciton.to_config();
+    let method = method_from_arg(args.method);
+
+    let chunk_index = args
+        .k_chunk_index
+        .or_else(|| sim_common::mpi::env_usize(&["K_CHUNK_INDEX", "SLURM_ARRAY_TASK_ID"]))
+        .unwrap_or(0);
+
+    let n_chunks = args
+        .k_n_chunks
+        .or_else(|| sim_common::mpi::env_usize(&["K_N_CHUNKS", "SLURM_ARRAY_TASK_COUNT"]))
+        .unwrap_or(1);
+
+    run_bandstructure_with_args(method, e_config, args, chunk_index, n_chunks)
+}
