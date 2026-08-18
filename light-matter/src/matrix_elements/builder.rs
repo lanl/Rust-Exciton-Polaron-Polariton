@@ -34,7 +34,7 @@ impl LMMatrixElementArray {
         self.cos_mat.is_empty() && self.sin_mat.is_empty() && self.p_cos_mat.is_empty()
     }
 
-    pub fn populate_tay_mat_elements_with_cache(
+    pub fn populate_taylor_matrix_elements_with_cache(
         &mut self,
         all_q_ind: &Vec<ModeTask>,
         e_vecs: &Array2<c64>,

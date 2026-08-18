@@ -37,7 +37,7 @@ impl ModeKey {
 
 /// Typed work items for matrix-element generation.
 ///
-/// Currently `populate_tay_mat_elements_with_cache` is used for photon-sector
+/// Currently `populate_taylor_matrix_elements_with_cache` is used for photon-sector
 /// matrix elements. Phonon single-mode matrix elements are generated separately
 /// by `phonon_mat_elements`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

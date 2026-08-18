@@ -119,7 +119,7 @@ where
                 crate::utils::K_HASH_QUANTUM,
             );
 
-            self.matrix_elements.populate_tay_mat_elements_with_cache(
+            self.matrix_elements.populate_taylor_matrix_elements_with_cache(
                 &all_q_ind,
                 self.exciton.e_vecs.as_ref().unwrap(),
                 self.photon.boson.get_modes(),
@@ -232,7 +232,7 @@ where
             crate::utils::K_HASH_QUANTUM,
         );
 
-        self.matrix_elements.populate_tay_mat_elements_with_cache(
+        self.matrix_elements.populate_taylor_matrix_elements_with_cache(
             &all_q_ind,
             self.exciton.e_vecs.as_ref().unwrap(),
             self.photon.boson.get_modes(),
