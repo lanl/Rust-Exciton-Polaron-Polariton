@@ -1,3 +1,4 @@
+use crate::modes::types::Polarization;
 use crate::types::Vector3D;
 use exciton_2d::ExcitonConfig;
 use ndarray::Array1;
@@ -9,6 +10,7 @@ pub struct PPConfig {
     pub n_ex_eig: usize,
 
     pub lm_couplings: Vec<f64>,
+    pub mode_polarizations: Vec<Polarization>,
     pub omega_0: f64,
     pub q_values: Vec<Vector3D>,
 
@@ -42,6 +44,8 @@ impl PPConfig {
         n_k_points: usize,
         n_bands: usize,
     ) -> Self {
+        let mode_polarizations = vec![Polarization::TE; q_values.len()];
+
         Self {
             e_config,
             n_rel,
@@ -49,6 +53,54 @@ impl PPConfig {
             lm_couplings,
             omega_0,
             q_values,
+            mode_polarizations,
+            pn_coupling,
+            pn_omega,
+            pn_k,
+            pn_n_fock,
+            n_k_points,
+            n_bands,
+            cache_dir: Some("saved_data_lm/matrix_element_cache".to_string()),
+            d_omega: None,
+            omega_max: None,
+            reflectivity: None,
+        }
+    }
+
+    pub fn new_with_polarizations(
+        e_config: ExcitonConfig,
+        n_rel: usize,
+        n_ex_eig: usize,
+        lm_couplings: Vec<f64>,
+        omega_0: f64,
+        q_values: Vec<Vector3D>,
+        mode_polarizations: Vec<Polarization>,
+        pn_coupling: f64,
+        pn_omega: f64,
+        pn_k: Array1<f64>,
+        pn_n_fock: usize,
+        n_k_points: usize,
+        n_bands: usize,
+    ) -> Self {
+        assert_eq!(
+            q_values.len(),
+            mode_polarizations.len(),
+            "q_values and mode_polarizations must have the same length"
+        );
+        assert_eq!(
+            q_values.len(),
+            lm_couplings.len(),
+            "q_values and lm_couplings must have the same length"
+        );
+
+        Self {
+            e_config,
+            n_rel,
+            n_ex_eig,
+            lm_couplings,
+            omega_0,
+            q_values,
+            mode_polarizations,
             pn_coupling,
             pn_omega,
             pn_k,
@@ -79,6 +131,8 @@ impl PPConfig {
         omega_max: f64,
         reflectivity: f64,
     ) -> Self {
+        let mode_polarizations = vec![Polarization::TE; q_values.len()];
+
         Self {
             e_config,
             n_rel,
@@ -86,6 +140,57 @@ impl PPConfig {
             lm_couplings,
             omega_0,
             q_values,
+            mode_polarizations,
+            pn_coupling,
+            pn_omega,
+            pn_k,
+            pn_n_fock,
+            n_k_points,
+            n_bands,
+            cache_dir: Some("saved_data_lm/matrix_element_cache".to_string()),
+            d_omega: Some(d_omega),
+            omega_max: Some(omega_max),
+            reflectivity: Some(reflectivity),
+        }
+    }
+
+    pub fn new_with_effective_modes_and_polarizations(
+        e_config: ExcitonConfig,
+        n_rel: usize,
+        n_ex_eig: usize,
+        lm_couplings: Vec<f64>,
+        omega_0: f64,
+        q_values: Vec<Vector3D>,
+        mode_polarizations: Vec<Polarization>,
+        pn_coupling: f64,
+        pn_omega: f64,
+        pn_k: Array1<f64>,
+        pn_n_fock: usize,
+        n_k_points: usize,
+        n_bands: usize,
+        d_omega: f64,
+        omega_max: f64,
+        reflectivity: f64,
+    ) -> Self {
+        assert_eq!(
+            q_values.len(),
+            mode_polarizations.len(),
+            "q_values and mode_polarizations must have the same length"
+        );
+        assert_eq!(
+            q_values.len(),
+            lm_couplings.len(),
+            "q_values and lm_couplings must have the same length"
+        );
+
+        Self {
+            e_config,
+            n_rel,
+            n_ex_eig,
+            lm_couplings,
+            omega_0,
+            q_values,
+            mode_polarizations,
             pn_coupling,
             pn_omega,
             pn_k,
@@ -122,6 +227,14 @@ impl PPConfig {
             q.x.to_bits().hash(&mut hasher);
             q.y.to_bits().hash(&mut hasher);
             q.z.to_bits().hash(&mut hasher);
+        }
+
+        for pol in &self.mode_polarizations {
+            let pol_code: u8 = match pol {
+                Polarization::TE => 0,
+                Polarization::TM => 1,
+            };
+            pol_code.hash(&mut hasher);
         }
 
         self.pn_coupling.to_bits().hash(&mut hasher);

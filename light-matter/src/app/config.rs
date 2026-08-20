@@ -35,13 +35,14 @@ pub(super) fn build_bandstructure_pp_config(
             omega_max,
             reflectivity,
             ..
-        } => PPConfig::new_with_effective_modes(
+        } => PPConfig::new_with_effective_modes_and_polarizations(
             e_config,
             args.n_rel,
             args.n_ex_eig,
             mode_set.couplings,
             args.omega_0,
             mode_set.q_values,
+            mode_set.polarizations,
             args.pn_coupling,
             args.pn_omega,
             pn_k,
@@ -52,13 +53,14 @@ pub(super) fn build_bandstructure_pp_config(
             omega_max,
             reflectivity,
         ),
-        crate::modes::photon::PhotonModeKind::Cartesian { .. } => PPConfig::new(
+        crate::modes::photon::PhotonModeKind::Cartesian { .. } => PPConfig::new_with_polarizations(
             e_config,
             args.n_rel,
             args.n_ex_eig,
             mode_set.couplings,
             args.omega_0,
             mode_set.q_values,
+            mode_set.polarizations,
             args.pn_coupling,
             args.pn_omega,
             pn_k,
@@ -103,13 +105,14 @@ pub(super) fn build_dielectric_pp_config_for_reflectivity(
             omega_max,
             reflectivity,
             ..
-        } => PPConfig::new_with_effective_modes(
+        } => PPConfig::new_with_effective_modes_and_polarizations(
             e_config,
             args.n_rel,
             args.n_ex_eig,
             mode_set.couplings,
             args.omega_0,
             mode_set.q_values,
+            mode_set.polarizations,
             args.pn_coupling,
             args.pn_omega,
             pn_k,
@@ -120,13 +123,14 @@ pub(super) fn build_dielectric_pp_config_for_reflectivity(
             omega_max,
             reflectivity,
         ),
-        crate::modes::photon::PhotonModeKind::Cartesian { .. } => PPConfig::new(
+        crate::modes::photon::PhotonModeKind::Cartesian { .. } => PPConfig::new_with_polarizations(
             e_config,
             args.n_rel,
             args.n_ex_eig,
             mode_set.couplings,
             args.omega_0,
             mode_set.q_values,
+            mode_set.polarizations,
             args.pn_coupling,
             args.pn_omega,
             pn_k,

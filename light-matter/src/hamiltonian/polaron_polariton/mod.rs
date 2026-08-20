@@ -1,12 +1,13 @@
 mod fock;
 
-use super::{Boson, BosonicHamiltonian, ExcitonicHamiltonian, FullBosons, LMHamiltonian};
+use super::{
+    Boson, BosonicHamiltonian, ExcitonicHamiltonian, FullBosons, LMHamiltonian, PPBasisLayout,
+};
 use crate::config::PPConfig;
 use crate::matrix_elements::{LMMatrixElementArray, ModeKey};
-use crate::modes::types::{BosonMode, Polarization};
+use crate::modes::types::BosonMode;
 use crate::timed_println;
 use crate::timed_println_rank0;
-use crate::types::Vector3D;
 use exciton_2d::Exciton2DGridSystem;
 use matrix_ops::{ConvertFrom, Diagonalize, MatrixOps, MatrixOpsError, Sqrt};
 use ndarray::arr1;
@@ -18,6 +19,7 @@ pub struct PPHamiltonian<M: MatrixOps, B: Boson<M>> {
     pub polariton: LMHamiltonian<M, B>,
     pub phonon: BosonicHamiltonian<M, FullBosons<M>>,
     pub pn_coupling: f64,
+    pub layout: PPBasisLayout,
     sin_pn: Option<Vec<M>>,
     is_initialized: bool,
     cached_lm_ham: Option<M>,
@@ -38,6 +40,7 @@ where
             polariton,
             phonon,
             pn_coupling,
+            layout: PPBasisLayout::DEFAULT,
             sin_pn: None,
             is_initialized: false,
             cached_lm_ham: None,
@@ -55,18 +58,8 @@ where
         let photon_modes: Vec<BosonMode> = pp_config
             .q_values
             .iter()
-            .map(|q| {
-                BosonMode::new(
-                    Vector3D {
-                        x: q.x,
-                        y: q.y,
-                        z: q.z,
-                    },
-                    Polarization::TE,
-                    2,
-                )
-                .clone()
-            })
+            .zip(pp_config.mode_polarizations.iter())
+            .map(|(q, &pol)| BosonMode::new(*q, pol, 2))
             .collect();
         let photon: BosonicHamiltonian<M, B> = BosonicHamiltonian::new(photon_modes);
 
@@ -95,13 +88,15 @@ where
         PPHamiltonian::new(polariton, phonon, pn_coupling)
     }
 
-    // pub fn update_k(&mut self, k: Vec<f64>)
-    // where
-    //     M::Scalar:  Sqrt + Sum + ConvertFrom<c64> + ConvertFrom<f64>,
-    // {
-    //     self.polariton.exciton.exciton_ham.k = k.clone();
-    //     self.polariton.initialize(Some(k));
-    // }
+    #[inline]
+    fn kron_ex_ph(&self, ex_op: &M, ph_op: &M) -> M {
+        self.layout.lm.kron_ex_ph(ex_op, ph_op)
+    }
+
+    #[inline]
+    fn kron_lm_pn(&self, lm_op: &M, pn_op: &M) -> M {
+        self.layout.kron_lm_pn(lm_op, pn_op)
+    }
 
     pub fn initialize(&mut self, k: Option<Vec<f64>>) -> Result<(), MatrixOpsError>
     where
@@ -265,10 +260,10 @@ where
                 //
                 // after the phase rotation i(b† - b) -> -(b† + b).
                 // ------------------------------------------------------------
-                let lm_op = sin_pn[idx1].kron(&ph_eye);
+                let lm_op = self.kron_ex_ph(&sin_pn[idx1], &ph_eye);
                 let pn_op = (b.add(&b_dag))?.scale(-2.0 * self.pn_coupling)?;
 
-                Self::add_term(&mut interaction, lm_op.kron(&pn_op))?;
+                Self::add_term(&mut interaction, self.kron_lm_pn(&lm_op, &pn_op))?;
 
                 // ------------------------------------------------------------
                 // Exciton-phonon momentum recoil:
@@ -276,10 +271,13 @@ where
                 //     -(P·k / M) n_k
                 // ------------------------------------------------------------
                 let p_k = self.polariton.exciton.get_p_com(k1)?;
-                let lm_op = p_k.kron(&ph_eye);
+                let lm_op = self.kron_ex_ph(&p_k, &ph_eye);
                 let n_k1 = self.phonon.get_adag_a(idx1)?;
 
-                Self::add_term(&mut interaction, lm_op.kron(&n_k1.scale(-1.0 / m_com)?))?;
+                Self::add_term(
+                    &mut interaction,
+                    self.kron_lm_pn(&lm_op, &n_k1.scale(-1.0 / m_com)?),
+                )?;
 
                 // ------------------------------------------------------------
                 // Full phonon-phonon recoil:
@@ -300,7 +298,7 @@ where
 
                         let pn_op = n_k1.dot(&n_k2)?.scale(k1.dot(k2) / (2.0 * m_com))?;
 
-                        Self::add_term(&mut interaction, lm_eye.clone().kron(&pn_op))?;
+                        Self::add_term(&mut interaction, self.kron_lm_pn(&lm_eye, &pn_op))?;
 
                         Ok(())
                     })?;
@@ -333,11 +331,11 @@ where
                             return Ok(());
                         }
 
-                        let lm_op = ex_eye
-                            .kron(&cached_photon_numbers[ph_idx])
-                            .scale(q_dot_k / m_com)?;
+                        let photon_number_lm =
+                            self.kron_ex_ph(&ex_eye, &cached_photon_numbers[ph_idx]);
+                        let lm_op = photon_number_lm.scale(q_dot_k / m_com)?;
 
-                        Self::add_term(&mut interaction, lm_op.kron(&n_k1))?;
+                        Self::add_term(&mut interaction, self.kron_lm_pn(&lm_op, &n_k1))?;
 
                         Ok(())
                     })?;
@@ -374,10 +372,11 @@ where
                             .get(&key)
                             .unwrap_or_else(|| panic!("Missing photon sine matrix for {:?}", key));
 
-                        let lm_op = M::from_dense(ex_op)?.kron(&ph_op);
+                        let ex_op_m = M::from_dense(ex_op)?;
+                        let lm_op = self.kron_ex_ph(&ex_op_m, &ph_op);
                         let pn_op = n_k1.scale(-2.0 * coupling / m_com)?;
 
-                        Self::add_term(&mut interaction, lm_op.kron(&pn_op))?;
+                        Self::add_term(&mut interaction, self.kron_lm_pn(&lm_op, &pn_op))?;
 
                         Ok(())
                     })?;
@@ -473,7 +472,7 @@ where
         //     -2 gamma_k sin(k·x/2) (b_k† + b_k)
         // ------------------------------------------------------------
         for (mode_idx, _mode) in self.phonon.boson.get_modes().iter().enumerate() {
-            let lm_sin = sin_pn[mode_idx].kron(&ph_eye);
+            let lm_sin = self.kron_ex_ph(&sin_pn[mode_idx], &ph_eye);
 
             for (pn_from, occ) in occupations.iter().enumerate() {
                 let n = occ[mode_idx];
@@ -522,12 +521,8 @@ where
         //     -(P·k / M) n_k.
         // ------------------------------------------------------------
         for (mode_idx, mode) in self.phonon.boson.get_modes().iter().enumerate() {
-            let p_k_lm = self
-                .polariton
-                .exciton
-                .get_p_com(&mode.q)?
-                .kron(&ph_eye)
-                .scale(-1.0 / m_com)?;
+            let p_k = self.polariton.exciton.get_p_com(&mode.q)?;
+            let p_k_lm = self.kron_ex_ph(&p_k, &ph_eye).scale(-1.0 / m_com)?;
 
             for (pn_idx, occ) in occupations.iter().enumerate() {
                 let n = occ[mode_idx] as f64;
@@ -581,7 +576,7 @@ where
         let cached_photon_numbers = self.polariton.cached_adag_a_ops.as_ref().unwrap();
 
         for (ph_idx, ph_mode) in self.polariton.photon.boson.get_modes().iter().enumerate() {
-            let photon_number_lm = ex_eye.kron(&cached_photon_numbers[ph_idx]);
+            let photon_number_lm = self.kron_ex_ph(&ex_eye, &cached_photon_numbers[ph_idx]);
 
             for (pn_mode_idx, pn_mode) in self.phonon.boson.get_modes().iter().enumerate() {
                 let coeff = ph_mode.q.dot(&pn_mode.q) / m_com;
@@ -634,7 +629,8 @@ where
                     .get(&key)
                     .unwrap_or_else(|| panic!("Missing photon sine matrix for {:?}", key));
 
-                let lm_op = M::from_dense(ex_op)?.kron(&ph_op);
+                let ex_op_m = M::from_dense(ex_op)?;
+                let lm_op = self.kron_ex_ph(&ex_op_m, &ph_op);
 
                 for (pn_idx, occ) in occupations.iter().enumerate() {
                     let n_k = occ[pn_mode_idx] as f64;
@@ -656,7 +652,7 @@ where
             pairs.len()
         );
 
-        M::build_kron_sum(pairs, lm_dim, pn_dim)
+        M::build_kron_sum_with_layout(pairs, lm_dim, pn_dim, self.layout.lm_pn_layout)
     }
 
     pub fn build_pp_hamiltonian(&mut self, k: Option<Vec<f64>>) -> Result<M, MatrixOpsError>
@@ -744,14 +740,14 @@ where
         timed_println_rank0!("  Create identity matrices: {:?}", time_eye.elapsed());
 
         let time_kron1 = Instant::now();
-        let mut ham = lm_ham.kron(&pn_eye);
+        let mut ham = self.kron_lm_pn(&lm_ham, &pn_eye);
         timed_println_rank0!(
             "  First kron product (LM ⊗ I_pn): {:?}",
             time_kron1.elapsed()
         );
 
         let time_kron2 = Instant::now();
-        let h_pn = lm_eye.kron(&pn_ham);
+        let h_pn = self.kron_lm_pn(&lm_eye, &pn_ham);
         ham = ham.add(&h_pn)?;
         timed_println_rank0!(
             "  Second kron product (I_lm ⊗ H_pn): {:?}",

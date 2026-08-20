@@ -253,7 +253,7 @@ where
     // n_ex_eig * n_ph * n_pn (or be a multiple thereof if extra blocks are
     // present). If it does not, abort with a clear message.
     let mut vec0 = pp_vecs.column(0);
-    let expected_len = n_ex_eig * n_ph * n_pn;
+    let expected_len = pp.layout.pp_dim(n_ex_eig, n_ph, n_pn)?;
     if vec0.len() != expected_len {
         panic!(
             "Inconsistent basis dimensions: vec0.len() = {}, expected {} (n_ex_eig={} * n_ph={} * n_pn={})",
@@ -265,7 +265,7 @@ where
         );
     }
 
-    let mut photon_character = bands::calculate_photonic_character(pp, &vec0.to_owned());
+    let mut photon_character = bands::calculate_photonic_character(pp, &vec0.to_owned())?;
     let mut ground_state_index = 0;
 
     while photon_character > 0.1 {
@@ -276,7 +276,7 @@ where
             );
         }
         vec0 = pp_vecs.column(ground_state_index);
-        photon_character = bands::calculate_photonic_character(pp, &vec0.to_owned());
+        photon_character = bands::calculate_photonic_character(pp, &vec0.to_owned())?;
     }
 
     // We store the magnitude of the scalar transition dipole,
@@ -285,24 +285,36 @@ where
     // numerator is |<0|x|n>|^2. For a full tensor dielectric calculation,
     // one should store complex transition dipoles for each Cartesian component
     // and form <n|x_i|0><0|x_j|n> explicitly.
-    let x_pp = Array1::from_shape_fn(n_eig, |idx| {
+    let mut x_pp_values = Vec::with_capacity(n_eig);
+
+    for idx in 0..n_eig {
         let vec1 = pp_vecs.column(idx);
+        let mut acc = c64::zero();
 
-        (0..n_ex_eig)
-            .flat_map(|ex_ind1| {
-                (0..n_ex_eig).flat_map(move |ex_ind2| {
-                    let x_element = x_exc[[ex_ind1, ex_ind2]];
-                    (0..n_ph * n_pn).map(move |bos_ind| {
-                        let pp_ind1 = ex_ind1 * n_ph * n_pn + bos_ind;
-                        let pp_ind2 = ex_ind2 * n_ph * n_pn + bos_ind;
+        for ex_ind1 in 0..n_ex_eig {
+            for ex_ind2 in 0..n_ex_eig {
+                let x_element = x_exc[[ex_ind1, ex_ind2]];
 
-                        vec0[pp_ind1].conj() * vec1[pp_ind2] * x_element
-                    })
-                })
-            })
-            .fold(c64::zero(), |acc, val| acc + val)
-            .norm()
-    });
+                for ph_idx in 0..n_ph {
+                    for pn_idx in 0..n_pn {
+                        let pp_ind1 = pp
+                            .layout
+                            .pp_index(ex_ind1, ph_idx, pn_idx, n_ex_eig, n_ph, n_pn)?;
+
+                        let pp_ind2 = pp
+                            .layout
+                            .pp_index(ex_ind2, ph_idx, pn_idx, n_ex_eig, n_ph, n_pn)?;
+
+                        acc += vec0[pp_ind1].conj() * vec1[pp_ind2] * x_element;
+                    }
+                }
+            }
+        }
+
+        x_pp_values.push(acc.norm());
+    }
+
+    let x_pp = Array1::from_vec(x_pp_values);
 
     // -----------------------------------------------------------------
     // Compute composition data: photonic character and average phonon number
@@ -317,8 +329,11 @@ where
 
     // Only create phonon number operator if phonons are actually present in the Hamiltonian
     let phonon_number_op = if has_phonon_dof {
-        let lm_eye = M::eye(n_ex_eig * n_ph);
-        Some(lm_eye.kron(&pp.phonon.boson.adag_a(0)?))
+        let lm_dim = pp.layout.lm.lm_dim(n_ex_eig, n_ph)?;
+        let lm_eye = M::eye(lm_dim);
+        let pn_number = pp.phonon.boson.adag_a(0)?;
+
+        Some(pp.layout.kron_lm_pn(&lm_eye, &pn_number))
     } else {
         None
     };
@@ -335,7 +350,7 @@ where
         photonic_chars.push(bands::calculate_photonic_character(
             pp,
             &pp_vecs.column(idx).to_owned(),
-        ));
+        )?);
 
         // Phonon number expectation
         // Only compute if phonons are actually present in the Hamiltonian

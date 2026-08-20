@@ -142,6 +142,10 @@ pub struct BandstructureArgs {
     #[arg(long, default_value_t = 0.003)]
     pub total_coupling: f64,
 
+    /// Constant multiplier applied to every generated photon-mode coupling.
+    #[arg(long, default_value_t = 1.0)]
+    pub photon_coupling_scale: f64,
+
     #[arg(long, default_value_t = 0.15)]
     pub omega_0: f64,
 
@@ -233,6 +237,10 @@ pub struct DielectricArgs {
     /// Cartesian total coupling. Used with --photon-modes cartesian.
     #[arg(long, default_value_t = 0.003)]
     pub total_coupling: f64,
+
+    /// Constant multiplier applied to every generated photon-mode coupling.
+    #[arg(long, default_value_t = 1.0)]
+    pub photon_coupling_scale: f64,
 
     /// Comma-separated reflectivity values to scan.
     #[arg(long, value_delimiter = ',', default_value = "0.0,0.999999,0.9999999")]

@@ -1,4 +1,4 @@
-use super::{Boson, BosonicHamiltonian, ExcitonicHamiltonian};
+use super::{Boson, BosonicHamiltonian, ExcitonicHamiltonian, LMBasisLayout};
 use crate::matrix_elements::{LMMatrixElementArray, ModeKey};
 use crate::timed_println_rank0;
 use matrix_ops::{ConvertFrom, Diagonalize, MatrixOps, MatrixOpsError, Sqrt};
@@ -12,6 +12,7 @@ pub struct LMHamiltonian<M: MatrixOps, B: Boson<M>> {
     pub photon: BosonicHamiltonian<M, B>,
     pub matrix_elements: LMMatrixElementArray,
     pub couplings: Vec<f64>,
+    pub layout: LMBasisLayout,
     pub p_c_sin: Option<Vec<M>>,
     pub p_q: Option<Vec<M>>,
     is_initialized: bool,
@@ -37,6 +38,7 @@ where
             photon,
             matrix_elements,
             couplings,
+            layout: LMBasisLayout::PHOTON_MAJOR,
             p_c_sin: None,
             p_q: None,
             is_initialized: false,
@@ -61,6 +63,7 @@ where
             photon,
             matrix_elements,
             couplings,
+            layout: LMBasisLayout::PHOTON_MAJOR,
             p_c_sin: None,
             p_q: None,
             is_initialized: false,
@@ -478,7 +481,8 @@ where
             kron_pairs.len()
         );
         let sum_time = Instant::now();
-        let interaction = M::build_kron_sum(kron_pairs, n_ex, n_ph);
+        let interaction =
+            M::build_kron_sum_with_layout(kron_pairs, n_ex, n_ph, self.layout.ex_ph_layout);
         timed_println_rank0!("        Built interaction in {:?}", sum_time.elapsed());
 
         interaction
@@ -501,11 +505,13 @@ where
         timed_println_rank0!("      LM identity matrices: {:?}", time_eye.elapsed());
 
         let time_ex = Instant::now();
-        let mut ham = M::kron(&self.exciton.get_h()?, &ph_eye);
+        let h_ex = self.exciton.get_h()?;
+        let mut ham = self.layout.kron_ex_ph(&h_ex, &ph_eye);
         timed_println_rank0!("      LM exciton kron: {:?}", time_ex.elapsed());
 
         let time_ph = Instant::now();
-        let h_ph = M::kron(&ex_eye, &self.photon.get_h()?);
+        let h_photon = self.photon.get_h()?;
+        let h_ph = self.layout.kron_ex_ph(&ex_eye, &h_photon);
         ham = ham.add(&h_ph)?;
         timed_println_rank0!("      LM photon kron: {:?}", time_ph.elapsed());
 

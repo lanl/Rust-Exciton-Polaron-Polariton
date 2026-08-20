@@ -10,38 +10,59 @@ use std::path::Path;
 use crate::timed_println;
 
 use crate::config::PPConfig;
-use crate::hamiltonian::{Boson, PPHamiltonian};
+use crate::hamiltonian::{Boson, PPBasisLayout, PPHamiltonian};
 
-/// Calculate the photonic character of an eigenstate
-/// Returns a value between 0 (purely excitonic) and 1 (purely photonic)
+/// Calculate the photonic character of an eigenstate.
+///
+/// Returns a value between 0, purely excitonic, and 1, photonic.
 pub fn calculate_photonic_character<M, B>(
     pp: &PPHamiltonian<M, B>,
     eigenvector: &Array1<c64>,
-) -> f64
+) -> Result<f64, MatrixOpsError>
 where
     M: MatrixOps,
     B: Boson<M>,
 {
     let n_ex = pp.polariton.exciton.n_ex_eig;
-    let n_ph = pp.polariton.photon.dimension(); // +1 for ground state
+    let n_ph = pp.polariton.photon.dimension();
+
     let n_pn = if pp.pn_coupling < EPSILON || pp.phonon.dimension() == 1 {
         1
     } else {
         pp.phonon.dimension()
     };
 
-    // Calculate the total probability in photonic states (excluding ground state)
+    calculate_photonic_character_with_layout(eigenvector, pp.layout, n_ex, n_ph, n_pn)
+}
+
+pub fn calculate_photonic_character_with_layout(
+    eigenvector: &Array1<c64>,
+    layout: PPBasisLayout,
+    n_ex: usize,
+    n_ph: usize,
+    n_pn: usize,
+) -> Result<f64, MatrixOpsError> {
+    let expected_len = layout.pp_dim(n_ex, n_ph, n_pn)?;
+
+    if eigenvector.len() != expected_len {
+        return Err(MatrixOpsError::DimensionMismatch {
+            expected: expected_len,
+            got: eigenvector.len(),
+            context: "photonic character eigenvector length".to_string(),
+        });
+    }
+
     let mut photonic_prob = 0.0;
     let mut total_prob = 0.0;
 
     for ex_idx in 0..n_ex {
         for ph_idx in 0..n_ph {
             for pn_idx in 0..n_pn {
-                let idx = ex_idx * n_ph * n_pn + ph_idx * n_pn + pn_idx;
+                let idx = layout.pp_index(ex_idx, ph_idx, pn_idx, n_ex, n_ph, n_pn)?;
+
                 let prob = eigenvector[idx].norm_sqr();
 
                 if ph_idx > 0 {
-                    // Skip photon ground state
                     photonic_prob += prob;
                 }
 
@@ -50,8 +71,11 @@ where
         }
     }
 
-    // Return the fraction of probability in photonic states
-    photonic_prob / total_prob
+    if total_prob > 0.0 {
+        Ok(photonic_prob / total_prob)
+    } else {
+        Ok(0.0)
+    }
 }
 
 pub type ColorBandData = sim_common::data::ColoredBandData;
@@ -261,9 +285,14 @@ where
 
         let n_returned = eigvals.len();
 
-        let photonic_character: Vec<f64> = (0..n_returned)
-            .map(|i| calculate_photonic_character(pp, &eigvecs.column(i).to_owned()))
-            .collect();
+        let mut photonic_character = Vec::with_capacity(n_returned);
+
+        for i in 0..n_returned {
+            photonic_character.push(calculate_photonic_character(
+                pp,
+                &eigvecs.column(i).to_owned(),
+            )?);
+        }
 
         prev_eigvecs = Some(eigvecs);
 

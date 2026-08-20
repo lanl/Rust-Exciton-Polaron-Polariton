@@ -91,6 +91,7 @@ fn run_dielectric_scan(e_config: ExcitonConfig, args: cli::DielectricArgs) -> Re
     // Generate photon modes and couplings for each reflectivity/mode-construction choice.
     let mut all_q_values = Vec::new();
     let mut all_mode_couplings = Vec::new();
+    let mut all_mode_polarizations = Vec::new();
     let mut total_coupling_values = Vec::new();
 
     for &reflectivity in reflectivities.iter() {
@@ -107,6 +108,7 @@ fn run_dielectric_scan(e_config: ExcitonConfig, args: cli::DielectricArgs) -> Re
 
         all_q_values.push(mode_set.q_values);
         all_mode_couplings.push(mode_set.couplings);
+        all_mode_polarizations.push(mode_set.polarizations);
         total_coupling_values.push(total_coupling);
     }
 
@@ -213,6 +215,7 @@ fn run_dielectric_scan(e_config: ExcitonConfig, args: cli::DielectricArgs) -> Re
             &total_coupling_values,
             &all_mode_couplings,
             &all_q_values,
+            &all_mode_polarizations,
             &reflectivities,
             &e_config,
             n_rel,

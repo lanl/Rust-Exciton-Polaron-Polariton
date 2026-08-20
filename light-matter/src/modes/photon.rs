@@ -2,6 +2,7 @@ use ndarray::Array1;
 
 use crate::cli::{BandstructureArgs, DielectricArgs, PhotonModeArg};
 use crate::modes::effective;
+use crate::modes::types::Polarization;
 use crate::types::Vector3D;
 
 const C: f64 = 137.036;
@@ -12,18 +13,21 @@ pub enum PhotonModeKind {
         n_modes_side: usize,
         q_max: f64,
         total_coupling: f64,
+        coupling_scale: f64,
     },
     Effective {
         n_modes_target: usize,
         d_omega: f64,
         omega_max: f64,
         reflectivity: f64,
+        coupling_scale: f64,
     },
 }
 
 #[derive(Debug, Clone)]
 pub struct PhotonModeSet {
     pub q_values: Vec<Vector3D>,
+    pub polarizations: Vec<Polarization>,
     pub couplings: Vec<f64>,
     pub omega_0: f64,
     pub kind: PhotonModeKind,
@@ -34,6 +38,7 @@ pub fn construct_cartesian_modes(
     q_max: f64,
     omega_0: f64,
     total_coupling: f64,
+    coupling_scale: f64,
 ) -> PhotonModeSet {
     let qx_values = Array1::linspace(-q_max, q_max, n_modes_side);
     let qy_values = Array1::linspace(-q_max, q_max, n_modes_side);
@@ -53,17 +58,21 @@ pub fn construct_cartesian_modes(
     let per_mode = if q_values.is_empty() {
         0.0
     } else {
-        total_coupling / n_modes_side as f64
+        coupling_scale * total_coupling / n_modes_side as f64
     };
+
+    let polarizations = vec![Polarization::TE; q_values.len()];
 
     PhotonModeSet {
         q_values: q_values.clone(),
+        polarizations,
         couplings: vec![per_mode; q_values.len()],
         omega_0,
         kind: PhotonModeKind::Cartesian {
             n_modes_side,
             q_max,
             total_coupling,
+            coupling_scale,
         },
     }
 }
@@ -74,12 +83,20 @@ pub fn construct_effective_modes(
     omega_0: f64,
     omega_max: f64,
     reflectivity: f64,
+    coupling_scale: f64,
 ) -> PhotonModeSet {
-    let (q_values, couplings) =
-        effective::generate_modes(d_omega, n_modes_target, omega_0, omega_max, reflectivity);
+    let (q_values, polarizations, couplings) = effective::generate_modes(
+        d_omega,
+        n_modes_target,
+        omega_0,
+        omega_max,
+        reflectivity,
+        coupling_scale,
+    );
 
     PhotonModeSet {
         q_values,
+        polarizations,
         couplings,
         omega_0,
         kind: PhotonModeKind::Effective {
@@ -87,36 +104,47 @@ pub fn construct_effective_modes(
             d_omega,
             omega_max,
             reflectivity,
+            coupling_scale,
         },
     }
 }
 
 pub fn from_bandstructure_args(args: &BandstructureArgs) -> PhotonModeSet {
     match args.photon_modes {
-        PhotonModeArg::Cartesian => {
-            construct_cartesian_modes(args.n_modes, args.q_max, args.omega_0, args.total_coupling)
-        }
+        PhotonModeArg::Cartesian => construct_cartesian_modes(
+            args.n_modes,
+            args.q_max,
+            args.omega_0,
+            args.total_coupling,
+            args.photon_coupling_scale,
+        ),
         PhotonModeArg::Effective => construct_effective_modes(
             args.n_modes,
             args.d_omega,
             args.omega_0,
             args.omega_max,
             args.reflectivity,
+            args.photon_coupling_scale,
         ),
     }
 }
 
 pub fn from_dielectric_args(args: &DielectricArgs, reflectivity: f64) -> PhotonModeSet {
     match args.photon_modes {
-        PhotonModeArg::Cartesian => {
-            construct_cartesian_modes(args.n_modes, args.q_max, args.omega_0, args.total_coupling)
-        }
+        PhotonModeArg::Cartesian => construct_cartesian_modes(
+            args.n_modes,
+            args.q_max,
+            args.omega_0,
+            args.total_coupling,
+            args.photon_coupling_scale,
+        ),
         PhotonModeArg::Effective => construct_effective_modes(
             args.n_modes,
             args.d_omega,
             args.omega_0,
             args.omega_max,
             reflectivity,
+            args.photon_coupling_scale,
         ),
     }
 }

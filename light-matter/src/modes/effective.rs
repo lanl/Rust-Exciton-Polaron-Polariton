@@ -1,3 +1,4 @@
+use crate::modes::types::Polarization;
 use crate::types::Vector3D;
 
 // Speed of light in atomic units
@@ -21,7 +22,8 @@ pub fn generate_modes(
     omega_0: f64,
     omega_max: f64,
     reflectivity: f64,
-) -> (Vec<Vector3D>, Vec<f64>) {
+    coupling_scale: f64,
+) -> (Vec<Vector3D>, Vec<Polarization>, Vec<f64>) {
     let n_omega = ((omega_max - omega_0) / d_omega).floor() as usize;
 
     if omega_0 > omega_max {
@@ -32,42 +34,55 @@ pub fn generate_modes(
         panic!("Reflectivity must be between 0 and 1 (exclusive)");
     }
 
-    let target_modes = n_modes * n_modes;
-    let (d_q, total_modes) = find_d_q_for_target_modes(target_modes, d_omega, omega_0, omega_max);
-
-    let (q_values, couplings): (Vec<Vector3D>, Vec<f64>);
-    if reflectivity > f64::EPSILON {
-        (q_values, couplings) = (0..n_omega)
-            .flat_map(|i| {
-                let omega_n = omega_0 + (i as f64) * d_omega;
-                let q_n = ((omega_n * omega_n - omega_0 * omega_0).sqrt()) / C;
-
-                let qs = get_q_per_frequency(d_q, q_n, omega_0);
-                let c = vec![get_coupling(d_omega, d_q, omega_n, omega_0, reflectivity); qs.len()];
-                qs.into_iter().zip(c.into_iter())
-            })
-            .unzip();
-    } else {
-        q_values = (0..n_omega)
-            .flat_map(|i| {
-                let omega_n = omega_0 + (i as f64) * d_omega;
-                let q_n = ((omega_n * omega_n - omega_0 * omega_0).sqrt()) / C;
-
-                get_q_per_frequency(d_q, q_n, omega_0)
-            })
-            .collect();
-        couplings = vec![0.0; q_values.len()];
+    if coupling_scale < 0.0 {
+        panic!("photon coupling scale must be non-negative");
     }
 
-    if q_values.len() != total_modes {
+    // This target is the number of q-points before polarization duplication.
+    let target_q_points = n_modes * n_modes;
+    let (d_q, total_q_points) =
+        find_d_q_for_target_modes(target_q_points, d_omega, omega_0, omega_max);
+
+    let mut q_values = Vec::new();
+    let mut polarizations = Vec::new();
+    let mut couplings = Vec::new();
+
+    for i in 0..n_omega {
+        let omega_n = omega_0 + (i as f64) * d_omega;
+        let q_n = ((omega_n * omega_n - omega_0 * omega_0).sqrt()) / C;
+
+        let qs = get_q_per_frequency(d_q, q_n, omega_0);
+
+        let base_coupling = if reflectivity > f64::EPSILON {
+            coupling_scale * get_coupling(d_omega, d_q, omega_n, omega_0, reflectivity)
+        } else {
+            0.0
+        };
+
+        for q in qs {
+            // TE mode
+            q_values.push(q);
+            polarizations.push(Polarization::TE);
+            couplings.push(base_coupling);
+
+            // TM mode
+            q_values.push(q);
+            polarizations.push(Polarization::TM);
+            couplings.push(base_coupling);
+        }
+    }
+
+    let expected_photon_modes = 2 * total_q_points;
+    if q_values.len() != expected_photon_modes {
         println!(
-            "Warning: Generated {} modes, but expected {}",
+            "Warning: Generated {} photon modes, but expected {} = 2 * {} q-points",
             q_values.len(),
-            total_modes
+            expected_photon_modes,
+            total_q_points
         );
     }
 
-    (q_values, couplings)
+    (q_values, polarizations, couplings)
 }
 
 fn get_coupling(d_omega: f64, d_q: f64, omega_n: f64, omega_0: f64, reflectivity: f64) -> f64 {

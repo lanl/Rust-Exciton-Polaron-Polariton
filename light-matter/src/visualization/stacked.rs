@@ -16,6 +16,7 @@
 use crate::config::PPConfig;
 use crate::dielectric;
 use crate::hamiltonian::{PPHamiltonian, SingExBosons};
+use crate::modes::types::Polarization;
 use crate::plot_photon_freqs;
 use crate::timed_println;
 use crate::types::Vector3D;
@@ -471,6 +472,7 @@ pub fn generate_stacked_plots(
     coupling_values: &Array1<f64>,
     all_mode_couplings: &Vec<Vec<f64>>,
     all_q_values: &Vec<Vec<Vector3D>>,
+    all_mode_polarizations: &Vec<Vec<Polarization>>,
     reflectivities: &[f64],
     e_config: &ExcitonConfig,
     n_rel: usize,
@@ -498,13 +500,14 @@ pub fn generate_stacked_plots(
     // Load zero-coupling dielectric function for overlay (use first q_values set)
     let zero_coupling_imag = {
         let zero_couplings = vec![0.0; all_q_values[0].len()];
-        let pp_config_zero = PPConfig::new_with_effective_modes(
+        let pp_config_zero = PPConfig::new_with_effective_modes_and_polarizations(
             e_config.clone(),
             n_rel,
             n_ex_eig,
             zero_couplings,
             omega_0,
             all_q_values[0].clone(),
+            all_mode_polarizations[0].clone(),
             pn_coupling,
             pn_omega,
             pn_k.clone(),
@@ -567,13 +570,14 @@ pub fn generate_stacked_plots(
         let reflectivity = reflectivities[idx];
 
         // Create PP config for this coupling with effective mode parameters
-        let pp_config_plot = PPConfig::new_with_effective_modes(
+        let pp_config_plot = PPConfig::new_with_effective_modes_and_polarizations(
             e_config.clone(),
             n_rel,
             n_ex_eig,
             mode_couplings.clone(),
             omega_0,
             q_values.clone(),
+            all_mode_polarizations[idx].clone(),
             pn_coupling,
             pn_omega,
             pn_k.clone(),
