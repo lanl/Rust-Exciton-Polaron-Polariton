@@ -3,16 +3,14 @@
 #SBATCH --job-name=sing_ex_disp
 #SBATCH --output myjob_%j.out
 #SBATCH --error myjob_%j.err
-#SBATCH --partition=skylake-gold
+#SBATCH --partition=standard
 #
-#SBATCH --time=2-00:00:00
-###SBATCH --time=8:00:00
+#SBATCH --time=16:00:00
 #SBATCH --ntasks=3
 #SBATCH --nodes=3  
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=64           # 64 cores per rank
 #SBATCH --mem=0                       # Request all available memory on each node
-#SBATCH --qos=long
 
 ulimit -c 0  # Disable core dumps
 

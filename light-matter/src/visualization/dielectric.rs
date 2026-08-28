@@ -53,7 +53,7 @@ pub fn plot_dielectric_function(
                     // Check if this coupling value is EXACTLY in our list (with small tolerance)
                     let coupling_match = coupling_values
                         .iter()
-                        .any(|&c| (c - params.lm_coupling).abs() < 1e-10);
+                        .any(|&c| (c - params.lm_coupling).abs() < 1e-5);
 
                     // Check if other parameters match the reference parameters (if provided)
                     let params_match = if let Some(ref_params) = reference_params {
@@ -66,7 +66,7 @@ pub fn plot_dielectric_function(
                             (params.pn_coupling - ref_params.pn_coupling).abs() < 1e-10;
                         let pn_n_fock_match = params.pn_n_fock == ref_params.pn_n_fock;
                         let n_eig_match = params.n_eig == ref_params.n_eig;
-                        let gamma_match = params.gamma == ref_params.gamma;
+                        let gamma_match = (params.gamma - ref_params.gamma).abs() < 1e-12;
 
                         let all_match = a0_match
                             && v0_match

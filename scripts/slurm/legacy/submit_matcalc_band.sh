@@ -2,7 +2,7 @@
 #SBATCH --job-name=band_matcalc
 #SBATCH --output=logs/band_matcalc_%A_%a.out
 #SBATCH --error=logs/band_matcalc_%A_%a.err
-#SBATCH --partition=skylake-gold
+#SBATCH --partition=standard
 #SBATCH --time=08:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -15,7 +15,7 @@ export RUST_BACKTRACE=full
 
 source "${HOME}/env/matrix_ops_petsc_mpi.sh"
 
-TARGET_DIR="/vast/home/mike_tay/two_e_polaron-polariton/rust_sub/target"
+TARGET_DIR="/users/mike_tay/rust_exciton_pp/target"
 
 export K_N_CHUNKS=4
 export K_CHUNK_INDEX="${SLURM_ARRAY_TASK_ID}"

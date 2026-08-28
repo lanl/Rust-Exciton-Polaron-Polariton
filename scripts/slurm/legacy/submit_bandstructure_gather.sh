@@ -2,7 +2,7 @@
 #SBATCH --job-name=band_gather
 #SBATCH --output=logs/band_gather_%j.out
 #SBATCH --error=logs/band_gather_%j.err
-#SBATCH --partition=skylake-gold
+#SBATCH --partition=standard
 #SBATCH --time=01:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -12,7 +12,7 @@ set -euo pipefail
 
 source "${HOME}/env/matrix_ops_petsc_mpi.sh"
 
-TARGET_DIR="/vast/home/mike_tay/two_e_polaron-polariton/rust_sub/target"
+TARGET_DIR="/users/mike_tay/rust_exciton_pp/target"
 
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1

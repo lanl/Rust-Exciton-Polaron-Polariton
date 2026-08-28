@@ -30,7 +30,7 @@
 //!     verbose: true,
 //!     grid_size: 64,
 //!     box_size: 3.0,
-//!     save_dir: PathBuf::from("saved_data"),
+//!     save_dir: PathBuf::from("/lustre/scratch5/mike_tay/saved_data_ex"),
 //!     recalculate: false,
 //!     n_jobs: -1,
 //!     use_gpu: false,

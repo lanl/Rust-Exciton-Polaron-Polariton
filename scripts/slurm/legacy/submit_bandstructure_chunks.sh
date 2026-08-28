@@ -2,13 +2,12 @@
 #SBATCH --job-name=band_chunks
 #SBATCH --output=logs/band_%A_%a.out
 #SBATCH --error=logs/band_%A_%a.err
-#SBATCH --partition=skylake-gold
+#SBATCH --partition=standard
 #SBATCH --time=8:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=64
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=0
-####SBATCH --qos=long
 #SBATCH --array=0-3
 
 # set -euo pipefail
@@ -24,7 +23,7 @@ export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
 export RAYON_NUM_THREADS=1
 
-TARGET_DIR="/vast/home/mike_tay/two_e_polaron-polariton/rust_sub/target"
+TARGET_DIR="/users/mike_tay/rust_exciton_pp/target"
 
 # RUSTFLAGS="-C target-cpu=native" cargo build --release --target-dir "${TARGET_DIR}"
 

@@ -226,6 +226,7 @@ where
                 .backend(matrix_ops::DiagonalizationBackend::Auto)
                 .hermitian()
                 .max_iterations(50_000)
+                .deflation_batch_size(512)
                 .tolerance(1e-10),
         )?
         .into_arrays_hermitian();

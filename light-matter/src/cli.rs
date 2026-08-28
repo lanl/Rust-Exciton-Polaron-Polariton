@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 #[derive(Debug, Parser)]
@@ -67,7 +67,7 @@ pub struct ExcitonArgs {
     #[arg(long, default_value_t = 3.0)]
     pub box_size: f64,
 
-    #[arg(long, default_value = "saved_data_lm")]
+    #[arg(long, default_value = "/lustre/scratch5/mike_tay/saved_data_lm")]
     pub save_dir: PathBuf,
 
     #[arg(long, default_value_t = false)]
@@ -115,7 +115,7 @@ pub struct BandstructureArgs {
     #[arg(long, value_enum, default_value_t = PhotonModeArg::Cartesian)]
     pub photon_modes: PhotonModeArg,
 
-    #[arg(long, default_value_t = true)]
+    #[arg(long, default_value_t = true, action = ArgAction::Set)]
     pub calculate: bool,
 
     #[arg(long, default_value_t = false)]
@@ -197,7 +197,7 @@ pub struct DielectricArgs {
     #[command(flatten)]
     pub exciton: ExcitonArgs,
 
-    #[arg(long, default_value_t = true)]
+    #[arg(long, default_value_t = true, action = ArgAction::Set)]
     pub calculate: bool,
 
     #[arg(long, value_enum, default_value_t = PhotonModeArg::Effective)]
@@ -305,7 +305,7 @@ pub enum MatrixElemCalcTarget {
 #[derive(Debug, Clone, Parser)]
 pub struct MatrixElemCommonArgs {
     /// Matrix-element cache directory.
-    #[arg(long, default_value = "saved_data_lm/matrix_element_cache")]
+    #[arg(long, default_value = "/lustre/scratch5/mike_tay/saved_data_lm/matrix_element_cache")]
     pub cache_dir: String,
 
     /// Force recomputation even if cache files exist.

@@ -3,7 +3,7 @@
 #SBATCH --job-name=sing_ex_disp
 #SBATCH --output myjob_%j.out
 #SBATCH --error myjob_%j.err
-#SBATCH --partition=general
+#SBATCH --partition=standard
 #
 #SBATCH --time=8:00:00
 ###SBATCH --time=2-00:00:00

@@ -33,7 +33,7 @@ struct Args {
     box_size: f64,
 
     /// Directory to save/load data
-    #[clap(long, default_value = "saved_data")]
+    #[clap(long, default_value = "/lustre/scratch5/mike_tay/saved_data_ex")]
     save_dir: String,
 
     /// Force recalculation of relative coordinate solutions

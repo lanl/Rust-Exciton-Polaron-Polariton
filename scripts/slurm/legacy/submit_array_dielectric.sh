@@ -2,7 +2,7 @@
 #SBATCH --job-name=dielectric_dist_shell
 #SBATCH --output=logs/dielectric_%A_%a.out
 #SBATCH --error=logs/dielectric_%A_%a.err
-#SBATCH --partition=general
+#SBATCH --partition=standard
 #SBATCH --time=8:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=8

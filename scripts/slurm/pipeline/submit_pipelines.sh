@@ -8,10 +8,26 @@ source "${PIPELINE_PARAMS}"
 
 cd "${PROJECT_ROOT}"
 mkdir -p logs
+mkdir -p /lustre/scratch5/mike_tay/saved_data_lm
+mkdir -p "${CACHE_DIR}"
 
 echo "Building light-matter once into ${TARGET_DIR}"
 source "${ENV_SCRIPT}"
+
+echo "Environment check:"
+echo "  PROJECT_ROOT=${PROJECT_ROOT}"
+echo "  TARGET_DIR=${TARGET_DIR}"
+echo "  ENV_SCRIPT=${ENV_SCRIPT}"
+echo "  PETSC_DIR=${PETSC_DIR}"
+echo "  SLEPC_DIR=${SLEPC_DIR}"
+echo "  mpicc=$(command -v mpicc)"
+echo "  rustc=$(rustc --version)"
+
 RUSTFLAGS="-C target-cpu=native" cargo build --release --target-dir "${TARGET_DIR}"
+
+echo "Binary linkage check:"
+ldd "${TARGET_DIR}/release/light-matter" \
+  | egrep -i 'mpi|pmix|petsc|slepc|open-pal|hwloc|event|blas|lapack' || true
 
 IFS=',' read -r -a REFLECTIVITY_ARRAY <<< "${REFLECTIVITIES_CSV}"
 N_REFLECTIVITIES="${#REFLECTIVITY_ARRAY[@]}"
@@ -44,7 +60,7 @@ submit_band() {
   )
 
   echo "Band matrix-element job array: ${band_mat_job}"
-  echo "Band chunk job array:${band_chunks_job}"
+  echo "Band chunk job array:          ${band_chunks_job}"
   echo "Band gather job:               ${band_gather_job}"
 }
 
@@ -66,8 +82,16 @@ submit_dielectric() {
       "${PIPELINE_DIR}/dielectric_calc.sbatch"
   )
 
-  echo "Dielectric matrix-element job array:${diel_mat_job}"
+  diel_gather_job=$(
+    sbatch --parsable \
+      --export=ALL,PIPELINE_PARAMS="${PIPELINE_PARAMS}" \
+      --dependency="afterok:${diel_calc_job}" \
+      "${PIPELINE_DIR}/dielectric_gather.sbatch"
+  )
+
+  echo "Dielectric matrix-element job array: ${diel_mat_job}"
   echo "Dielectric calculation job array:    ${diel_calc_job}"
+  echo "Dielectric gather/plot job:          ${diel_gather_job}"
 }
 
 case "${WHAT}" in
