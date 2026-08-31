@@ -14,6 +14,7 @@ use ndarray::arr1;
 use ndarray_linalg::c64;
 use sprs::TriMat;
 use std::iter::Sum;
+use std::sync::Arc;
 
 pub struct PPHamiltonian<M: MatrixOps, B: Boson<M>> {
     pub polariton: LMHamiltonian<M, B>,
@@ -372,7 +373,7 @@ where
                             .get(&key)
                             .unwrap_or_else(|| panic!("Missing photon sine matrix for {:?}", key));
 
-                        let ex_op_m = M::from_dense(ex_op)?;
+                        let ex_op_m = M::from_dense_arc(Arc::clone(ex_op))?;
                         let lm_op = self.kron_ex_ph(&ex_op_m, &ph_op);
                         let pn_op = n_k1.scale(-2.0 * coupling / m_com)?;
 
@@ -629,7 +630,7 @@ where
                     .get(&key)
                     .unwrap_or_else(|| panic!("Missing photon sine matrix for {:?}", key));
 
-                let ex_op_m = M::from_dense(ex_op)?;
+                let ex_op_m = M::from_dense_arc(Arc::clone(ex_op))?;
                 let lm_op = self.kron_ex_ph(&ex_op_m, &ph_op);
 
                 for (pn_idx, occ) in occupations.iter().enumerate() {
@@ -676,7 +677,26 @@ where
             self.initialize(k.clone())?;
         }
 
+        let ph_dim = self.polariton.photon.dimension();
+        let pn_dim = self.phonon.dimension();
+        let ex_dim = self.polariton.exciton.dimension();
+        let lm_dim = ph_dim * ex_dim;
+
         let time_lm = Instant::now();
+
+        if pn_dim == 0 || pn_dim == 1 || self.pn_coupling == 0.0 {
+            let lm_ham = self.polariton.build_lm_hamiltonian(k.clone())?;
+
+            timed_println_rank0!("  Build LM Hamiltonian: {:?}", time_lm.elapsed());
+            timed_println_rank0!(
+                "  No phonons (pn_dim={}, coupling={}), returning LM Hamiltonian only",
+                pn_dim,
+                self.pn_coupling
+            );
+
+            return Ok(lm_ham);
+        }
+
         let lm_ham = if let Some(cached) = &self.cached_lm_ham {
             timed_println_rank0!("  Using cached LM Hamiltonian");
             cached.clone()
@@ -685,21 +705,8 @@ where
             self.cached_lm_ham = Some(ham.clone());
             ham
         };
+
         timed_println_rank0!("  Build/retrieve LM Hamiltonian: {:?}", time_lm.elapsed());
-
-        let ph_dim = self.polariton.photon.dimension();
-        let pn_dim = self.phonon.dimension();
-        let ex_dim = self.polariton.exciton.dimension();
-        let lm_dim = ph_dim * ex_dim;
-
-        if pn_dim == 0 || pn_dim == 1 || self.pn_coupling == 0.0 {
-            timed_println_rank0!(
-                "  No phonons (pn_dim={}, coupling={}), returning LM Hamiltonian only",
-                pn_dim,
-                self.pn_coupling
-            );
-            return Ok(lm_ham);
-        }
 
         timed_println_rank0!(
             "  Dimensions: ex={}, ph={}, pn={}, total={}",

@@ -1,16 +1,16 @@
-use super::builder::LMMatrixElementArray;
+use super::builder::{LMMatrixElementArray, MatrixElementMap};
 use super::keys::{ModeKey, ModeTask};
 
 use log::info;
 use ndarray::Array2;
 use ndarray_linalg::c64;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::fs::{self, File};
 use std::hash::{Hash, Hasher};
-use std::io::Read;
+use std::io::BufReader;
 use std::path::Path;
+use std::sync::Arc;
 
 /// Serializable version of matrix element arrays for caching.
 #[derive(Serialize, Deserialize)]
@@ -122,32 +122,32 @@ impl LMMatrixElementArray {
 
     /// Load matrix elements from cache file
     pub fn load_from_file(filename: &str) -> Result<Self, Box<dyn std::error::Error>> {
-        let mut file = File::open(filename)?;
-        let mut buffer = Vec::new();
-        file.read_to_end(&mut buffer)?;
+        let file = File::open(filename)?;
+        let reader = BufReader::new(file);
 
-        let serializable: SerializableMatrixElements = bincode::deserialize(&buffer)?;
+        let serializable: SerializableMatrixElements = bincode::deserialize_from(reader)?;
 
-        let mut cos_mat = HashMap::new();
-        let mut sin_mat = HashMap::new();
-        let mut p_cos_mat = HashMap::new();
+        let mut cos_mat = MatrixElementMap::new();
+        let mut sin_mat = MatrixElementMap::new();
+        let mut p_cos_mat = MatrixElementMap::new();
 
         let (nrows, ncols) = serializable.matrix_shape;
 
         for (key, data) in serializable.cos_mat {
             let mat = Array2::from_shape_vec((nrows, ncols), data)?;
-            cos_mat.insert(key, mat);
+            cos_mat.insert(key, Arc::new(mat));
         }
         for (key, data) in serializable.sin_mat {
             let mat = Array2::from_shape_vec((nrows, ncols), data)?;
-            sin_mat.insert(key, mat);
+            sin_mat.insert(key, Arc::new(mat));
         }
         for (key, data) in serializable.p_cos_mat {
             let mat = Array2::from_shape_vec((nrows, ncols), data)?;
-            p_cos_mat.insert(key, mat);
+            p_cos_mat.insert(key, Arc::new(mat));
         }
 
         info!("Loaded matrix elements from cache: {}", filename);
+
         Ok(Self {
             cos_mat,
             sin_mat,
@@ -218,48 +218,48 @@ impl LMMatrixElementArray {
         filename: &str,
     ) -> Result<
         (
-            HashMap<ModeKey, Array2<c64>>,
-            HashMap<ModeKey, Array2<c64>>,
-            HashMap<ModeKey, Array2<c64>>,
+            MatrixElementMap,
+            MatrixElementMap,
+            MatrixElementMap,
         ),
         Box<dyn std::error::Error>,
     > {
-        let mut file = File::open(filename)?;
-        let mut buffer = Vec::new();
-        file.read_to_end(&mut buffer)?;
+        let file = File::open(filename)?;
+        let reader = BufReader::new(file);
 
-        let serializable: SerializableMatrixElements = bincode::deserialize(&buffer)?;
+        let serializable: SerializableMatrixElements = bincode::deserialize_from(reader)?;
 
-        let mut cos_mat = HashMap::new();
-        let mut sin_mat = HashMap::new();
-        let mut p_cos_mat = HashMap::new();
+        let mut cos_mat = MatrixElementMap::new();
+        let mut sin_mat = MatrixElementMap::new();
+        let mut p_cos_mat = MatrixElementMap::new();
 
         let (nrows, ncols) = serializable.matrix_shape;
 
         for (key, data) in serializable.cos_mat {
             let mat = Array2::from_shape_vec((nrows, ncols), data)?;
-            cos_mat.insert(key, mat);
+            cos_mat.insert(key, Arc::new(mat));
         }
         for (key, data) in serializable.sin_mat {
             let mat = Array2::from_shape_vec((nrows, ncols), data)?;
-            sin_mat.insert(key, mat);
+            sin_mat.insert(key, Arc::new(mat));
         }
         for (key, data) in serializable.p_cos_mat {
             let mat = Array2::from_shape_vec((nrows, ncols), data)?;
-            p_cos_mat.insert(key, mat);
+            p_cos_mat.insert(key, Arc::new(mat));
         }
 
         info!(
             "Loaded relative basis matrix elements from cache: {}",
             filename
         );
+
         Ok((cos_mat, sin_mat, p_cos_mat))
     }
 
     pub(crate) fn has_all_required_relative_keys(
-        cos_rel: &HashMap<ModeKey, Array2<c64>>,
-        sin_rel: &HashMap<ModeKey, Array2<c64>>,
-        p_cos_rel: &HashMap<ModeKey, Array2<c64>>,
+        cos_rel: &MatrixElementMap,
+        sin_rel: &MatrixElementMap,
+        p_cos_rel: &MatrixElementMap,
         all_q_ind: &[ModeTask],
     ) -> bool {
         for task in all_q_ind {

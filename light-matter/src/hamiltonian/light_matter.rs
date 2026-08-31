@@ -6,6 +6,7 @@ use ndarray_linalg::c64;
 use num_traits::{One, Zero};
 use sprs::TriMat;
 use std::iter::Sum;
+use std::sync::Arc;
 
 pub struct LMHamiltonian<M: MatrixOps, B: Boson<M>> {
     pub exciton: ExcitonicHamiltonian<M>,
@@ -313,9 +314,11 @@ where
             p_c_sin.push(
                 self.exciton
                     .get_p_com(eps)? // P·eps
-                    .dot(&M::from_dense(sin_mat.get(&key).unwrap_or_else(|| {
-                        panic!("Missing sin matrix for {:?}", key)
-                    }))?)?,
+                    .dot(&M::from_dense_arc(Arc::clone(
+                        sin_mat.get(&key).unwrap_or_else(|| {
+                            panic!("Missing sin matrix for {:?}", key)
+                        }),
+                    ))?)?,
             );
 
             p_q.push(
@@ -377,14 +380,13 @@ where
 
                 let single_key = ModeKey::single(i_ph);
 
-                let p_cos = &M::from_dense(
-                    &(self
-                        .matrix_elements
+                let p_cos = &M::from_dense_arc(Arc::clone(
+                    self.matrix_elements
                         .p_cos_mat
                         .get(&single_key)
-                        .unwrap_or_else(|| panic!("Missing p_cos matrix for {:?}", single_key))
-                        * (coupling_i / self.exciton.exciton_ham.rel_ham.mu)),
-                )?;
+                        .unwrap_or_else(|| panic!("Missing p_cos matrix for {:?}", single_key)),
+                ))?
+                .scale(coupling_i / self.exciton.exciton_ham.rel_ham.mu)?;
 
                 // P•A sin(x) terms - these are perfect KronSum candidates
                 kron_pairs.push((p_c_sin.clone(), a_i.clone()));
@@ -433,14 +435,14 @@ where
                         } else {
                             let q_diff_key = ModeKey::diff(i_ph, j_ph);
 
-                            M::from_dense(
+                            M::from_dense_arc(Arc::clone(
                                 self.matrix_elements
                                     .cos_mat
                                     .get(&q_diff_key)
                                     .unwrap_or_else(|| {
                                         panic!("Missing cos-diff matrix for {:?}", q_diff_key)
                                     }),
-                            )?
+                            ))?
                         };
 
                         // let a_diff = &(a_i.dot(&a_j.transpose()).add(&a_i.transpose().dot(a_j)));

@@ -2,8 +2,8 @@
 #SBATCH --job-name=diel_matcalc
 #SBATCH --output=logs/diel_matcalc_%A_%a.out
 #SBATCH --error=logs/diel_matcalc_%A_%a.err
-#SBATCH --partition=standard
-#SBATCH --time=03:00:00
+#SBATCH --partition=debug
+#SBATCH --time=00:30:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=88

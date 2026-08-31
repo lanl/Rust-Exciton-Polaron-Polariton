@@ -164,6 +164,12 @@ where
     // Build Hamiltonian
     let h_pp: M = pp.build_pp_hamiltonian(None)?;
 
+    // In the ComposedOperator path, the KronSum now owns Arc references to any
+    // dense matrix-element blocks it needs. Drop the HashMap owners before
+    // diagonalization to reduce resident memory.
+    pp.polariton.matrix_elements.clear_relative_cache();
+    pp.polariton.matrix_elements.clear_full_cache_maps();
+
     // Lag Coeffs for Relative coordinates
     let (lag_coeffs, states) = &pp
         .polariton

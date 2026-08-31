@@ -6,16 +6,20 @@ use ndarray_linalg::c64;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
+
+pub type SharedC64Matrix = Arc<Array2<c64>>;
+pub type MatrixElementMap = HashMap<ModeKey, SharedC64Matrix>;
 
 #[derive(Clone)]
 pub struct LMMatrixElementArray {
-    pub p_cos_mat: HashMap<ModeKey, Array2<c64>>, // Momentum-cosine matrix elements
-    pub cos_mat: HashMap<ModeKey, Array2<c64>>,   // Cosine matrix elements
-    pub sin_mat: HashMap<ModeKey, Array2<c64>>,   // Sine matrix elements
+    pub p_cos_mat: MatrixElementMap, // Momentum-cosine matrix elements
+    pub cos_mat: MatrixElementMap,   // Cosine matrix elements
+    pub sin_mat: MatrixElementMap,   // Sine matrix elements
 
-    pub p_cos_mat_rel: Option<HashMap<ModeKey, Array2<c64>>>,
-    pub cos_mat_rel: Option<HashMap<ModeKey, Array2<c64>>>,
-    pub sin_mat_rel: Option<HashMap<ModeKey, Array2<c64>>>,
+    pub p_cos_mat_rel: Option<MatrixElementMap>,
+    pub cos_mat_rel: Option<MatrixElementMap>,
+    pub sin_mat_rel: Option<MatrixElementMap>,
 }
 
 impl LMMatrixElementArray {
@@ -34,6 +38,18 @@ impl LMMatrixElementArray {
         self.cos_mat.is_empty() && self.sin_mat.is_empty() && self.p_cos_mat.is_empty()
     }
 
+    pub fn clear_relative_cache(&mut self) {
+        self.cos_mat_rel = None;
+        self.sin_mat_rel = None;
+        self.p_cos_mat_rel = None;
+    }
+
+    pub fn clear_full_cache_maps(&mut self) {
+        self.cos_mat.clear();
+        self.sin_mat.clear();
+        self.p_cos_mat.clear();
+    }
+
     pub fn populate_taylor_matrix_elements_with_cache(
         &mut self,
         all_q_ind: &Vec<ModeTask>,
@@ -48,7 +64,8 @@ impl LMMatrixElementArray {
     ) {
         let n_rel = e_vecs.nrows() / n_com;
 
-        // Try to load from cache if cache_dir is provided and not forcing recompute.
+        // Try to load full exciton-basis cache.
+        // If this succeeds, do NOT load relative-basis cache into memory.
         if let Some(dir) = cache_dir {
             if !force_recompute {
                 let cache_file =
@@ -58,21 +75,14 @@ impl LMMatrixElementArray {
                     match Self::load_from_file(&cache_file) {
                         Ok(cached) => {
                             info!("Successfully loaded matrix elements from cache");
+
                             self.cos_mat = cached.cos_mat;
                             self.sin_mat = cached.sin_mat;
                             self.p_cos_mat = cached.p_cos_mat;
 
-                            let cache_file_rel =
-                                Self::get_cache_filename_rel(dir, mu, n_rel, relative_config_hash);
-                            if Path::new(&cache_file_rel).exists() {
-                                if let Ok((cos_rel, sin_rel, p_cos_rel)) =
-                                    Self::load_rel_from_file(&cache_file_rel)
-                                {
-                                    self.cos_mat_rel = Some(cos_rel);
-                                    self.sin_mat_rel = Some(sin_rel);
-                                    self.p_cos_mat_rel = Some(p_cos_rel);
-                                }
-                            }
+                            // Critical memory fix:
+                            // relative cache is only needed to construct the full cache.
+                            self.clear_relative_cache();
 
                             return;
                         }
@@ -87,7 +97,8 @@ impl LMMatrixElementArray {
             }
         }
 
-        // Compute relative-basis matrices.
+        // Compute or load relative-basis matrices only because the full cache was
+        // not available.
         if self.cos_mat_rel.is_none() || self.sin_mat_rel.is_none() || self.p_cos_mat_rel.is_none()
         {
             let mut loaded_from_cache = false;
@@ -168,8 +179,8 @@ impl LMMatrixElementArray {
 
                         (
                             *task,
-                            self.to_exciton_basis(p_cos, e_vecs, n_com),
-                            self.to_exciton_basis(sin, e_vecs, n_com),
+                            self.to_exciton_basis(p_cos.as_ref(), e_vecs, n_com),
+                            self.to_exciton_basis(sin.as_ref(), e_vecs, n_com),
                         )
                     }
 
@@ -187,8 +198,8 @@ impl LMMatrixElementArray {
 
                         (
                             *task,
-                            self.to_exciton_basis(cos_diff, e_vecs, n_com),
-                            self.to_exciton_basis(cos_sum, e_vecs, n_com),
+                            self.to_exciton_basis(cos_diff.as_ref(), e_vecs, n_com),
+                            self.to_exciton_basis(cos_sum.as_ref(), e_vecs, n_com),
                         )
                     }
                 })
@@ -199,13 +210,13 @@ impl LMMatrixElementArray {
                     ModeTask::PhotonSingle { mode } => {
                         let key = ModeKey::single(mode);
 
-                        self.p_cos_mat.insert(key, mat_1);
-                        self.sin_mat.insert(key, mat_2);
+                        self.p_cos_mat.insert(key, Arc::new(mat_1));
+                        self.sin_mat.insert(key, Arc::new(mat_2));
                     }
 
                     ModeTask::PhotonPair { q1, q2 } => {
-                        self.cos_mat.insert(ModeKey::diff(q1, q2), mat_1);
-                        self.cos_mat.insert(ModeKey::sum(q1, q2), mat_2);
+                        self.cos_mat.insert(ModeKey::diff(q1, q2), Arc::new(mat_1));
+                        self.cos_mat.insert(ModeKey::sum(q1, q2), Arc::new(mat_2));
                     }
                 }
             }
@@ -220,5 +231,10 @@ impl LMMatrixElementArray {
                 }
             }
         }
+
+        // Critical memory fix:
+        // after full exciton-basis matrices exist, relative-basis matrices are no
+        // longer needed in memory.
+        self.clear_relative_cache();
     }
 }

@@ -17,6 +17,7 @@
 core.*
 *.done
 *.pdf
+*.json
 all_sources*
 
 # Environment-specific directories (ignored by default)
@@ -41,6 +42,7 @@ all_sources*
 /dielectric_scan/
 /output_figures/
 /logs/
+*/release/
 
 # temp/cache files
 *.tmp.*

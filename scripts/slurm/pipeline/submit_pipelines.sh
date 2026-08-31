@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PIPELINE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# PIPELINE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PIPELINE_DIR="/users/mike_tay/rust_exciton_pp/scripts/slurm/pipeline/"
 PIPELINE_PARAMS="${PIPELINE_DIR}/pipeline_params.sh"
 
 source "${PIPELINE_PARAMS}"

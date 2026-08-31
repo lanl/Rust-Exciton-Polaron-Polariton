@@ -1,4 +1,4 @@
-use super::builder::LMMatrixElementArray;
+use super::builder::{LMMatrixElementArray, MatrixElementMap};
 use super::keys::{ModeKey, ModeTask};
 
 use crate::modes::types::BosonMode;
@@ -8,6 +8,7 @@ use num_traits::Zero;
 use rayon::prelude::*;
 use std::collections::HashMap;
 use std::f64::consts::PI;
+use std::sync::Arc;
 
 impl LMMatrixElementArray {
     /// ------------------------------------------------------------------------
@@ -25,9 +26,9 @@ impl LMMatrixElementArray {
         n_rel: usize,
         mu: f64,
     ) -> (
-        HashMap<ModeKey, Array2<c64>>,
-        HashMap<ModeKey, Array2<c64>>,
-        HashMap<ModeKey, Array2<c64>>,
+        MatrixElementMap,
+        MatrixElementMap,
+        MatrixElementMap,
     ) {
         let (lag_coeffs, states) = self.get_laguerre_coeffs(n_rel);
 
@@ -118,13 +119,13 @@ impl LMMatrixElementArray {
                 ModeTask::PhotonSingle { mode } => {
                     let key = ModeKey::single(mode);
 
-                    p_cos_mat.insert(key, mat_1);
-                    sin_mat.insert(key, mat_2);
+                    p_cos_mat.insert(key, Arc::new(mat_1));
+                    sin_mat.insert(key, Arc::new(mat_2));
                 }
 
                 ModeTask::PhotonPair { q1, q2 } => {
-                    cos_mat.insert(ModeKey::diff(q1, q2), mat_1);
-                    cos_mat.insert(ModeKey::sum(q1, q2), mat_2);
+                    cos_mat.insert(ModeKey::diff(q1, q2), Arc::new(mat_1));
+                    cos_mat.insert(ModeKey::sum(q1, q2), Arc::new(mat_2));
                 }
             }
         }
