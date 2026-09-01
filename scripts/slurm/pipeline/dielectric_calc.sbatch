@@ -3,7 +3,7 @@
 #SBATCH --output=logs/dielectric_%A_%a.out
 #SBATCH --error=logs/dielectric_%A_%a.err
 #SBATCH --partition=standard
-#SBATCH --time=00:10:00
+#SBATCH --time=16:00:00
 #SBATCH --nodes=4
 #SBATCH --ntasks-per-node=16
 #SBATCH --cpus-per-task=1

@@ -15,7 +15,7 @@ export CACHE_DIR="/lustre/scratch5/mike_tay/saved_data_lm/matrix_element_cache"
 # -------------------------------------------------------------------
 # Pipeline parallelism
 # -------------------------------------------------------------------
-export N_BAND_CHUNKS=4
+export N_BAND_CHUNKS=16
 
 # Reflectivities for dielectric scan. Slurm array size is inferred from this.
 export REFLECTIVITIES_CSV="0.0,0.999999,0.9999999"
@@ -53,10 +53,11 @@ BAND_LM_ARGS=(
   --n-modes 16
   --pn-coupling 0.0
   --pn-n-fock 0
+  --zoomed
 )
 
 BAND_SCAN_ARGS=(
-  --n-k-points 128
+  --n-k-points 64
   --n-eig 512
   --n-bands 16
 )

@@ -1,4 +1,5 @@
 use crate::modes::types::Polarization;
+use crate::timed_println_rank0;
 use crate::types::Vector3D;
 
 // Speed of light in atomic units
@@ -223,7 +224,7 @@ pub fn find_d_q_for_target_modes(
         } else if total < n_modes_target {
             d_q_max = d_q_mid; // Decrease d_q to increase modes
         } else {
-            println!(
+            timed_println_rank0!(
                 "Exact match found: d_q = {}, total modes = {}",
                 d_q_mid, total
             );
@@ -235,7 +236,7 @@ pub fn find_d_q_for_target_modes(
     let d_q_result = (d_q_min + d_q_max) / 2.0;
     let total_achieved = compute_total_modes(d_q_result, d_omega, omega_0, omega_max);
 
-    println!(
+    timed_println_rank0!(
         "Target modes: {}, Achieved: {}, d_q: {}",
         n_modes_target, total_achieved, d_q_result
     );

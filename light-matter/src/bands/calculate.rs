@@ -268,25 +268,28 @@ where
             );
         }
 
-        // All ranks in this Slurm array task build the same K Hamiltonian
-        // and enter the same collective SLEPc solve.
-        let h_pp = pp.build_pp_hamiltonian(Some(k.clone()))?;
+        let (eigvals, eigvecs) = {
+            let h_pp = pp.build_pp_hamiltonian(Some(k.clone()))?;
 
-        let mut options = DiagonalizationOptions::smallest_real(n_eig)
-            .backend(matrix_ops::DiagonalizationBackend::Auto)
-            .hermitian()
-            .max_iterations(50_000)
-            .tolerance(1e-10);
+            // Drop pp-owned matrix-element maps once h_pp owns what it needs.
+            pp.polariton.matrix_elements.clear_relative_cache();
+            pp.polariton.matrix_elements.clear_full_cache_maps();
 
-        options.initial_guess = prev_eigvecs.clone();
+            let mut options = DiagonalizationOptions::smallest_real(n_eig)
+                .backend(matrix_ops::DiagonalizationBackend::Auto)
+                .hermitian()
+                .max_iterations(50_000)
+                .tolerance(1e-10);
 
-        let result = h_pp.diagonalize(options)?;
-        let (eigvals, eigvecs) = result.into_arrays_hermitian();
+            options.initial_guess = prev_eigvecs.take();
+
+            let result = h_pp.diagonalize(options)?;
+            result.into_arrays_hermitian()
+        };
 
         let n_returned = eigvals.len();
 
         let mut photonic_character = Vec::with_capacity(n_returned);
-
         for i in 0..n_returned {
             photonic_character.push(calculate_photonic_character(
                 pp,

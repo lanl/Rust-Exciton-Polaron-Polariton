@@ -4,10 +4,10 @@
 #SBATCH --error=logs/band_%A_%a.err
 #SBATCH --partition=standard
 #SBATCH --time=16:00:00
-#SBATCH --nodes=4
-#SBATCH --ntasks-per-node=16
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=64
 #SBATCH --cpus-per-task=1
-#SBATCH --mem=400G
+#SBATCH --mem=500000
 
 set -euo pipefail
 
