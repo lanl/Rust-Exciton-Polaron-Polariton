@@ -152,3 +152,95 @@ impl PPBasisLayout {
         }
     }
 }
+
+impl PPBasisLayout {
+    pub const EX_PN_LAYOUT: KronLayout = KronLayout::BlockSlowTransitionFast;
+
+    /// For the default PP layout,
+    ///
+    /// ```text
+    /// |PP> = |LM> ⊗ |phonon>
+    ///      = (|photon> ⊗ |exciton>) ⊗ |phonon>
+    ///      = |photon> ⊗ (|exciton> ⊗ |phonon>)
+    /// ```
+    ///
+    /// so regrouping as photon transitions with exciton-phonon blocks uses:
+    ///
+    /// ```text
+    /// idx(block=EXPN, transition=photon) = photon * expn_dim + expn
+    /// ```
+    #[inline]
+    pub fn ph_expn_layout(self) -> matrix_ops::Result<KronLayout> {
+        if self.lm.ex_ph_layout == KronLayout::TransitionSlowBlockFast
+            && self.lm_pn_layout == KronLayout::BlockSlowTransitionFast
+        {
+            Ok(KronLayout::TransitionSlowBlockFast)
+        } else {
+            Err(MatrixOpsError::Other {
+                message: format!(
+                    "Current PPBasisLayout {:?} cannot be regrouped as |photon> ⊗ |exciton, phonon>",
+                    self
+                ),
+            })
+        }
+    }
+
+    #[inline]
+    pub fn expn_index(
+        self,
+        ex: usize,
+        pn: usize,
+        n_ex: usize,
+        n_pn: usize,
+    ) -> matrix_ops::Result<usize> {
+        Self::EX_PN_LAYOUT.try_flat_index(
+            ex,
+            pn,
+            n_ex,
+            n_pn,
+            "exciton-phonon block index",
+        )
+    }
+
+    #[inline]
+    pub fn expn_dim(self, n_ex: usize, n_pn: usize) -> matrix_ops::Result<usize> {
+        Self::EX_PN_LAYOUT
+            .total_dim(n_ex, n_pn)
+            .ok_or_else(|| MatrixOpsError::DimensionOverflow {
+                details: format!("EXPN dimension overflow: {n_ex} * {n_pn}"),
+            })
+    }
+
+    /// Builds an exciton-phonon block operator:
+    ///
+    /// ```text
+    /// |EXPN> = |exciton> ⊗ |phonon>
+    /// ```
+    #[inline]
+    pub fn kron_ex_pn<M: MatrixOps>(self, ex_op: &M, pn_op: &M) -> M {
+        match Self::EX_PN_LAYOUT {
+            KronLayout::BlockSlowTransitionFast => ex_op.kron(pn_op),
+            KronLayout::TransitionSlowBlockFast => pn_op.kron(ex_op),
+        }
+    }
+
+    /// Builds a PP-space operator from a photon operator and an EXPN block
+    /// operator according to the regrouped photon-transition layout.
+    ///
+    /// For the default layout this is:
+    ///
+    /// ```text
+    /// ph_op ⊗ expn_op
+    /// ```
+    #[inline]
+    pub fn kron_ph_expn<M: MatrixOps>(
+        self,
+        ph_op: &M,
+        expn_op: &M,
+    ) -> matrix_ops::Result<M> {
+        match self.ph_expn_layout()? {
+            KronLayout::BlockSlowTransitionFast => Ok(expn_op.kron(ph_op)),
+            KronLayout::TransitionSlowBlockFast => Ok(ph_op.kron(expn_op)),
+        }
+    }
+}

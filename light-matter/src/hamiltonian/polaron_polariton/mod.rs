@@ -6,7 +6,6 @@ use super::{
 use crate::config::PPConfig;
 use crate::matrix_elements::{LMMatrixElementArray, ModeKey};
 use crate::modes::types::BosonMode;
-use crate::timed_println;
 use crate::timed_println_rank0;
 use exciton_2d::Exciton2DGridSystem;
 use matrix_ops::{ConvertFrom, Diagonalize, MatrixOps, MatrixOpsError, Sqrt};
@@ -227,7 +226,7 @@ where
     /// 3. full phonon-phonon recoil `sum_{k,k'} k·k' n_k n_k' / 2M`,
     /// 4. photon-phonon number recoil `sum_{q,k} q·k n_q n_k / M`,
     /// 5. photon-phonon correction to the CoM light-matter coupling.
-    fn get_interaction_hamiltonian_as_operator(&self, ph_dim: usize) -> Result<M, MatrixOpsError>
+    fn _get_interaction_hamiltonian_as_operator(&self, ph_dim: usize) -> Result<M, MatrixOpsError>
     where
         M::Scalar: Sqrt + Sum + ConvertFrom<c64> + ConvertFrom<f64>,
     {
@@ -390,226 +389,197 @@ where
         Ok(interaction.unwrap_or_else(|| M::zeros((total_dim, total_dim))))
     }
 
-    /// Sparse-backend optimized PP construction as a KronSum over phonon
-    /// product-Fock transitions.
-    ///
-    /// This supports an arbitrary number of phonon modes in `FullBosons`.
-    ///
-    /// It builds
-    ///
-    ///     H_PP = sum_i L_i ⊗ T_i,
-    ///
-    /// where `L_i` acts on the LM space and `T_i` is a one-entry phonon-space
-    /// transition matrix.
-    ///
-    /// The phonon basis is the product-Fock basis used by `FullBosons`.
-    fn build_pp_hamiltonian_sparse_kronsum(
+    fn build_expn_extra_hamiltonian(
         &self,
-        lm_ham: &M,
-        ph_dim: usize,
         ex_dim: usize,
         pn_dim: usize,
     ) -> Result<M, MatrixOpsError>
     where
         M::Scalar: Sqrt + Sum + ConvertFrom<c64> + ConvertFrom<f64>,
     {
-        let sin_pn = self.sin_pn.as_ref().unwrap();
+        let sin_pn = self.sin_pn.as_ref().ok_or_else(|| MatrixOpsError::Other {
+            message: "phonon sine matrix elements are not initialized".to_string(),
+        })?;
+
         let m_com = self.polariton.exciton.exciton_ham.m;
 
-        let lm_dim = ph_dim * ex_dim;
-
-        let ph_eye = M::eye(ph_dim);
-        let lm_eye = M::eye(lm_dim);
         let ex_eye = M::eye(ex_dim);
 
-        let dims = self.phonon_mode_dims();
+        let mut terms: Vec<M> = Vec::new();
 
-        if dims.iter().product::<usize>() != pn_dim {
-            return Err(MatrixOpsError::Other {
-                message: format!(
-                    "Internal phonon dimension mismatch: product dims = {}, pn_dim = {}",
-                    dims.iter().product::<usize>(),
-                    pn_dim
-                ),
-            });
+        // ---------------------------------------------------------------------
+        // I_ex ⊗ H_pn
+        // ---------------------------------------------------------------------
+        let h_pn = self.phonon.get_h()?;
+        terms.push(self.layout.kron_ex_pn(&ex_eye, &h_pn));
+
+        // Cache phonon number operators once.
+        let n_pn_modes = self.phonon.boson.get_modes().len();
+
+        let mut phonon_number_ops = Vec::with_capacity(n_pn_modes);
+        for mode_idx in 0..n_pn_modes {
+            phonon_number_ops.push(self.phonon.get_adag_a(mode_idx)?);
         }
 
-        let occupations: Vec<Vec<usize>> = (0..pn_dim)
-            .map(|idx| fock::occupations_from_index(idx, &dims))
-            .collect();
-
-        let mut pairs: Vec<(M, M)> = Vec::new();
-
-        // ------------------------------------------------------------
-        // H_LM ⊗ I_pn
-        // ------------------------------------------------------------
-        for pn_idx in 0..pn_dim {
-            Self::push_transition_pair(&mut pairs, lm_ham.clone(), pn_dim, pn_idx, pn_idx, 1.0)?;
-        }
-
-        // ------------------------------------------------------------
-        // I_LM ⊗ H_pn
-        //
-        // Current BosonicHamiltonian::get_h omits zero-point energy:
-        //
-        //     H_pn = sum_k omega_k n_k.
-        // ------------------------------------------------------------
-        for (pn_idx, occ) in occupations.iter().enumerate() {
-            let energy = self
-                .phonon
-                .boson
-                .get_modes()
-                .iter()
-                .zip(occ.iter())
-                .map(|(mode, &n)| mode.omega * n as f64)
-                .sum::<f64>();
-
-            Self::push_transition_pair(&mut pairs, lm_eye.clone(), pn_dim, pn_idx, pn_idx, energy)?;
-        }
-
-        // ------------------------------------------------------------
-        // Phonon-exciton coupling:
+        // ---------------------------------------------------------------------
+        // Phonon-exciton Fröhlich coupling:
         //
         //     -2 gamma_k sin(k·x/2) (b_k† + b_k)
-        // ------------------------------------------------------------
-        for (mode_idx, _mode) in self.phonon.boson.get_modes().iter().enumerate() {
-            let lm_sin = self.kron_ex_ph(&sin_pn[mode_idx], &ph_eye);
+        // ---------------------------------------------------------------------
+        for mode_idx in 0..n_pn_modes {
+            let b = self.phonon.get_a(mode_idx)?;
+            let b_dag = b.transpose();
 
-            for (pn_from, occ) in occupations.iter().enumerate() {
-                let n = occ[mode_idx];
+            let pn_op = b
+                .add(&b_dag)?
+                .scale(-2.0 * self.pn_coupling)?;
 
-                // b_k: |..., n_k, ...> -> sqrt(n_k) |..., n_k-1, ...>
-                if n > 0 {
-                    let mut occ_to = occ.clone();
-                    occ_to[mode_idx] -= 1;
-                    let pn_to = fock::index_from_occupations(&occ_to, &dims);
-
-                    let amp = -2.0 * self.pn_coupling * (n as f64).sqrt();
-
-                    Self::push_transition_pair(
-                        &mut pairs,
-                        lm_sin.clone(),
-                        pn_dim,
-                        pn_from,
-                        pn_to,
-                        amp,
-                    )?;
-                }
-
-                // b_k†: |..., n_k, ...> -> sqrt(n_k+1) |..., n_k+1, ...>
-                if n + 1 < dims[mode_idx] {
-                    let mut occ_to = occ.clone();
-                    occ_to[mode_idx] += 1;
-                    let pn_to = fock::index_from_occupations(&occ_to, &dims);
-
-                    let amp = -2.0 * self.pn_coupling * ((n + 1) as f64).sqrt();
-
-                    Self::push_transition_pair(
-                        &mut pairs,
-                        lm_sin.clone(),
-                        pn_dim,
-                        pn_from,
-                        pn_to,
-                        amp,
-                    )?;
-                }
-            }
+            terms.push(self.layout.kron_ex_pn(&sin_pn[mode_idx], &pn_op));
         }
 
-        // ------------------------------------------------------------
+        // ---------------------------------------------------------------------
         // Exciton-phonon momentum recoil:
         //
-        //     -(P·k / M) n_k.
-        // ------------------------------------------------------------
+        //     -(P·k / M) n_k
+        // ---------------------------------------------------------------------
         for (mode_idx, mode) in self.phonon.boson.get_modes().iter().enumerate() {
             let p_k = self.polariton.exciton.get_p_com(&mode.q)?;
-            let p_k_lm = self.kron_ex_ph(&p_k, &ph_eye).scale(-1.0 / m_com)?;
+            let p_k = p_k.scale(-1.0 / m_com)?;
 
-            for (pn_idx, occ) in occupations.iter().enumerate() {
-                let n = occ[mode_idx] as f64;
-
-                Self::push_transition_pair(&mut pairs, p_k_lm.clone(), pn_dim, pn_idx, pn_idx, n)?;
-            }
+            terms.push(self.layout.kron_ex_pn(&p_k, &phonon_number_ops[mode_idx]));
         }
 
-        // ------------------------------------------------------------
+        // ---------------------------------------------------------------------
         // Full phonon-phonon recoil:
         //
-        //     sum_{k,k'} (k·k') n_k n_k' / (2M).
-        //
-        // This includes all k != k' terms.
-        // ------------------------------------------------------------
-        for (pn_idx, occ) in occupations.iter().enumerate() {
-            let mut recoil = 0.0;
+        //     sum_{k,k'} (k·k') n_k n_k' / (2M)
+        // ---------------------------------------------------------------------
+        for (idx1, mode_1) in self.phonon.boson.get_modes().iter().enumerate() {
+            for (idx2, mode_2) in self.phonon.boson.get_modes().iter().enumerate() {
+                let coeff = mode_1.q.dot(&mode_2.q) / (2.0 * m_com);
 
-            for (idx1, mode_1) in self.phonon.boson.get_modes().iter().enumerate() {
-                let n1 = occ[idx1] as f64;
-
-                if n1 == 0.0 {
+                if coeff.abs() <= 1e-14 {
                     continue;
                 }
 
-                for (idx2, mode_2) in self.phonon.boson.get_modes().iter().enumerate() {
-                    let n2 = occ[idx2] as f64;
+                let pn_op = phonon_number_ops[idx1]
+                    .dot(&phonon_number_ops[idx2])?
+                    .scale(coeff)?;
 
-                    if n2 == 0.0 {
-                        continue;
-                    }
-
-                    recoil += mode_1.q.dot(&mode_2.q) * n1 * n2 / (2.0 * m_com);
-                }
+                terms.push(self.layout.kron_ex_pn(&ex_eye, &pn_op));
             }
-
-            Self::push_transition_pair(&mut pairs, lm_eye.clone(), pn_dim, pn_idx, pn_idx, recoil)?;
         }
 
-        // ------------------------------------------------------------
+        if terms.is_empty() {
+            return Ok(M::zeros((ex_dim * pn_dim, ex_dim * pn_dim)));
+        }
+
+        M::sum(terms)
+    }
+
+    #[inline]
+    fn is_single_excitation_photon_basis(&self) -> bool {
+        self.polariton.photon.dimension()
+            == self.polariton.photon.boson.get_modes().len() + 1
+    }
+
+    #[inline]
+    fn push_photon_transition_pair(
+        pairs: &mut Vec<(M, M)>,
+        block: M,
+        ph_dim: usize,
+        from: usize,
+        to: usize,
+        value: f64,
+    ) -> Result<(), MatrixOpsError>
+    where
+        M::Scalar: ConvertFrom<f64>,
+    {
+        if value.abs() > 1e-14 {
+            pairs.push((block, Self::single_transition(ph_dim, from, to, value)?));
+        }
+
+        Ok(())
+    }
+
+    fn build_photon_transition_pp_corrections(
+        &self,
+        ph_dim: usize,
+        ex_dim: usize,
+        pn_dim: usize,
+    ) -> Result<Option<M>, MatrixOpsError>
+    where
+        M::Scalar: Sqrt + Sum + ConvertFrom<c64> + ConvertFrom<f64>,
+    {
+        if !self.is_single_excitation_photon_basis() {
+            return Err(MatrixOpsError::Other {
+                message: "Photon-transition PP KronSum requires SingExBosons photon basis".to_string(),
+            });
+        }
+
+        let expn_dim = self.layout.expn_dim(ex_dim, pn_dim)?;
+        let ph_expn_layout = self.layout.ph_expn_layout()?;
+
+        let m_com = self.polariton.exciton.exciton_ham.m;
+
+        let ex_eye = M::eye(ex_dim);
+
+        let mut pairs: Vec<(M, M)> = Vec::new();
+
+        // Cache phonon number operators once.
+        let n_pn_modes = self.phonon.boson.get_modes().len();
+
+        let mut phonon_number_ops = Vec::with_capacity(n_pn_modes);
+        for mode_idx in 0..n_pn_modes {
+            phonon_number_ops.push(self.phonon.get_adag_a(mode_idx)?);
+        }
+
+        // ---------------------------------------------------------------------
         // Photon-phonon number recoil:
         //
-        //     +(1/M) sum_{q,k} q·k n_q n_k.
+        //     +(1/M) sum_{q,k} q·k n_q n_k
         //
-        // This is implied by
+        // In SingExBosons:
         //
-        //     (P - sum_q q n_q - sum_k k n_k)^2 / 2M
-        //
-        // after H_LM has already included the photon-only part.
-        // ------------------------------------------------------------
-        let cached_photon_numbers = self.polariton.cached_adag_a_ops.as_ref().unwrap();
-
+        //     n_q = |q+1><q+1|
+        // ---------------------------------------------------------------------
         for (ph_idx, ph_mode) in self.polariton.photon.boson.get_modes().iter().enumerate() {
-            let photon_number_lm = self.kron_ex_ph(&ex_eye, &cached_photon_numbers[ph_idx]);
+            let ph_state = ph_idx + 1;
 
-            for (pn_mode_idx, pn_mode) in self.phonon.boson.get_modes().iter().enumerate() {
+            for (pn_idx, pn_mode) in self.phonon.boson.get_modes().iter().enumerate() {
                 let coeff = ph_mode.q.dot(&pn_mode.q) / m_com;
 
                 if coeff.abs() <= 1e-14 {
                     continue;
                 }
 
-                let lm_op = photon_number_lm.scale(coeff)?;
+                let pn_block = phonon_number_ops[pn_idx].scale(coeff)?;
+                let block = self.layout.kron_ex_pn(&ex_eye, &pn_block);
 
-                for (pn_idx, occ) in occupations.iter().enumerate() {
-                    let n_k = occ[pn_mode_idx] as f64;
-
-                    Self::push_transition_pair(
-                        &mut pairs,
-                        lm_op.clone(),
-                        pn_dim,
-                        pn_idx,
-                        pn_idx,
-                        n_k,
-                    )?;
-                }
+                Self::push_photon_transition_pair(
+                    &mut pairs,
+                    block,
+                    ph_dim,
+                    ph_state,
+                    ph_state,
+                    1.0,
+                )?;
             }
         }
 
-        // ------------------------------------------------------------
-        // A·k n_k sin(q·x/2) (a + a†) recoil correction:
+        // ---------------------------------------------------------------------
+        // Photon-phonon correction to CoM light-matter coupling:
         //
-        //     -(2/M) (A_q·k) sin(q·x/2) (a_q + a_q†) n_k.
-        // ------------------------------------------------------------
-        for (pn_mode_idx, pn_mode) in self.phonon.boson.get_modes().iter().enumerate() {
+        //     -(2/M) (A_q·k) sin(q·x/2) (a_q + a_q†) n_k
+        //
+        // In SingExBosons:
+        //
+        //     a_q  = |0><q+1|
+        //     a_q† = |q+1><0|
+        // ---------------------------------------------------------------------
+        for (pn_idx, pn_mode) in self.phonon.boson.get_modes().iter().enumerate() {
             let k = &pn_mode.q;
+            let n_k = &phonon_number_ops[pn_idx];
 
             for (ph_idx, ph_mode) in self.polariton.photon.boson.get_modes().iter().enumerate() {
                 let coupling = ph_mode.eps.dot(k) * self.polariton.couplings[ph_idx];
@@ -620,9 +590,6 @@ where
 
                 let key = ModeKey::single(ph_idx);
 
-                let ph_op = self.polariton.cached_a_ops.as_ref().unwrap()[ph_idx]
-                    .add(&self.polariton.cached_a_ops.as_ref().unwrap()[ph_idx].transpose())?;
-
                 let ex_op = self
                     .polariton
                     .matrix_elements
@@ -631,29 +598,51 @@ where
                     .unwrap_or_else(|| panic!("Missing photon sine matrix for {:?}", key));
 
                 let ex_op_m = M::from_dense_arc(Arc::clone(ex_op))?;
-                let lm_op = self.kron_ex_ph(&ex_op_m, &ph_op);
 
-                for (pn_idx, occ) in occupations.iter().enumerate() {
-                    let n_k = occ[pn_mode_idx] as f64;
+                let pn_block = n_k.scale(-2.0 * coupling / m_com)?;
+                let block = self.layout.kron_ex_pn(&ex_op_m, &pn_block);
 
-                    Self::push_transition_pair(
-                        &mut pairs,
-                        lm_op.clone(),
-                        pn_dim,
-                        pn_idx,
-                        pn_idx,
-                        -2.0 * coupling * n_k / m_com,
-                    )?;
-                }
+                // a_q = |0><q+1|
+                Self::push_photon_transition_pair(
+                    &mut pairs,
+                    block.clone(),
+                    ph_dim,
+                    ph_idx + 1,
+                    0,
+                    1.0,
+                )?;
+
+                // a_q† = |q+1><0|
+                Self::push_photon_transition_pair(
+                    &mut pairs,
+                    block,
+                    ph_dim,
+                    0,
+                    ph_idx + 1,
+                    1.0,
+                )?;
             }
         }
 
+        if pairs.is_empty() {
+            return Ok(None);
+        }
+
         timed_println_rank0!(
-            "  Building sparse PP KronSum from {} LM⊗phonon transition pairs",
-            pairs.len()
+            "  Building PP photon-transition correction KronSum: {} terms, block_dim={}, ph_dim={}",
+            pairs.len(),
+            expn_dim,
+            ph_dim,
         );
 
-        M::build_kron_sum_with_layout(pairs, lm_dim, pn_dim, self.layout.lm_pn_layout)
+        let correction = M::build_kron_sum_with_layout(
+            pairs,
+            expn_dim,
+            ph_dim,
+            ph_expn_layout,
+        )?;
+
+        Ok(Some(correction))
     }
 
     pub fn build_pp_hamiltonian(&mut self, k: Option<Vec<f64>>) -> Result<M, MatrixOpsError>
@@ -673,18 +662,12 @@ where
             self.cached_k = k.clone();
         }
 
-        if !self.is_initialized {
-            self.initialize(k.clone())?;
-        }
-
-        let ph_dim = self.polariton.photon.dimension();
         let pn_dim = self.phonon.dimension();
-        let ex_dim = self.polariton.exciton.dimension();
-        let lm_dim = ph_dim * ex_dim;
 
-        let time_lm = Instant::now();
-
+        // Fast no-phonon path. Do not call PP initialize(), because that computes
+        // phonon matrix elements that are unused when pn_dim <= 1 or pn_coupling == 0.
         if pn_dim == 0 || pn_dim == 1 || self.pn_coupling == 0.0 {
+            let time_lm = Instant::now();
             let lm_ham = self.polariton.build_lm_hamiltonian(k.clone())?;
 
             timed_println_rank0!("  Build LM Hamiltonian: {:?}", time_lm.elapsed());
@@ -697,6 +680,15 @@ where
             return Ok(lm_ham);
         }
 
+        if !self.is_initialized {
+            self.initialize(k.clone())?;
+        }
+
+        let ph_dim = self.polariton.photon.dimension();
+        let ex_dim = self.polariton.exciton.dimension();
+
+        let time_lm = Instant::now();
+
         let lm_ham = if let Some(cached) = &self.cached_lm_ham {
             timed_println_rank0!("  Using cached LM Hamiltonian");
             cached.clone()
@@ -708,66 +700,54 @@ where
 
         timed_println_rank0!("  Build/retrieve LM Hamiltonian: {:?}", time_lm.elapsed());
 
-        timed_println_rank0!(
-            "  Dimensions: ex={}, ph={}, pn={}, total={}",
-            ex_dim,
-            ph_dim,
-            pn_dim,
-            lm_dim * pn_dim
-        );
+        if self.is_single_excitation_photon_basis() {
+            let time_pp = Instant::now();
+            let pn_eye = M::eye(pn_dim);
+            let ph_eye = M::eye(ph_dim);
 
-        // Explicit sparse matrices benefit from building PP as a KronSum over
-        // phonon product-Fock transitions.
-        //
-        // Do not use this path for ComposedOperator: PP-level KronSum would store
-        // dense LM-space left blocks and can destroy the lazy/matrix-free advantage.
-        if Self::use_sparse_pp_kronsum_backend() {
-            let time_pp_ks = Instant::now();
+            // ------------------------------------------------------------
+            // 1. H_LM ⊗ I_pn
+            //
+            // This uses the cached LM Hamiltonian, so all light-matter physics stays
+            // centralized in LMHamiltonian.
+            // ------------------------------------------------------------
+            let h_lm_lifted = self.layout.kron_lm_pn(&lm_ham, &pn_eye);
 
-            let ham = self.build_pp_hamiltonian_sparse_kronsum(&lm_ham, ph_dim, ex_dim, pn_dim)?;
+            // ------------------------------------------------------------
+            // 2. I_ph ⊗ H_expn_extra
+            //
+            // Photon-independent phonon/exciton terms.
+            // ------------------------------------------------------------
+            let h_expn_extra = self.build_expn_extra_hamiltonian(ex_dim, pn_dim)?;
+
+            let h_expn_lifted = self
+                .layout
+                .kron_ph_expn(&ph_eye, &h_expn_extra)?;
+
+            // ------------------------------------------------------------
+            // 3. Photon-transition PP corrections.
+            // ------------------------------------------------------------
+            let mut terms = vec![h_lm_lifted, h_expn_lifted];
+
+            if let Some(h_corr) =
+                self.build_photon_transition_pp_corrections(ph_dim, ex_dim, pn_dim)?
+            {
+                terms.push(h_corr);
+            }
+
+            let ham = M::sum(terms)?;
 
             timed_println_rank0!(
-                "  Sparse PP KronSum construction: {:?}",
-                time_pp_ks.elapsed()
+                "  PP construction from cached H_LM + EXPN block + photon-transition KronSum: {:?}",
+                time_pp.elapsed()
             );
 
             return Ok(ham);
         }
-
-        // Lazy-safe fallback for ComposedOperator and dense backends.
-        //
-        // Avoid constructing a giant explicit zero matrix first.
-        let time_pn = Instant::now();
-        let pn_ham = self.phonon.get_h()?;
-        timed_println_rank0!("  Build phonon Hamiltonian: {:?}", time_pn.elapsed());
-
-        let time_eye = Instant::now();
-        let lm_eye = M::eye(lm_dim);
-        let pn_eye = M::eye(pn_dim);
-        timed_println_rank0!("  Create identity matrices: {:?}", time_eye.elapsed());
-
-        let time_kron1 = Instant::now();
-        let mut ham = self.kron_lm_pn(&lm_ham, &pn_eye);
-        timed_println_rank0!(
-            "  First kron product (LM ⊗ I_pn): {:?}",
-            time_kron1.elapsed()
-        );
-
-        let time_kron2 = Instant::now();
-        let h_pn = self.kron_lm_pn(&lm_eye, &pn_ham);
-        ham = ham.add(&h_pn)?;
-        timed_println_rank0!(
-            "  Second kron product (I_lm ⊗ H_pn): {:?}",
-            time_kron2.elapsed()
-        );
-
-        let time_int = Instant::now();
-        let h_int = self.get_interaction_hamiltonian_as_operator(ph_dim)?;
-        ham = ham.add(&h_int)?;
-        timed_println_rank0!("  Interaction Hamiltonian + add: {:?}", time_int.elapsed());
-
-        timed_println!("Total PP Hamiltonian build time: {:?}", time_lm.elapsed());
-
-        Ok(ham)
+        else {
+            return Result::Err(MatrixOpsError::Other {
+                message: "PP Hamiltonian construction is only implemented for SingExBosons photon basis".to_string(),
+            });
+        }
     }
 }

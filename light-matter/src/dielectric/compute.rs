@@ -1,5 +1,5 @@
 use super::cache::{get_dielectric_cache_filename, load_dielectric_cache, save_dielectric_cache};
-use crate::{bands, timed_println};
+use crate::{bands, timed_println_rank0};
 use matrix_ops::{
     ConvertFrom, DiagonalizationOptions, Diagonalize, HermitianConjugate, MatrixOps,
     MatrixOpsError, Norm, Sqrt,
@@ -45,45 +45,45 @@ where
         + HermitianConjugate<Output = M::Scalar>,
     B: Boson<M>,
 {
-    timed_println!(
+    timed_println_rank0!(
         "Calculating dielectric function with {} eigenstates, gamma={:.1e}",
         n_eig,
         gamma
     );
 
     let cache_filename = get_dielectric_cache_filename(pp, pp_config, save_dir, n_eig);
-    timed_println!("Cache filename: {}", cache_filename);
+    timed_println_rank0!("Cache filename: {}", cache_filename);
 
     // Try to load cached data if requested
     // Load cached eigenvalues/x_pp if possible, otherwise compute everything
     let (pp_vals, x_pp, photonic_chars, phonon_numbers, ground_state_index) =
         if use_cached && std::path::Path::new(&cache_filename).exists() {
-            timed_println!(
+            timed_println_rank0!(
                 "Cache file exists, loading cached diagonalization data from {}",
                 cache_filename
             );
             match load_dielectric_cache(&cache_filename) {
                 Ok((vals, x, photonic_chars, phonon_numbers, gs_idx)) => {
-                    timed_println!("Successfully loaded cached data");
+                    timed_println_rank0!("Successfully loaded cached data");
                     (vals, x, photonic_chars, phonon_numbers, gs_idx)
                 }
                 Err(e) => {
-                    timed_println!("Failed to load cache ({}), recalculating...", e);
+                    timed_println_rank0!("Failed to load cache ({}), recalculating...", e);
                     compute_dielectric_cache(pp_config, pp, n_eig)?
                 }
             }
         } else {
             if !use_cached {
-                timed_println!("use_cached=false, computing diagonalization data...");
+                timed_println_rank0!("use_cached=false, computing diagonalization data...");
             } else if !std::path::Path::new(&cache_filename).exists() {
-                timed_println!("Cache file does not exist, computing diagonalization data...");
+                timed_println_rank0!("Cache file does not exist, computing diagonalization data...");
             } else {
-                timed_println!("Computing diagonalization data...");
+                timed_println_rank0!("Computing diagonalization data...");
             }
             let cache_data = compute_dielectric_cache(pp_config, pp, n_eig)?;
 
             if sim_common::mpi::is_mpi_rank0_env() {
-                timed_println!("Saving cache to {}", cache_filename);
+                timed_println_rank0!("Saving cache to {}", cache_filename);
 
                 if let Err(e) = save_dielectric_cache(
                     &cache_filename,
@@ -93,16 +93,16 @@ where
                     &cache_data.3,
                     cache_data.4,
                 ) {
-                    timed_println!("Warning: Failed to save cache: {}", e);
+                    timed_println_rank0!("Warning: Failed to save cache: {}", e);
                 } else {
-                    timed_println!("Successfully saved cache");
+                    timed_println_rank0!("Successfully saved cache");
                 }
             }
 
             cache_data
         };
 
-    timed_println!(
+    timed_println_rank0!(
         "Relative energies = {:?}",
         pp_vals.slice(s![0..50.min(pp_vals.len())]).to_owned() - pp_vals[ground_state_index]
     );
@@ -191,7 +191,7 @@ where
             .get_x(&states[r_ind1], &states[r_ind2], mu, &lag_coeffs)
     });
 
-    // timed_println!("<x> for Relative Coordinate:");
+    // timed_println_rank0!("<x> for Relative Coordinate:");
     // println!("{}", PrettyArray2(&x_rel, 4));
 
     // Get <x> in the Exciton basis
@@ -216,16 +216,17 @@ where
             .fold(c64::zero(), |acc, val| acc + val)
     });
 
-    // timed_println!("|<x>| for exciton:");
+    // timed_println_rank0!("|<x>| for exciton:");
     // let x_exc_mag: Array2<f64> = x_exc.mapv(|val| val.norm());
     // println!("{}", PrettyArray2(&x_exc_mag, 4));
 
-    // timed_println!("Exciton eigenvalues transitions");
+    // timed_println_rank0!("Exciton eigenvalues transitions");
     // let e_vals_transition = pp.polariton.exciton.e_vals.as_ref().unwrap()
     //     - pp.polariton.exciton.e_vals.as_ref().unwrap()[0];
     // println!("{}", e_vals_transition);
 
     // Diagonalize at the Gamma point
+    timed_println_rank0!("Diagonalizing Hamiltonian of size {}", h_pp.shape().0);
     let (pp_vals, pp_vecs) = h_pp
         .diagonalize(
             DiagonalizationOptions::smallest_real(n_eig)
@@ -233,9 +234,21 @@ where
                 .hermitian()
                 .max_iterations(50_000)
                 .deflation_batch_size(512)
-                .tolerance(1e-10),
+                .tolerance(1e-10)
+                .eigenvectors_rank0_only(),
         )?
         .into_arrays_hermitian();
+    timed_println_rank0!("Diagonalization complete: max energy = {:.4e}, min energy = {:.4e}", pp_vals[0], pp_vals[pp_vals.len() - 1]);
+
+    if !sim_common::mpi::is_mpi_rank0_env() {
+        return Ok((
+            pp_vals,
+            Array1::<f64>::zeros(0),
+            Vec::new(),
+            Vec::new(),
+            0,
+        ));
+    }
 
     // If the phonon coupling is effectively zero we *must* use a single
     // phonon vacuum state (dimension = 1).  This is independent of the value
@@ -247,7 +260,7 @@ where
         // Guard against a user‑provided zero here (which would make the loop
         // empty and break the indexing logic).
         if pp_config.pn_n_fock == 0 {
-            timed_println!(
+            timed_println_rank0!(
                 "Warning: phonon coupling non-zero but pn_n_fock == 0 -> forcing n_pn = 1"
             );
             1

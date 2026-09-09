@@ -16,6 +16,8 @@ use crate::{dielectric, timed_println, timed_println_rank0, visualization};
 fn run_dielectric_scan(e_config: ExcitonConfig, args: cli::DielectricArgs) -> Result<()> {
     timed_println_rank0!("Starting dielectric function scan...");
 
+    configure_petsc_slepc_diagnostics(&args)?;
+
     let calculate = args.calculate;
     let use_cached = args.use_cached;
     let zoomed = args.zoomed;
@@ -48,9 +50,9 @@ fn run_dielectric_scan(e_config: ExcitonConfig, args: cli::DielectricArgs) -> Re
         (Some(min), Some(max)) => Some((min, max)),
         _ => {
             if !zoomed {
-                Some((0.182, 0.202))
+                Some((0.13, 0.22))
             } else {
-                Some((0.183, 0.188))
+                Some((0.16, 0.17))
             }
         }
     };
@@ -321,4 +323,35 @@ fn run_dielectric_scan(e_config: ExcitonConfig, args: cli::DielectricArgs) -> Re
 pub(super) fn run_dielectric_cli(args: cli::DielectricArgs) -> Result<()> {
     let e_config = args.exciton.to_config();
     run_dielectric_scan(e_config, args)
+}
+
+fn configure_petsc_slepc_diagnostics(args: &cli::DielectricArgs) -> matrix_ops::Result<()> {
+    let opts = slepc::petsc::Options::global();
+
+    if args.petsc_log_view {
+        opts.set_flag("-log_view")
+            .map_err(|e| matrix_ops::MatrixOpsError::slepc(e, "setting -log_view"))?;
+    }
+
+    if args.eps_monitor {
+        opts.set_flag("-eps_monitor")
+            .map_err(|e| matrix_ops::MatrixOpsError::slepc(e, "setting -eps_monitor"))?;
+
+        opts.set_flag("-eps_converged_reason")
+            .map_err(|e| {
+                matrix_ops::MatrixOpsError::slepc(e, "setting -eps_converged_reason")
+            })?;
+    }
+
+    if args.eps_view {
+        opts.set_flag("-eps_view")
+            .map_err(|e| matrix_ops::MatrixOpsError::slepc(e, "setting -eps_view"))?;
+    }
+
+    if args.mat_view_info {
+        opts.set_flag("-mat_view_info")
+            .map_err(|e| matrix_ops::MatrixOpsError::slepc(e, "setting -mat_view_info"))?;
+    }
+
+    Ok(())
 }

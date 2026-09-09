@@ -74,7 +74,7 @@ pub fn plot_color_band_structure(
     max_energy += energy_padding;
 
     if zoomed {
-        min_energy = -0.03;
+        min_energy = -0.04;
         max_energy = -0.01;
     }
 

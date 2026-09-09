@@ -285,6 +285,22 @@ pub struct DielectricArgs {
 
     #[arg(long, default_value = "dielectric_scan/effective_modes/")]
     pub output_dir: String,
+
+    /// Print PETSc event log at the end of the solve.
+    #[arg(long, default_value_t = false)]
+    pub petsc_log_view: bool,
+
+    /// Print SLEPc EPS convergence monitor.
+    #[arg(long, default_value_t = false)]
+    pub eps_monitor: bool,
+
+    /// Print SLEPc EPS configuration.
+    #[arg(long, default_value_t = false)]
+    pub eps_view: bool,
+
+    /// Print PETSc matrix info.
+    #[arg(long, default_value_t = false)]
+    pub mat_view_info: bool,
 }
 
 #[derive(Debug, Clone, Parser)]

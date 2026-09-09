@@ -6,7 +6,7 @@
 #SBATCH --time=16:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=64
-#SBATCH --cpus-per-task=1
+#SBATCH --cpus-per-task=4
 #SBATCH --mem=500000
 
 set -euo pipefail
@@ -26,7 +26,7 @@ export K_CHUNK_INDEX="${SLURM_ARRAY_TASK_ID}"
 export OMP_NUM_THREADS=1
 export MKL_NUM_THREADS=1
 export OPENBLAS_NUM_THREADS=1
-export RAYON_NUM_THREADS=1
+export RAYON_NUM_THREADS=4
 
 export SLURM_PMIX_DIRECT_CONN=0
 
@@ -65,7 +65,7 @@ run_pmix_v5 \
   --ntasks="${SLURM_NTASKS}" \
   --cpu-bind=cores \
   "${TARGET_DIR}/release/light-matter" \
-  --rayon-threads 1 \
+  --rayon-threads 4 \
   bandstructure \
   "${EXCITON_ARGS[@]}" \
   "${BAND_LM_ARGS[@]}" \

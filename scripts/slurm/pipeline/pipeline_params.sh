@@ -18,7 +18,7 @@ export CACHE_DIR="/lustre/scratch5/mike_tay/saved_data_lm/matrix_element_cache"
 export N_BAND_CHUNKS=16
 
 # Reflectivities for dielectric scan. Slurm array size is inferred from this.
-export REFLECTIVITIES_CSV="0.0,0.999999,0.9999999"
+export REFLECTIVITIES_CSV="0.0,0.99999,0.999999"
 
 # -------------------------------------------------------------------
 # Shared exciton/model parameters
@@ -45,19 +45,18 @@ BAND_LM_ARGS=(
   --photon-modes effective
   --n-rel 16
   --n-ex-eig 32
-  --omega-0 0.18
+  --omega-0 0.16
   --omega-max 0.2
-  --d-omega 2e-4
+  --d-omega 5e-4
   --reflectivity 0.999999
-  --photon-coupling-scale 5.0
+  --photon-coupling-scale 20.0
   --n-modes 16
   --pn-coupling 0.0
   --pn-n-fock 0
-  --zoomed
 )
 
 BAND_SCAN_ARGS=(
-  --n-k-points 64
+  --n-k-points 256
   --n-eig 512
   --n-bands 16
 )
@@ -74,18 +73,19 @@ DIELECTRIC_ARGS=(
   --n-rel 16
   --n-ex-eig 16
   --n-eig 2048
-  --omega-0 0.18
-  --omega-max 0.2
-  --d-omega 5e-5
-  --n-modes 32
+  --omega-0 0.16
+  --omega-max 0.22
+  --d-omega 2e-4
+  --n-modes 23
   --reflectivities "${REFLECTIVITIES_CSV}"
-  --photon-coupling-scale 5.0
-  --pn-coupling 0.0
+  --photon-coupling-scale 10.0
+  --pn-coupling 5e-4
   --pn-omega 0.0025
   --pn-k-x 0.05
-  --pn-n-fock 1
+  --pn-n-fock 4
   --omega-min-scan 0.0
   --omega-max-scan 0.3
   --n-omega-points 100000
   --output-dir dielectric_scan/effective_modes
+  --eps-monitor
 )

@@ -11,6 +11,11 @@ pub fn run(cli: Cli) -> Result<()> {
     let num_threads = cli
         .rayon_threads
         .or_else(|| {
+            std::env::var("RAYON_NUM_THREADS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+        })
+        .or_else(|| {
             std::env::var("OMP_NUM_THREADS")
                 .ok()
                 .and_then(|s| s.parse().ok())

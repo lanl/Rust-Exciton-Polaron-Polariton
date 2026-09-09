@@ -105,42 +105,56 @@ where
             self.exciton.compute_eigenstates()?;
             timed_println_rank0!("    Exciton diagonalization: {:?}", time_eig.elapsed());
 
-            let time_mat = Instant::now();
-            let all_q_ind = self.photon.get_all_q_ind();
-            let (relative_hash, exciton_hash) = self.matrix_element_cache_hashes();
+            let all_couplings_zero = self.all_light_matter_couplings_zero();
 
-            timed_println_rank0!(
-                "Matrix-element cache hashes: relative={:016x}, exciton_basis={:016x}, k={:?}, qk={:?}, k_quantum={}",
-                relative_hash,
-                exciton_hash,
-                self.exciton.exciton_ham.k,
-                self.exciton
-                    .exciton_ham
-                    .k
-                    .iter()
-                    .map(|&x| crate::utils::quantize_f64_for_hash(x))
-                    .collect::<Vec<_>>(),
-                crate::utils::K_HASH_QUANTUM,
-            );
+            let time_pq = Instant::now();
+            self.calc_p_q_matrix()?;
+            timed_println_rank0!("    P·q matrix calculation: {:?}", time_pq.elapsed());
 
-            self.matrix_elements
-                .populate_taylor_matrix_elements_with_cache(
-                    &all_q_ind,
-                    self.exciton.e_vecs.as_ref().unwrap(),
-                    self.photon.boson.get_modes(),
-                    self.exciton.exciton_ham.kappa_vectors.len(),
-                    self.exciton.exciton_ham.rel_ham.mu,
-                    self.cache_dir.as_deref(),
-                    false,
-                    relative_hash,
-                    exciton_hash,
+            if all_couplings_zero {
+                timed_println_rank0!(
+                    "    All light-matter couplings are zero; skipping Taylor sin/cos/p_cos matrix elements"
                 );
 
-            timed_println_rank0!("    Matrix elements calculation: {:?}", time_mat.elapsed());
+                self.p_c_sin = Some(Vec::new());
+            } else {
+                let time_mat = Instant::now();
+                let all_q_ind = self.photon.get_all_q_ind();
+                let (relative_hash, exciton_hash) = self.matrix_element_cache_hashes();
 
-            let time_p = Instant::now();
-            self.calc_p_c_sin_matrix()?;
-            timed_println_rank0!("    P·c·sin matrix calculation: {:?}", time_p.elapsed());
+                timed_println_rank0!(
+                    "Matrix-element cache hashes: relative={:016x}, exciton_basis={:016x}, k={:?}, qk={:?}, k_quantum={}",
+                    relative_hash,
+                    exciton_hash,
+                    self.exciton.exciton_ham.k,
+                    self.exciton
+                        .exciton_ham
+                        .k
+                        .iter()
+                        .map(|&x| crate::utils::quantize_f64_for_hash(x))
+                        .collect::<Vec<_>>(),
+                    crate::utils::K_HASH_QUANTUM,
+                );
+
+                self.matrix_elements
+                    .populate_taylor_matrix_elements_with_cache(
+                        &all_q_ind,
+                        self.exciton.e_vecs.as_ref().unwrap(),
+                        self.photon.boson.get_modes(),
+                        self.exciton.exciton_ham.kappa_vectors.len(),
+                        self.exciton.exciton_ham.rel_ham.mu,
+                        self.cache_dir.as_deref(),
+                        false,
+                        relative_hash,
+                        exciton_hash,
+                    );
+
+                timed_println_rank0!("    Matrix elements calculation: {:?}", time_mat.elapsed());
+
+                let time_p = Instant::now();
+                self.calc_p_c_sin_matrix()?;
+                timed_println_rank0!("    P·c·sin matrix calculation: {:?}", time_p.elapsed());
+            }
 
             let time_cache = Instant::now();
             self.cache_photon_operators()?;
@@ -293,43 +307,48 @@ where
         Ok(())
     }
 
+    fn calc_p_q_matrix(&mut self) -> Result<(), MatrixOpsError>
+    where
+        M::Scalar: Sqrt + Sum + ConvertFrom<c64> + ConvertFrom<f64>,
+    {
+        let n_modes = self.photon.boson.get_modes().len();
+
+        let mut p_q: Vec<M> = Vec::with_capacity(n_modes);
+
+        for i in 0..n_modes {
+            let q = &self.photon.boson.get_modes()[i].q;
+            p_q.push(self.exciton.get_p_com(q)?);
+        }
+
+        self.p_q = Some(p_q);
+        Ok(())
+    }
+
     fn calc_p_c_sin_matrix(&mut self) -> Result<(), MatrixOpsError>
     where
         M::Scalar: Sqrt + Sum + ConvertFrom<c64> + ConvertFrom<f64>,
     {
-        let n_ph = self.photon.boson.get_modes().len() + 1; // +1 for ground state
-
+        let n_modes = self.photon.boson.get_modes().len();
         let sin_mat = &self.matrix_elements.sin_mat;
 
-        // let test = cos_mat.clone().into_keys().collect::<Vec<Vec<i32>>>();
-        // timed_println_rank0!("{:?}",test);
+        let mut p_c_sin: Vec<M> = Vec::with_capacity(n_modes);
 
-        let mut p_c_sin: Vec<M> = Vec::new();
-        let mut p_q: Vec<M> = Vec::new();
-        (0..n_ph - 1).try_for_each(|i| -> Result<(), MatrixOpsError> {
+        for i in 0..n_modes {
             let eps = &self.photon.boson.get_modes()[i].eps;
-            let q = &self.photon.boson.get_modes()[i].q;
             let key = ModeKey::single(i);
 
             p_c_sin.push(
                 self.exciton
-                    .get_p_com(eps)? // P·eps
+                    .get_p_com(eps)?
                     .dot(&M::from_dense_arc(Arc::clone(
-                        sin_mat.get(&key).unwrap_or_else(|| {
-                            panic!("Missing sin matrix for {:?}", key)
-                        }),
+                        sin_mat
+                            .get(&key)
+                            .unwrap_or_else(|| panic!("Missing sin matrix for {:?}", key)),
                     ))?)?,
             );
-
-            p_q.push(
-                self.exciton.get_p_com(q)?, // P·q
-            );
-
-            Ok(())
-        })?;
+        }
 
         self.p_c_sin = Some(p_c_sin);
-        self.p_q = Some(p_q);
         Ok(())
     }
 
@@ -370,48 +389,52 @@ where
             .iter()
             .enumerate()
             .try_for_each(|(i_ph, mode_i)| -> Result<(), MatrixOpsError> {
-                // p.A terms
                 let a_i = &cached_a[i_ph];
                 let coupling_i = self.couplings[i_ph];
-                let p_c_sin = &self.p_c_sin.as_ref().unwrap()[i_ph]
-                    .scale(2.0 / self.exciton.exciton_ham.m * coupling_i)?;
+
                 let p_q =
                     &self.p_q.as_ref().unwrap()[i_ph].scale(-1.0 / self.exciton.exciton_ham.m)?;
 
-                let single_key = ModeKey::single(i_ph);
+                // Coupling-dependent p·A terms.
+                if coupling_i.abs() > 1e-14 {
+                    let p_c_sin = &self.p_c_sin.as_ref().unwrap()[i_ph]
+                        .scale(2.0 / self.exciton.exciton_ham.m * coupling_i)?;
 
-                let p_cos = &M::from_dense_arc(Arc::clone(
-                    self.matrix_elements
-                        .p_cos_mat
-                        .get(&single_key)
-                        .unwrap_or_else(|| panic!("Missing p_cos matrix for {:?}", single_key)),
-                ))?
-                .scale(coupling_i / self.exciton.exciton_ham.rel_ham.mu)?;
+                    let single_key = ModeKey::single(i_ph);
 
-                // P•A sin(x) terms - these are perfect KronSum candidates
-                kron_pairs.push((p_c_sin.clone(), a_i.clone()));
-                kron_pairs.push((p_c_sin.clone(), a_i.transpose()));
+                    let p_cos = &M::from_dense_arc(Arc::clone(
+                        self.matrix_elements
+                            .p_cos_mat
+                            .get(&single_key)
+                            .unwrap_or_else(|| panic!("Missing p_cos matrix for {:?}", single_key)),
+                    ))?
+                    .scale(coupling_i / self.exciton.exciton_ham.rel_ham.mu)?;
 
-                // The exact transformed CoM light-matter coupling contains
-                //
-                //   (2/M) [P - sum_{q' != q} q' n_{q'}] · A_q
-                //       sin(q·x/2) (a_q† + a_q).
-                //
-                // Here we include the P · A_q part. The recoil-subtraction part
-                //
-                //   -(2/M) sum_{q' != q} (q'·A_q) n_{q'}
-                //       sin(q·x/2) (a_q† + a_q)
-                //
-                // is projected out in the single-excitation photon basis used by
-                // SingExBosons: n_{q'}(a_q† + a_q) either annihilates the wrong mode
-                // or creates a two-photon state outside the truncated subspace.
-                // If FullBosons is used, this recoil-subtraction term should be added.
+                    // P•A sin(x)
+                    kron_pairs.push((p_c_sin.clone(), a_i.clone()));
+                    kron_pairs.push((p_c_sin.clone(), a_i.transpose()));
 
-                // p•A cos(x) terms
-                kron_pairs.push((p_cos.clone(), a_i.scale(-1.0)?));
-                kron_pairs.push((p_cos.clone(), a_i.transpose()));
+                    // The exact transformed CoM light-matter coupling contains
+                    //
+                    //   (2/M) [P - sum_{q' != q} q' n_{q'}] · A_q
+                    //       sin(q·x/2) (a_q† + a_q).
+                    //
+                    // Here we include the P · A_q part. The recoil-subtraction part
+                    //
+                    //   -(2/M) sum_{q' != q} (q'·A_q) n_{q'}
+                    //       sin(q·x/2) (a_q† + a_q)
+                    //
+                    // is projected out in the single-excitation photon basis used by
+                    // SingExBosons: n_{q'}(a_q† + a_q) either annihilates the wrong mode
+                    // or creates a two-photon state outside the truncated subspace.
+                    // If FullBosons is used, this recoil-subtraction term should be added.
 
-                // P•q a†a term
+                    // p•A cos(x)
+                    kron_pairs.push((p_cos.clone(), a_i.scale(-1.0)?));
+                    kron_pairs.push((p_cos.clone(), a_i.transpose()));
+                }
+
+                // P•q a†a term is not proportional to LM coupling in the current Hamiltonian.
                 kron_pairs.push((p_q.clone(), cached_adag_a[i_ph].clone()));
 
                 // A² terms
@@ -429,27 +452,23 @@ where
                             / 2.0
                             / self.exciton.exciton_ham.rel_ham.mu;
 
-                        let cos_diff: M = if i_ph == j_ph {
-                            // cos[(q-q)·x/2] = 1
-                            ex_eye.clone()
-                        } else {
-                            let q_diff_key = ModeKey::diff(i_ph, j_ph);
+                        if coupling_2.abs() > 1e-14 {
+                            let cos_diff: M = if i_ph == j_ph {
+                                ex_eye.clone()
+                            } else {
+                                let q_diff_key = ModeKey::diff(i_ph, j_ph);
 
-                            M::from_dense_arc(Arc::clone(
-                                self.matrix_elements
-                                    .cos_mat
-                                    .get(&q_diff_key)
-                                    .unwrap_or_else(|| {
-                                        panic!("Missing cos-diff matrix for {:?}", q_diff_key)
-                                    }),
-                            ))?
-                        };
+                                M::from_dense_arc(Arc::clone(
+                                    self.matrix_elements
+                                        .cos_mat
+                                        .get(&q_diff_key)
+                                        .unwrap_or_else(|| panic!("Missing cos-diff matrix for {:?}", q_diff_key)),
+                                ))?
+                            };
 
-                        // let a_diff = &(a_i.dot(&a_j.transpose()).add(&a_i.transpose().dot(a_j)));
-
-                        // cos(q - q') term
-                        kron_pairs.push((cos_diff.scale(coupling_2)?, a_i.dot(&a_j.transpose())?));
-                        kron_pairs.push((cos_diff.scale(coupling_2)?, a_i.transpose().dot(a_j)?));
+                            kron_pairs.push((cos_diff.scale(coupling_2)?, a_i.dot(&a_j.transpose())?));
+                            kron_pairs.push((cos_diff.scale(coupling_2)?, a_i.transpose().dot(a_j)?));
+                        }
 
                         // NOTE on the A^2 term:
                         //
@@ -527,5 +546,10 @@ where
 
     pub fn update_k(&mut self, k: Vec<f64>) {
         self.exciton.exciton_ham.k = k;
+    }
+
+    #[inline]
+    fn all_light_matter_couplings_zero(&self) -> bool {
+        self.couplings.iter().all(|g| g.abs() <= 1e-14)
     }
 }
