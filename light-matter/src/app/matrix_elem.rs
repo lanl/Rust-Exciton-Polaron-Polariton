@@ -207,11 +207,36 @@ fn run_matrix_elem_calc_dielectric_cli(args: cli::MatrixElemDielectricArgs) -> R
     timed_println!("  force_recompute   = {}", args.common.force_recompute);
     timed_println!("  base PP hash      = {:016x}", pp_config.get_config_hash());
 
-    let mut pp: PPHamiltonian<CsMat<c64>, SingExBosons<CsMat<c64>>> =
-        PPHamiltonian::from_config(&pp_config);
+    let k_points = if matches!(
+        args.dielectric.dielectric_method,
+        cli::DielectricMethodArg::Sheet2d
+    ) {
+        if (pp_config.e_config.m_e - pp_config.e_config.m_h).abs() > 1e-12 {
+            return Err(matrix_ops::MatrixOpsError::Other {
+                message: "sheet2d K-boost assumes m_e == m_h (X = (x_e+x_h)/2)".to_string(),
+            });
+        }
+        let d_q = pp_config.d_q.expect("photon mode spacing must be set");
+        let q_probe = args
+            .dielectric
+            .probe_q
+            .unwrap_or(args.dielectric.probe_q_in_dq * d_q);
+        vec![vec![0.0, 0.0], vec![q_probe, 0.0]]
+    } else {
+        vec![k_point]
+    };
 
-    pp.polariton
-        .compute_lm_matrix_elements_only(Some(k_point), args.common.force_recompute)?;
+    for k_point in k_points {
+        timed_println!("Precomputing dielectric matrix elements for K={:?}", k_point);
+        let mut pp_config_k = pp_config.clone();
+        pp_config_k.e_config.k = k_point.clone();
+
+        let mut pp: PPHamiltonian<CsMat<c64>, SingExBosons<CsMat<c64>>> =
+            PPHamiltonian::from_config(&pp_config_k);
+
+        pp.polariton
+            .compute_lm_matrix_elements_only(Some(k_point), args.common.force_recompute)?;
+    }
 
     timed_println!("Dielectric LM matrix-element precompute finished");
 
