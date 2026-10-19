@@ -99,6 +99,7 @@ export BAND_METHOD="linop"
 # -------------------------------------------------------------------
 # Dielectric parameters
 # Used by BOTH dielectric matcalc and dielectric solve.
+# Sheet2D runs should use --output-dir dielectric_scan/sheet in a copied params file.
 # -------------------------------------------------------------------
 DIELECTRIC_ARGS=(
   --photon-modes effective
@@ -118,7 +119,7 @@ DIELECTRIC_ARGS=(
   --omega-min-scan 0.0
   --omega-max-scan 0.3
   --n-omega-points 100000
-  --output-dir dielectric_scan/effective_modes
+  --output-dir dielectric_scan/slab
   --dielectric-method slab
   --exciton-density 2.8e-5
   --slab-thickness-bohr 11.6

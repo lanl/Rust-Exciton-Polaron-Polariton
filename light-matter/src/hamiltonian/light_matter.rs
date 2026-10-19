@@ -503,6 +503,12 @@ where
                 Ok(())
             })?;
 
+        timed_println_rank0!(
+            "        include_photon_recoil = {}, kron_pairs = {}",
+            self.include_photon_recoil,
+            kron_pairs.len()
+        );
+
         // Use the optimized builder - will automatically detect and optimize KronSum patterns
         timed_println_rank0!(
             "        Building KronSum from {} term pairs...",
