@@ -11,7 +11,7 @@ use matrix_ops::{
     ConvertFrom, Diagonalize, DiagonalizationOptions, HermitianConjugate, MatrixOps,
     MatrixOpsError, Norm, Sqrt,
 };
-use ndarray::{Array1, Array2};
+use ndarray::{Array1, Array2, s};
 use ndarray_linalg::c64;
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -30,34 +30,20 @@ pub fn exciton_dipole_cross(
     assert_eq!(e_ket.nrows(), n_com * n_rel);
     assert_eq!(e_bra.nrows(), n_com * n_rel);
 
+    let x_c = x_rel.mapv(|value| c64::new(value, 0.0));
     let mut transformed_ket = Array2::<c64>::zeros(e_ket.raw_dim());
 
     for com in 0..n_com {
-        for bra_rel in 0..n_rel {
-            for ket_rel in 0..n_rel {
-                let coefficient = c64::new(x_rel[[bra_rel, ket_rel]], 0.0);
-                let bra_index = com * n_rel + bra_rel;
-                let ket_index = com * n_rel + ket_rel;
-                for eigenstate in 0..e_ket.ncols() {
-                    transformed_ket[[bra_index, eigenstate]] +=
-                        coefficient * e_ket[[ket_index, eigenstate]];
-                }
-            }
-        }
+        let rows = com * n_rel..(com + 1) * n_rel;
+        let ket_block = e_ket.slice(s![rows.clone(), ..]).to_owned();
+        let block = ndarray::linalg::Dot::dot(&x_c, &ket_block);
+        transformed_ket
+            .slice_mut(s![rows, ..])
+            .assign(&block);
     }
 
-    let mut result = Array2::<c64>::zeros((e_bra.ncols(), e_ket.ncols()));
-    for bra_eigenstate in 0..e_bra.ncols() {
-        for ket_eigenstate in 0..e_ket.ncols() {
-            for row in 0..e_bra.nrows() {
-                result[[bra_eigenstate, ket_eigenstate]] +=
-                    e_bra[[row, bra_eigenstate]].conj()
-                        * transformed_ket[[row, ket_eigenstate]];
-            }
-        }
-    }
-
-    result
+    let bra_conjugate = e_bra.t().mapv(|value| value.conj());
+    ndarray::linalg::Dot::dot(&bra_conjugate, &transformed_ket)
 }
 
 pub const SHEET_CACHE_VERSION: u32 = 2;
