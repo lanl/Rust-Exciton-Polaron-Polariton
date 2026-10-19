@@ -24,7 +24,7 @@ pub fn generate_modes(
     omega_max: f64,
     reflectivity: f64,
     coupling_scale: f64,
-) -> (Vec<Vector3D>, Vec<Polarization>, Vec<f64>) {
+) -> (Vec<Vector3D>, Vec<Polarization>, Vec<f64>, f64) {
     let n_omega = ((omega_max - omega_0) / d_omega).floor() as usize;
 
     if omega_0 > omega_max {
@@ -83,7 +83,7 @@ pub fn generate_modes(
         );
     }
 
-    (q_values, polarizations, couplings)
+    (q_values, polarizations, couplings, d_q)
 }
 
 fn get_coupling(d_omega: f64, d_q: f64, omega_n: f64, omega_0: f64, reflectivity: f64) -> f64 {

@@ -134,7 +134,7 @@ pub fn color_band_filename(
     let total_coupling = pp_config.lm_couplings.iter().sum::<f64>();
 
     format!(
-        "{}/color_band_a0{}_V0{}_nrel{}_nbands{}_npoints{}_phcoup{:.6}_nmodes{}_pncoup{}_npn{}_{}{}.bin",
+        "{}/color_band_a0{}_V0{}_nrel{}_nbands{}_npoints{}_phcoup{:.6}_nmodes{}_pncoup{}_npn{}_{}{}{}.bin",
         save_dir,
         pp_config.e_config.a0,
         pp_config.e_config.v0,
@@ -146,6 +146,7 @@ pub fn color_band_filename(
         pp_config.pn_coupling,
         pp_config.pn_n_fock,
         eig_selection_tag(n_eig, energy_cutoff),
+        if !pp_config.include_photon_recoil { "_lwa" } else { "" },
         if zoomed { "_zoomed" } else { "" },
     )
 }
@@ -163,7 +164,7 @@ pub fn color_band_chunk_filename(
     let total_coupling = pp_config.lm_couplings.iter().sum::<f64>();
 
     format!(
-        "{}/color_band_chunk_a0{}_V0{}_nrel{}_nbands{}_npoints{}_phcoup{:.6}_nmodes{}_pncoup{}_npn{}_{}_chunk{}_of{}{}.bin",
+        "{}/color_band_chunk_a0{}_V0{}_nrel{}_nbands{}_npoints{}_phcoup{:.6}_nmodes{}_pncoup{}_npn{}_{}_chunk{}_of{}{}{}.bin",
         save_dir,
         pp_config.e_config.a0,
         pp_config.e_config.v0,
@@ -177,6 +178,7 @@ pub fn color_band_chunk_filename(
         eig_selection_tag(n_eig, energy_cutoff),
         chunk_index,
         n_chunks,
+        if !pp_config.include_photon_recoil { "_lwa" } else { "" },
         if zoomed { "_zoomed" } else { "" },
     )
 }

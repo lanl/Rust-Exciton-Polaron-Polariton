@@ -29,6 +29,7 @@ pub struct PhotonModeSet {
     pub q_values: Vec<Vector3D>,
     pub polarizations: Vec<Polarization>,
     pub couplings: Vec<f64>,
+    pub d_q: f64,
     pub omega_0: f64,
     pub kind: PhotonModeKind,
 }
@@ -62,11 +63,17 @@ pub fn construct_cartesian_modes(
     };
 
     let polarizations = vec![Polarization::TE; q_values.len()];
+    let d_q = if n_modes_side > 1 {
+        2.0 * q_max / (n_modes_side as f64 - 1.0)
+    } else {
+        0.0
+    };
 
     PhotonModeSet {
         q_values: q_values.clone(),
         polarizations,
         couplings: vec![per_mode; q_values.len()],
+        d_q,
         omega_0,
         kind: PhotonModeKind::Cartesian {
             n_modes_side,
@@ -85,7 +92,7 @@ pub fn construct_effective_modes(
     reflectivity: f64,
     coupling_scale: f64,
 ) -> PhotonModeSet {
-    let (q_values, polarizations, couplings) = effective::generate_modes(
+    let (q_values, polarizations, couplings, d_q) = effective::generate_modes(
         d_omega,
         n_modes_target,
         omega_0,
@@ -98,6 +105,7 @@ pub fn construct_effective_modes(
         q_values,
         polarizations,
         couplings,
+        d_q,
         omega_0,
         kind: PhotonModeKind::Effective {
             n_modes_target,

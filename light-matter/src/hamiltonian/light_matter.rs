@@ -16,6 +16,7 @@ pub struct LMHamiltonian<M: MatrixOps, B: Boson<M>> {
     pub layout: LMBasisLayout,
     pub p_c_sin: Option<Vec<M>>,
     pub p_q: Option<Vec<M>>,
+    pub include_photon_recoil: bool,
     is_initialized: bool,
     pub(crate) cached_a_ops: Option<Vec<M>>, // Cache annihilation operators
     pub(crate) cached_adag_a_ops: Option<Vec<M>>, // Cache number operators
@@ -42,6 +43,7 @@ where
             layout: LMBasisLayout::PHOTON_MAJOR,
             p_c_sin: None,
             p_q: None,
+            include_photon_recoil: true,
             is_initialized: false,
             cached_a_ops: None,
             cached_adag_a_ops: None,
@@ -67,6 +69,7 @@ where
             layout: LMBasisLayout::PHOTON_MAJOR,
             p_c_sin: None,
             p_q: None,
+            include_photon_recoil: true,
             is_initialized: false,
             cached_a_ops: None,
             cached_adag_a_ops: None,
@@ -392,9 +395,6 @@ where
                 let a_i = &cached_a[i_ph];
                 let coupling_i = self.couplings[i_ph];
 
-                let p_q =
-                    &self.p_q.as_ref().unwrap()[i_ph].scale(-1.0 / self.exciton.exciton_ham.m)?;
-
                 // Coupling-dependent p·A terms.
                 if coupling_i.abs() > 1e-14 {
                     let p_c_sin = &self.p_c_sin.as_ref().unwrap()[i_ph]
@@ -435,7 +435,11 @@ where
                 }
 
                 // P•q a†a term is not proportional to LM coupling in the current Hamiltonian.
-                kron_pairs.push((p_q.clone(), cached_adag_a[i_ph].clone()));
+                if self.include_photon_recoil {
+                    let p_q = &self.p_q.as_ref().unwrap()[i_ph]
+                        .scale(-1.0 / self.exciton.exciton_ham.m)?;
+                    kron_pairs.push((p_q.clone(), cached_adag_a[i_ph].clone()));
+                }
 
                 // A² terms
                 self.photon
@@ -484,11 +488,14 @@ where
                         // If this code is used with FullBosons, the pair terms should be added explicitly.
 
                         // (q a†a)^2 term
-                        let q_q = mode_i.q.dot(&mode_j.q) / 2.0 / self.exciton.exciton_ham.m;
-                        kron_pairs.push((
-                            ex_eye.scale(q_q)?,
-                            cached_adag_a[i_ph].dot(&cached_adag_a[j_ph])?,
-                        ));
+                        if self.include_photon_recoil {
+                            let q_q =
+                                mode_i.q.dot(&mode_j.q) / 2.0 / self.exciton.exciton_ham.m;
+                            kron_pairs.push((
+                                ex_eye.scale(q_q)?,
+                                cached_adag_a[i_ph].dot(&cached_adag_a[j_ph])?,
+                            ));
+                        }
 
                         Ok(())
                     })?;

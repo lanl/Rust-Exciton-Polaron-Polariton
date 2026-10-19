@@ -29,7 +29,8 @@ pub(super) fn build_bandstructure_pp_config(
 
     let pn_k = arr1(&[0.0, args.pn_k_y]);
 
-    let pp_config = match mode_set.kind {
+    let d_q = mode_set.d_q;
+    let mut pp_config = match mode_set.kind {
         crate::modes::photon::PhotonModeKind::Effective {
             d_omega,
             omega_max,
@@ -70,6 +71,9 @@ pub(super) fn build_bandstructure_pp_config(
         ),
     };
 
+    pp_config.d_q = Some(d_q);
+    pp_config.include_photon_recoil = !args.long_wavelength;
+
     let (sym_points, sym_labels) = crate::modes::photon::square_lattice_symmetry_points(a0);
 
     (pp_config, sym_points, sym_labels)
@@ -99,7 +103,8 @@ pub(super) fn build_dielectric_pp_config_for_reflectivity(
 
     let pn_k = arr1(&[args.pn_k_x, 0.0]);
 
-    match mode_set.kind {
+    let d_q = mode_set.d_q;
+    let mut pp_config = match mode_set.kind {
         crate::modes::photon::PhotonModeKind::Effective {
             d_omega,
             omega_max,
@@ -138,5 +143,9 @@ pub(super) fn build_dielectric_pp_config_for_reflectivity(
             1,
             1,
         ),
-    }
+    };
+
+    pp_config.d_q = Some(d_q);
+    pp_config.include_photon_recoil = !args.long_wavelength;
+    pp_config
 }

@@ -65,13 +65,14 @@ where
 
         // Create Polariton with cache support
         let config_hash = pp_config.get_config_hash();
-        let polariton = LMHamiltonian::new_with_cache(
+        let mut polariton = LMHamiltonian::new_with_cache(
             exciton,
             photon,
             pp_config.lm_couplings.clone(),
             pp_config.cache_dir.clone(),
             config_hash,
         );
+        polariton.include_photon_recoil = pp_config.include_photon_recoil;
 
         // Create Phonon
         let phonon_mode = BosonMode {
@@ -543,27 +544,29 @@ where
         //
         //     n_q = |q+1><q+1|
         // ---------------------------------------------------------------------
-        for (ph_idx, ph_mode) in self.polariton.photon.boson.get_modes().iter().enumerate() {
-            let ph_state = ph_idx + 1;
+        if self.polariton.include_photon_recoil {
+            for (ph_idx, ph_mode) in self.polariton.photon.boson.get_modes().iter().enumerate() {
+                let ph_state = ph_idx + 1;
 
-            for (pn_idx, pn_mode) in self.phonon.boson.get_modes().iter().enumerate() {
-                let coeff = ph_mode.q.dot(&pn_mode.q) / m_com;
+                for (pn_idx, pn_mode) in self.phonon.boson.get_modes().iter().enumerate() {
+                    let coeff = ph_mode.q.dot(&pn_mode.q) / m_com;
 
-                if coeff.abs() <= 1e-14 {
-                    continue;
+                    if coeff.abs() <= 1e-14 {
+                        continue;
+                    }
+
+                    let pn_block = phonon_number_ops[pn_idx].scale(coeff)?;
+                    let block = self.layout.kron_ex_pn(&ex_eye, &pn_block);
+
+                    Self::push_photon_transition_pair(
+                        &mut pairs,
+                        block,
+                        ph_dim,
+                        ph_state,
+                        ph_state,
+                        1.0,
+                    )?;
                 }
-
-                let pn_block = phonon_number_ops[pn_idx].scale(coeff)?;
-                let block = self.layout.kron_ex_pn(&ex_eye, &pn_block);
-
-                Self::push_photon_transition_pair(
-                    &mut pairs,
-                    block,
-                    ph_dim,
-                    ph_state,
-                    ph_state,
-                    1.0,
-                )?;
             }
         }
 
