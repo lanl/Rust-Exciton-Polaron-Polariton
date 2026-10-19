@@ -14,6 +14,12 @@ pub struct DielectricParams {
     pub n_eig: usize,
     pub energy_cutoff: Option<f64>,
     pub gamma: f64,
+    pub method: String,
+    pub n_x: Option<f64>,
+    pub d_eff: Option<f64>,
+    pub q_probe: Option<f64>,
+    pub antiresonant: bool,
+    pub lwa: bool,
 }
 
 pub fn extract_params_from_filename(path: &Path) -> Option<DielectricParams> {
@@ -23,6 +29,7 @@ pub fn extract_params_from_filename(path: &Path) -> Option<DielectricParams> {
         return None;
     }
 
+    let filename = filename.trim_end_matches(".dat");
     let parts: Vec<&str> = filename.split('_').collect();
     let mut params = DielectricParams {
         a0: 0.0,
@@ -35,6 +42,12 @@ pub fn extract_params_from_filename(path: &Path) -> Option<DielectricParams> {
         n_eig: 0,
         energy_cutoff: None,
         gamma: 0.0,
+        method: "legacy".to_string(),
+        n_x: None,
+        d_eff: None,
+        q_probe: None,
+        antiresonant: false,
+        lwa: false,
     };
 
     for part in parts.iter() {
@@ -57,8 +70,22 @@ pub fn extract_params_from_filename(path: &Path) -> Option<DielectricParams> {
         } else if part.starts_with("ecut") {
             params.energy_cutoff = part[4..].parse::<f64>().ok();
         } else if part.starts_with("gamma") {
-            let gamma_str = part[5..].trim_end_matches(".dat");
-            params.gamma = gamma_str.parse::<f64>().unwrap_or(0.0);
+            params.gamma = part[5..].parse::<f64>().unwrap_or(0.0);
+        } else if let Some(method) = part.strip_prefix("meth") {
+            params.method = match method {
+                "sheet" => "sheet2d".to_string(),
+                other => other.to_string(),
+            };
+        } else if let Some(n_x) = part.strip_prefix("nx") {
+            params.n_x = n_x.parse::<f64>().ok();
+        } else if let Some(d_eff) = part.strip_prefix("deff") {
+            params.d_eff = d_eff.parse::<f64>().ok();
+        } else if let Some(q_probe) = part.strip_prefix("qpr") {
+            params.q_probe = q_probe.parse::<f64>().ok();
+        } else if *part == "ar" {
+            params.antiresonant = true;
+        } else if *part == "lwa" {
+            params.lwa = true;
         }
     }
 
@@ -94,4 +121,41 @@ pub fn load_dielectric_data(
     }
 
     Ok((omegas, re_eps, im_eps))
+}
+
+pub fn load_dielectric_alpha(
+    path: &Path,
+) -> Result<(Vec<f64>, Vec<f64>, Vec<f64>), Box<dyn std::error::Error>> {
+    let file = File::open(path)?;
+    let reader = BufReader::new(file);
+
+    let mut omegas = Vec::new();
+    let mut re_alpha = Vec::new();
+    let mut im_alpha = Vec::new();
+
+    for line in reader.lines() {
+        let line = line?;
+        if line.starts_with('#') || line.trim().is_empty() {
+            continue;
+        }
+
+        let values: Vec<f64> = line
+            .split_whitespace()
+            .map(str::parse::<f64>)
+            .collect::<Result<Vec<_>, _>>()?;
+
+        if values.len() < 5 {
+            return Err(format!(
+                "dielectric alpha data line has {} columns, expected at least 5",
+                values.len()
+            )
+            .into());
+        }
+
+        omegas.push(values[0]);
+        re_alpha.push(values[3]);
+        im_alpha.push(values[4]);
+    }
+
+    Ok((omegas, re_alpha, im_alpha))
 }

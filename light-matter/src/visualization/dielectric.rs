@@ -4,7 +4,9 @@ use plotters::prelude::*;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use super::data::{DielectricParams, extract_params_from_filename, load_dielectric_data};
+use super::data::{
+    DielectricParams, extract_params_from_filename, load_dielectric_alpha, load_dielectric_data,
+};
 use crate::{Vector3D, plot_photon_freqs, timed_println};
 
 #[derive(PartialEq)]
@@ -12,6 +14,7 @@ pub enum DielectricPlotType {
     Real,
     Imaginary,
     Both,
+    Alpha2D,
 }
 
 pub fn plot_dielectric_function(
@@ -73,6 +76,12 @@ pub fn plot_dielectric_function(
                             _ => false,
                         };
                         let gamma_match = (params.gamma - ref_params.gamma).abs() < 1e-12;
+                        let method_match = params.method == ref_params.method;
+                        let n_x_match = optional_scientific_match(params.n_x, ref_params.n_x, 3);
+                        let d_eff_match = optional_decimal_match(params.d_eff, ref_params.d_eff, 3);
+                        let q_probe_match = optional_scientific_match(params.q_probe, ref_params.q_probe, 4);
+                        let antiresonant_match = params.antiresonant == ref_params.antiresonant;
+                        let lwa_match = params.lwa == ref_params.lwa;
 
                         let all_match = a0_match
                             && v0_match
@@ -82,7 +91,13 @@ pub fn plot_dielectric_function(
                             && pn_n_fock_match
                             && n_eig_match
                             && cutoff_match
-                            && gamma_match;
+                            && gamma_match
+                            && method_match
+                            && n_x_match
+                            && d_eff_match
+                            && q_probe_match
+                            && antiresonant_match
+                            && lwa_match;
 
                         if !all_match && verbose {
                             timed_println!(
@@ -221,8 +236,16 @@ pub fn plot_dielectric_function(
     }
 
     // Load data from files
-    let mut all_data: HashMap<PathBuf, (Vec<f64>, Vec<f64>, Vec<f64>, DielectricParams)> =
-        HashMap::new();
+    let mut all_data: HashMap<
+        PathBuf,
+        (
+            Vec<f64>,
+            Vec<f64>,
+            Vec<f64>,
+            Option<(Vec<f64>, Vec<f64>)>,
+            DielectricParams,
+        ),
+    > = HashMap::new();
     let mut omega_min = f64::INFINITY;
     let mut omega_max = f64::NEG_INFINITY;
     let mut eps_min: (f64, f64) = (f64::INFINITY, f64::INFINITY);
@@ -230,6 +253,19 @@ pub fn plot_dielectric_function(
 
     for (file_path, params) in &files_with_params {
         let (omegas, re_eps, im_eps) = load_dielectric_data(file_path)?;
+        let alpha = if params.method != "legacy" {
+            let (alpha_omegas, re_alpha, im_alpha) = load_dielectric_alpha(file_path)?;
+            if alpha_omegas.len() != omegas.len() {
+                return Err(format!(
+                    "epsilon and alpha data lengths differ in {}",
+                    file_path.display()
+                )
+                .into());
+            }
+            Some((re_alpha, im_alpha))
+        } else {
+            None
+        };
 
         // Update min/max values
         if let Some(&min_omega) = omegas.iter().min_by(|a, b| a.partial_cmp(b).unwrap()) {
@@ -265,7 +301,10 @@ pub fn plot_dielectric_function(
             eps_max.1.max(mean.1 + 3. * factor * sigma.1),
         );
 
-        all_data.insert(file_path.clone(), (omegas, re_eps, im_eps, params.clone()));
+        all_data.insert(
+            file_path.clone(),
+            (omegas, re_eps, im_eps, alpha, params.clone()),
+        );
     }
 
     // Apply omega range if specified
@@ -285,7 +324,7 @@ pub fn plot_dielectric_function(
     root.fill(background)?;
 
     // Split the drawing area for multiple plots if needed
-    let areas = if plot_type == DielectricPlotType::Both {
+    let areas = if plot_type == DielectricPlotType::Both || plot_type == DielectricPlotType::Alpha2D {
         let (top, bottom) = root.split_vertically(500); // Adjusted for new dimensions
         vec![top, bottom]
     } else {
@@ -295,13 +334,13 @@ pub fn plot_dielectric_function(
     // Get sorted couplings with file paths
     let mut couplings: Vec<(PathBuf, f64)> = all_data
         .iter()
-        .map(|(file_path, (_, _, _, params))| (file_path.clone(), params.lm_coupling))
+        .map(|(file_path, (_, _, _, _, params))| (file_path.clone(), params.lm_coupling))
         .collect();
     couplings.sort_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap());
 
     // Extract common parameters for the title
     let mut common_params = None;
-    for (_, (_, _, _, params)) in all_data.iter() {
+    for (_, (_, _, _, _, params)) in all_data.iter() {
         if common_params.is_none() {
             common_params = Some(params.clone());
         }
@@ -312,6 +351,7 @@ pub fn plot_dielectric_function(
         DielectricPlotType::Real => "Real Part of Dielectric Function",
         DielectricPlotType::Imaginary => "Imaginary Part of Dielectric Function",
         DielectricPlotType::Both => "Dielectric Function",
+        DielectricPlotType::Alpha2D => "2D Sheet Polarizability",
     };
 
     let title = if let Some(params) = common_params {
@@ -327,10 +367,163 @@ pub fn plot_dielectric_function(
         title_base.to_string()
     };
 
+    if plot_type == DielectricPlotType::Alpha2D {
+        let mut re_min = f64::INFINITY;
+        let mut re_max = f64::NEG_INFINITY;
+        let mut im_min = f64::INFINITY;
+        let mut im_max = f64::NEG_INFINITY;
+
+        for (_, (omegas, _, _, alpha, _)) in &all_data {
+            let (re_alpha, im_alpha) = alpha.as_ref().ok_or_else(|| {
+                "alpha2D plot requires five-column dielectric data".to_string()
+            })?;
+
+            for ((&omega, &re), &im) in omegas.iter().zip(re_alpha).zip(im_alpha) {
+                if omega < omega_min || omega > omega_max {
+                    continue;
+                }
+                re_min = re_min.min(re);
+                re_max = re_max.max(re);
+                if im.abs() > 0.0 {
+                    im_min = im_min.min(im.abs());
+                    im_max = im_max.max(im.abs());
+                }
+            }
+        }
+
+        if !re_min.is_finite() || !re_max.is_finite() {
+            return Err("alpha2D real data has no points in the requested range".into());
+        }
+        if !im_min.is_finite() || !im_max.is_finite() || im_min <= 0.0 || im_max <= 0.0 {
+            return Err("alpha2D imaginary data has no positive points in the requested range".into());
+        }
+
+        let re_padding = ((re_max - re_min) * 0.05).max(1e-12);
+        re_min -= re_padding;
+        re_max += re_padding;
+
+        let mut re_chart = ChartBuilder::on(&areas[0])
+            .caption(
+                format!("{} - Real Part", title),
+                ("sans-serif", 30).into_font().color(text_color),
+            )
+            .margin(10)
+            .margin_top(20)
+            .margin_bottom(10)
+            .x_label_area_size(40)
+            .y_label_area_size(70)
+            .build_cartesian_2d(omega_min..omega_max, re_min..re_max)?;
+
+        re_chart
+            .configure_mesh()
+            .x_desc("Frequency (a.u.)")
+            .y_desc("Re[alpha2D]")
+            .axis_desc_style(("sans-serif", 20).into_font().color(text_color))
+            .label_style(("sans-serif", 18).into_font().color(text_color))
+            .disable_mesh()
+            .draw()?;
+
+        for (i, (key, coupling)) in couplings.iter().enumerate() {
+            let (omegas, _, _, alpha, params) = &all_data[key];
+            let (re_alpha, _) = alpha.as_ref().expect("alpha data checked above");
+            let color = interpolate_colormap(
+                &ref_colors,
+                if couplings.len() > 1 {
+                    i as f64 / (couplings.len() - 1) as f64
+                } else {
+                    0.0
+                },
+            );
+            let points = omegas
+                .iter()
+                .zip(re_alpha.iter())
+                .filter(|(omega, _)| **omega >= omega_min && **omega <= omega_max)
+                .map(|(&omega, &alpha)| (omega, alpha));
+            let label = if params.n_modes > 0 {
+                format!("g = {:.3}, {} modes", coupling, params.n_modes)
+            } else {
+                format!("g = {:.3}", coupling)
+            };
+            re_chart
+                .draw_series(LineSeries::new(points, color))?
+                .label(label)
+                .legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], color));
+        }
+
+        if let Some(qs) = q_values {
+            plot_photon_freqs!(re_chart, re_min, re_max, qs);
+        }
+
+        let mut im_chart = ChartBuilder::on(&areas[1])
+            .caption(
+                format!("{} - Imaginary Part", title),
+                ("sans-serif", 30).into_font().color(text_color),
+            )
+            .margin(10)
+            .margin_top(20)
+            .margin_bottom(10)
+            .x_label_area_size(40)
+            .y_label_area_size(60)
+            .build_cartesian_2d(omega_min..omega_max, (im_min..im_max).log_scale())?;
+
+        im_chart
+            .configure_mesh()
+            .x_desc("Frequency (a.u.)")
+            .y_desc("Im[alpha2D]")
+            .axis_desc_style(("sans-serif", 20).into_font().color(text_color))
+            .label_style(("sans-serif", 18).into_font().color(text_color))
+            .disable_mesh()
+            .draw()?;
+
+        for (i, (key, coupling)) in couplings.iter().enumerate().rev() {
+            let (omegas, _, _, alpha, params) = &all_data[key];
+            let (_, im_alpha) = alpha.as_ref().expect("alpha data checked above");
+            let color = interpolate_colormap(
+                &ref_colors,
+                if couplings.len() > 1 {
+                    i as f64 / (couplings.len() - 1) as f64
+                } else {
+                    0.0
+                },
+            );
+            let points = omegas
+                .iter()
+                .zip(im_alpha.iter())
+                .filter(|(omega, alpha)| {
+                    **omega >= omega_min && **omega <= omega_max && **alpha != 0.0
+                })
+                .map(|(&omega, &alpha)| (omega, alpha.abs()));
+            let label = if params.n_modes > 0 {
+                format!("g = {:e}, {} modes", coupling, params.n_modes)
+            } else {
+                format!("g = {:e}", coupling)
+            };
+            im_chart
+                .draw_series(LineSeries::new(points, color))?
+                .label(label)
+                .legend(move |(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], color));
+        }
+
+        if let Some(qs) = q_values {
+            plot_photon_freqs!(im_chart, im_min, im_max, qs);
+        }
+
+        root.present()?;
+        info!("Dielectric alpha2D plot saved to {}", save_path);
+        return Ok(());
+    }
+
     // Plot the real part
     if plot_type == DielectricPlotType::Real || plot_type == DielectricPlotType::Both {
         // Symlog transformation with threshold
-        let threshold = 1000.0;
+        let threshold = if all_data
+            .values()
+            .any(|(_, _, _, _, params)| params.method != "legacy")
+        {
+            10.0
+        } else {
+            1000.0
+        };
         let symlog = |x: f64| -> f64 {
             if x.abs() < threshold {
                 x
@@ -356,7 +549,7 @@ pub fn plot_dielectric_function(
         let mut transformed_min = f64::INFINITY;
         let mut transformed_max = f64::NEG_INFINITY;
 
-        for (_, (_, re_eps, _, _)) in all_data.iter() {
+        for (_, (_, re_eps, _, _, _)) in all_data.iter() {
             for &eps in re_eps.iter() {
                 let transformed = symlog(eps);
                 transformed_min = transformed_min.min(transformed);
@@ -416,7 +609,7 @@ pub fn plot_dielectric_function(
         }
 
         for (i, (key, coupling)) in couplings.iter().enumerate() {
-            let (omegas, re_eps, _, params) = &all_data[key];
+            let (omegas, re_eps, _, _, params) = &all_data[key];
 
             // Create a color gradient from blue to red
             let color = interpolate_colormap(
@@ -477,7 +670,7 @@ pub fn plot_dielectric_function(
         let mut e_min: f64 = f64::INFINITY;
         let mut e_max = f64::NEG_INFINITY;
 
-        for (_, (omegas, _, im_eps, _)) in all_data.iter() {
+        for (_, (omegas, _, im_eps, _, _)) in all_data.iter() {
             for (&eps, _) in im_eps
                 .iter()
                 .zip(omegas.iter())
@@ -525,7 +718,7 @@ pub fn plot_dielectric_function(
 
         // Draw each coupling strength with a different color
         for (i, (key, coupling)) in couplings.iter().enumerate().rev() {
-            let (omegas, _, im_eps, params) = &all_data[key];
+            let (omegas, _, im_eps, _, params) = &all_data[key];
 
             let color = interpolate_colormap(
                 &ref_colors,
@@ -638,4 +831,24 @@ fn interpolate_colormap(colors: &[(f64, f64, f64)], t: f64) -> RGBColor {
     let b = color1.2 + (color2.2 - color1.2) * local_t;
 
     RGBColor(r as u8, g as u8, b as u8)
+}
+
+fn optional_scientific_match(left: Option<f64>, right: Option<f64>, decimals: usize) -> bool {
+    match (left, right) {
+        (None, None) => true,
+        (Some(left), Some(right)) => {
+            format!("{left:.decimals$e}") == format!("{right:.decimals$e}")
+        }
+        _ => false,
+    }
+}
+
+fn optional_decimal_match(left: Option<f64>, right: Option<f64>, decimals: usize) -> bool {
+    match (left, right) {
+        (None, None) => true,
+        (Some(left), Some(right)) => {
+            format!("{left:.decimals$}") == format!("{right:.decimals$}")
+        }
+        _ => false,
+    }
 }

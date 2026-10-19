@@ -4,7 +4,9 @@ pub mod dielectric;
 pub mod stacked;
 
 pub use bands::plot_band_structure;
-pub use data::{DielectricParams, extract_params_from_filename, load_dielectric_data};
+pub use data::{
+    DielectricParams, extract_params_from_filename, load_dielectric_alpha, load_dielectric_data,
+};
 pub use dielectric::{DielectricPlotType, plot_dielectric_function};
 pub use stacked::{
     compute_weight_fields, generate_stacked_plots, plot_dielectric_stacked_phonon,

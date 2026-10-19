@@ -22,8 +22,9 @@ where
         pp_config.omega_max,
         pp_config.reflectivity,
     ) {
+        let lwa_tag = if !pp_config.include_photon_recoil { "_lwa" } else { "" };
         format!(
-            "{}/dielectric_cache_a0{}_V0{}_nrel{}_omega0{:.6}_domega{:.1e}_omegamax{:.6}_refl{:.7}_nmodes{}_pncoup{:.6}_npn{}_{}.bin",
+            "{}/dielectric_cache_a0{}_V0{}_nrel{}_omega0{:.6}_domega{:.1e}_omegamax{:.6}_refl{:.7}_nmodes{}_pncoup{:.6}_npn{}_{}{}.bin",
             save_dir,
             pp_config.e_config.a0,
             pp_config.e_config.v0,
@@ -35,12 +36,14 @@ where
             pp.polariton.photon.boson.get_modes().len(),
             pp_config.pn_coupling,
             pp_config.pn_n_fock,
-            eig_tag
+            eig_tag,
+            lwa_tag
         )
     } else {
         let total_coupling = pp_config.lm_couplings.iter().sum::<f64>();
+        let lwa_tag = if !pp_config.include_photon_recoil { "_lwa" } else { "" };
         format!(
-            "{}/dielectric_cache_a0{}_V0{}_nrel{}_lmcoup{:.6}_nmodes{}_pncoup{:.6}_npn{}_{}.bin",
+            "{}/dielectric_cache_a0{}_V0{}_nrel{}_lmcoup{:.6}_nmodes{}_pncoup{:.6}_npn{}_{}{}.bin",
             save_dir,
             pp_config.e_config.a0,
             pp_config.e_config.v0,
@@ -49,7 +52,8 @@ where
             pp.polariton.photon.boson.get_modes().len(),
             pp_config.pn_coupling,
             pp_config.pn_n_fock,
-            eig_tag
+            eig_tag,
+            lwa_tag
         )
     }
 }
@@ -61,6 +65,7 @@ pub fn get_dielectric_function_filename<M, B>(
     n_eig: usize,
     energy_cutoff: Option<f64>,
     gamma: f64,
+    response_tag: &str,
 ) -> String
 where
     M: MatrixOps,
@@ -75,7 +80,7 @@ where
         pp_config.reflectivity,
     ) {
         format!(
-            "{}/dielectric_a0{}_V0{}_nrel{}_omega0{:.6}_domega{:.1e}_omegamax{:.6}_refl{:.7}_lmcoup{:.6}_nmodes{}_pncoup{:.6}_npn{}_{}_gamma{:.1e}.dat",
+            "{}/dielectric_a0{}_V0{}_nrel{}_omega0{:.6}_domega{:.1e}_omegamax{:.6}_refl{:.7}_lmcoup{:.6}_nmodes{}_pncoup{:.6}_npn{}_{}{}_gamma{:.1e}.dat",
             save_dir,
             pp_config.e_config.a0,
             pp_config.e_config.v0,
@@ -89,11 +94,12 @@ where
             pp_config.pn_coupling,
             pp_config.pn_n_fock,
             eig_tag,
+            response_tag,
             gamma
         )
     } else {
         format!(
-            "{}/dielectric_a0{}_V0{}_nrel{}_lmcoup{:.6}_nmodes{}_pncoup{:.6}_npn{}_{}_gamma{:.1e}.dat",
+            "{}/dielectric_a0{}_V0{}_nrel{}_lmcoup{:.6}_nmodes{}_pncoup{:.6}_npn{}_{}{}_gamma{:.1e}.dat",
             save_dir,
             pp_config.e_config.a0,
             pp_config.e_config.v0,
@@ -103,6 +109,7 @@ where
             pp_config.pn_coupling,
             pp_config.pn_n_fock,
             eig_tag,
+            response_tag,
             gamma
         )
     }

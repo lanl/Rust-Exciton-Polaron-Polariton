@@ -44,6 +44,13 @@ pub enum PhotonModeArg {
     Effective,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq, Eq)]
+pub enum DielectricMethodArg {
+    Legacy,
+    Slab,
+    Sheet2d,
+}
+
 #[derive(Debug, Clone, Parser)]
 pub struct ExcitonArgs {
     #[arg(long, default_value_t = 7)]
@@ -123,6 +130,10 @@ pub struct BandstructureArgs {
 
     #[arg(long, default_value_t = false)]
     pub zoomed: bool,
+
+    /// Drop photon-recoil terms from the Hamiltonian.
+    #[arg(long, default_value_t = false)]
+    pub long_wavelength: bool,
 
     #[arg(long, default_value_t = 16)]
     pub n_rel: usize,
@@ -209,6 +220,32 @@ pub struct DielectricArgs {
 
     #[arg(long, value_enum, default_value_t = PhotonModeArg::Effective)]
     pub photon_modes: PhotonModeArg,
+
+    #[arg(long, value_enum, default_value_t = DielectricMethodArg::Slab)]
+    pub dielectric_method: DielectricMethodArg,
+
+    /// Exciton areal density n_X in bohr^-2.
+    #[arg(long, default_value_t = 2.8e-5)]
+    pub exciton_density: f64,
+
+    /// Effective slab thickness in bohr.
+    #[arg(long, default_value_t = 11.6)]
+    pub slab_thickness_bohr: f64,
+
+    /// Probe q in units of the photon-mode spacing d_q.
+    #[arg(long, default_value_t = 2.0)]
+    pub probe_q_in_dq: f64,
+
+    /// Absolute probe q in bohr^-1; overrides --probe-q-in-dq.
+    #[arg(long)]
+    pub probe_q: Option<f64>,
+
+    #[arg(long, default_value_t = true, action = ArgAction::Set)]
+    pub antiresonant: bool,
+
+    /// Drop photon-recoil terms from the Hamiltonian.
+    #[arg(long, default_value_t = false)]
+    pub long_wavelength: bool,
 
     #[arg(long, default_value_t = false)]
     pub use_cached: bool,
