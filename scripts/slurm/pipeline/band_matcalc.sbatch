@@ -1,22 +1,24 @@
 #!/bin/bash
 #SBATCH --job-name=band_matcalc
-#SBATCH --output=logs/band_matcalc_%A_%a.out
-#SBATCH --error=logs/band_matcalc_%A_%a.err
+#SBATCH --output=logs/band_matcalc/band_matcalc_%A_%a.out
+#SBATCH --error=logs/band_matcalc/band_matcalc_%A_%a.err
 #SBATCH --partition=standard
-#SBATCH --time=08:00:00
+#SBATCH --time=16:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=128
-#SBATCH --mem=400G
+#SBATCH --cpus-per-task=256
+#SBATCH --mem=500000
 
 set -euo pipefail
 
-: "${PIPELINE_PARAMS:?PIPELINE_PARAMS was not set. Submit through submit_pipelines.sh}"
+source "/users/mike_tay/rust_exciton_pp/scripts/slurm/pipeline/pipeline_runtime.sh"
+load_submitted_pipeline_config
 
-source "${PIPELINE_PARAMS}"
+# shellcheck disable=SC1090
 source "${ENV_SCRIPT}"
 
 cd "${PROJECT_ROOT}"
+print_submitted_pipeline_config
 
 export RUST_BACKTRACE=full
 
@@ -36,7 +38,7 @@ echo "  K_N_CHUNKS          =${K_N_CHUNKS}"
 echo "  RAYON_NUM_THREADS   = ${RAYON_NUM_THREADS}"
 echo "  CACHE_DIR           =${CACHE_DIR}"
 
-"${TARGET_DIR}/release/light-matter" \
+"${BINARY_PATH}" \
   --rayon-threads "${SLURM_CPUS_PER_TASK}" \
   matrix-elem-calc \
   bandstructure \

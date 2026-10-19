@@ -1,5 +1,6 @@
 use matrix_ops::{
-    ConvertFrom, DiagonalizationOptions, Diagonalize, MatrixOps, MatrixOpsError, Sqrt,
+    BatchPolicy, ConvertFrom, DiagonalizationOptions, Diagonalize, MatrixOps, MatrixOpsError,
+    RealCutoff, Sqrt,
 };
 use ndarray::{Array1, Array2};
 use ndarray_linalg::c64;
@@ -7,14 +8,14 @@ use std::f64::EPSILON;
 use std::iter::Sum;
 use std::path::Path;
 
-use crate::timed_println;
+use crate::{timed_println, timed_println_rank0};
+use crate::utils::eig_selection_tag;
 
 use crate::config::PPConfig;
 use crate::hamiltonian::{Boson, PPBasisLayout, PPHamiltonian};
 
-/// Calculate the photonic character of an eigenstate.
-///
-/// Returns a value between 0, purely excitonic, and 1, photonic.
+const BAND_SAVE_DIR: &str = "pp_data";
+
 pub fn calculate_photonic_character<M, B>(
     pp: &PPHamiltonian<M, B>,
     eigenvector: &Array1<c64>,
@@ -80,42 +81,37 @@ pub fn calculate_photonic_character_with_layout(
 
 pub type ColorBandData = sim_common::data::ColoredBandData;
 
-pub fn load_color_band_structure<M, B: Boson<M>>(
-    pp: &PPHamiltonian<M, B>,
+/// Load a gathered color band structure written by
+/// `gather_color_band_structure_chunks`.
+pub fn load_color_band_structure(
+    pp_config: &PPConfig,
     n_k_points: usize,
     n_eig: usize,
-    pp_config: &PPConfig,
+    energy_cutoff: Option<f64>,
     zoomed: bool,
-) -> (Vec<Vec<f64>>, Vec<Array1<f64>>, Vec<Vec<f64>>)
-where
-    M: MatrixOps,
-{
-    let save_dir = "pp_data".to_string();
-    std::fs::create_dir_all(&save_dir).unwrap_or_else(|_| {});
+) -> Result<(Vec<Vec<f64>>, Vec<Array1<f64>>, Vec<Vec<f64>>), MatrixOpsError> {
+    std::fs::create_dir_all(BAND_SAVE_DIR).ok();
 
-    // Generate filename for the color band structure data
-    let mut filename = format!(
-        "{}/color_band_a0{}_V0{}_nrel{}_nbands{}_npoints{}_phcoup{}_nmodes{}_pncoup{}_npn{}_neig{}",
-        save_dir,
-        pp_config.e_config.a0,
-        pp_config.e_config.v0,
-        pp_config.n_rel,
-        pp_config.n_bands,
+    let filename = color_band_filename(
+        pp_config,
+        BAND_SAVE_DIR,
         n_k_points,
-        pp_config.lm_couplings.iter().sum::<f64>(),
-        pp.polariton.photon.boson.get_modes().len(),
-        pp_config.pn_coupling,
-        pp_config.pn_n_fock,
-        n_eig
+        n_eig,
+        energy_cutoff,
+        zoomed,
     );
 
-    filename += if zoomed { "_zoomed.bin" } else { ".bin" };
-
     timed_println!("Loading cached color band structure data from {}", filename);
-    match ColorBandData::load_from_file(&filename) {
-        Ok(data) => return data.to_results(),
-        Err(e) => panic!("Failed to load cached data: {}, recalculating...", e),
-    }
+
+    let data = ColorBandData::load_from_file(&filename).map_err(|e| MatrixOpsError::Other {
+        message: format!(
+            "Failed to load gathered band structure {}: {} \
+             (run with --calculate true, or check --n-eig / --energy-cutoff)",
+            filename, e
+        ),
+    })?;
+
+    Ok(data.to_results())
 }
 
 pub fn generate_band_k_points(
@@ -132,12 +128,13 @@ pub fn color_band_filename(
     save_dir: &str,
     n_k_points: usize,
     n_eig: usize,
+    energy_cutoff: Option<f64>,
     zoomed: bool,
 ) -> String {
     let total_coupling = pp_config.lm_couplings.iter().sum::<f64>();
 
     format!(
-        "{}/color_band_a0{}_V0{}_nrel{}_nbands{}_npoints{}_phcoup{:.6}_nmodes{}_pncoup{}_npn{}_neig{}{}.bin",
+        "{}/color_band_a0{}_V0{}_nrel{}_nbands{}_npoints{}_phcoup{:.6}_nmodes{}_pncoup{}_npn{}_{}{}.bin",
         save_dir,
         pp_config.e_config.a0,
         pp_config.e_config.v0,
@@ -148,7 +145,7 @@ pub fn color_band_filename(
         pp_config.q_values.len(),
         pp_config.pn_coupling,
         pp_config.pn_n_fock,
-        n_eig,
+        eig_selection_tag(n_eig, energy_cutoff),
         if zoomed { "_zoomed" } else { "" },
     )
 }
@@ -158,6 +155,7 @@ pub fn color_band_chunk_filename(
     save_dir: &str,
     n_k_points: usize,
     n_eig: usize,
+    energy_cutoff: Option<f64>,
     zoomed: bool,
     chunk_index: usize,
     n_chunks: usize,
@@ -165,7 +163,7 @@ pub fn color_band_chunk_filename(
     let total_coupling = pp_config.lm_couplings.iter().sum::<f64>();
 
     format!(
-        "{}/color_band_chunk_a0{}_V0{}_nrel{}_nbands{}_npoints{}_phcoup{:.6}_nmodes{}_pncoup{}_npn{}_neig{}_chunk{}_of{}{}.bin",
+        "{}/color_band_chunk_a0{}_V0{}_nrel{}_nbands{}_npoints{}_phcoup{:.6}_nmodes{}_pncoup{}_npn{}_{}_chunk{}_of{}{}.bin",
         save_dir,
         pp_config.e_config.a0,
         pp_config.e_config.v0,
@@ -176,17 +174,50 @@ pub fn color_band_chunk_filename(
         pp_config.q_values.len(),
         pp_config.pn_coupling,
         pp_config.pn_n_fock,
-        n_eig,
+        eig_selection_tag(n_eig, energy_cutoff),
         chunk_index,
         n_chunks,
         if zoomed { "_zoomed" } else { "" },
     )
 }
 
+/// Eigensolver selection for one K point.
+///
+/// With a cutoff, all eigenvalues <= cutoff are computed and `n_eig` only
+/// seeds the batch size of the density estimate. Eigenvectors are gathered
+/// to rank 0 only (same as the dielectric path); other ranks receive
+/// eigenvalues but an empty eigenvector matrix.
+fn band_diagonalization_options(
+    n_eig: usize,
+    energy_cutoff: Option<f64>,
+) -> DiagonalizationOptions {
+    let options = match energy_cutoff {
+        Some(cutoff) => DiagonalizationOptions::all_real_below(cutoff)
+            .real_cutoff(RealCutoff {
+                batch_policy: BatchPolicy::DensityEstimate {
+                    initial: n_eig.clamp(32, 1024) as _,
+                    safety: 1.25,
+                    min_batch: 32,
+                    max_batch: 1024,
+                },
+                ..RealCutoff::new(cutoff)
+            })
+            .deflation_batch_size(512),
+        None => DiagonalizationOptions::smallest_real(n_eig),
+    };
+
+    options
+        .backend(matrix_ops::DiagonalizationBackend::Auto)
+        .hermitian()
+        .max_iterations(50_000)
+        .tolerance(1e-10)
+}
+
 pub fn calculate_color_band_structure_distributed_chunk<M, B>(
     pp: &mut PPHamiltonian<M, B>,
     n_k_points: usize,
     n_eig: usize,
+    energy_cutoff: Option<f64>,
     sym_points: &[Vec<f64>],
     pp_config: &PPConfig,
     use_cached: bool,
@@ -201,41 +232,53 @@ where
 {
     let rank = sim_common::mpi::mpi_rank_env_or_zero();
     let world_size = sim_common::mpi::mpi_size_env_or_one();
+    let is_root = rank == 0;
 
-    let save_dir = "pp_data";
-    std::fs::create_dir_all(save_dir).ok();
+    // Warm-starting from the previous K point requires that every rank holds
+    // the previous eigenvectors (setting the initial space is collective).
+    // In cutoff mode eigenvectors live on rank 0 only, so it is disabled.
+    let warm_start = energy_cutoff.is_none();
+
+    std::fs::create_dir_all(BAND_SAVE_DIR).ok();
 
     let k_points = generate_band_k_points(n_k_points, sym_points, pp_config.e_config.a0, zoomed);
-
     let total_k_points = k_points.len();
 
     let (start_idx, end_idx) = sim_common::mpi::chunk_bounds(total_k_points, chunk_index, n_chunks);
 
     let chunk_filename = color_band_chunk_filename(
         pp_config,
-        save_dir,
+        BAND_SAVE_DIR,
         n_k_points,
         n_eig,
+        energy_cutoff,
         zoomed,
         chunk_index,
         n_chunks,
     );
 
-    if rank == 0 {
-        timed_println!(
-            "Bandstructure distributed chunk {}/{}: K indices {}..{} of {} using {} MPI ranks",
-            chunk_index,
-            n_chunks,
-            start_idx,
-            end_idx,
-            total_k_points,
-            world_size,
-        );
+    timed_println_rank0!(
+        "Bandstructure distributed chunk {}/{}: K indices {}..{} of {} using {} MPI ranks",
+        chunk_index,
+        n_chunks,
+        start_idx,
+        end_idx,
+        total_k_points,
+        world_size,
+    );
+
+    match energy_cutoff {
+        Some(cutoff) => timed_println_rank0!(
+            "Eigenstate selection: ALL states with E <= {:.6e} (n_eig = {} used only as batch hint); \
+                eigenvectors on rank 0 only, warm start disabled",
+            cutoff,
+            n_eig
+        ),
+        None => timed_println_rank0!("Eigenstate selection: lowest {} states (warm start enabled)", n_eig),
     }
 
-    // Important: every rank checks the same cache path and exits consistently.
     if use_cached && Path::new(&chunk_filename).exists() {
-        if rank == 0 {
+        if is_root {
             timed_println!("Loading cached band chunk from {}", chunk_filename);
             let data = ColorBandData::load_from_file(&chunk_filename).map_err(|e| {
                 MatrixOpsError::Other {
@@ -257,31 +300,29 @@ where
     for global_idx in start_idx..end_idx {
         let k = &k_points[global_idx];
 
-        if rank == 0 {
-            timed_println!(
-                "Chunk {}/{}: solving K index {} / {}: {:?}",
-                chunk_index,
-                n_chunks,
-                global_idx + 1,
-                total_k_points,
-                k,
-            );
-        }
+        timed_println_rank0!(
+            "Chunk {}/{}: solving K index {} / {}: {:?}",
+            chunk_index,
+            n_chunks,
+            global_idx + 1,
+            total_k_points,
+            k,
+        );
 
+        // ---- Collective part: every rank must execute this identically ----
         let (eigvals, eigvecs) = {
             let h_pp = pp.build_pp_hamiltonian(Some(k.clone()))?;
 
-            // Drop pp-owned matrix-element maps once h_pp owns what it needs.
             pp.polariton.matrix_elements.clear_relative_cache();
             pp.polariton.matrix_elements.clear_full_cache_maps();
 
-            let mut options = DiagonalizationOptions::smallest_real(n_eig)
-                .backend(matrix_ops::DiagonalizationBackend::Auto)
-                .hermitian()
-                .max_iterations(50_000)
-                .tolerance(1e-10);
+            let mut options = band_diagonalization_options(n_eig, energy_cutoff);
 
-            options.initial_guess = prev_eigvecs.take();
+            if energy_cutoff.is_some() {
+                options = options.eigenvectors_rank0_only();
+            }
+
+            options.initial_guess = if warm_start { prev_eigvecs.take() } else { None };
 
             let result = h_pp.diagonalize(options)?;
             result.into_arrays_hermitian()
@@ -289,24 +330,81 @@ where
 
         let n_returned = eigvals.len();
 
-        let mut photonic_character = Vec::with_capacity(n_returned);
-        for i in 0..n_returned {
+        // ---- Non-root ranks: nothing is stored, eigenvectors may be empty ----
+        if !is_root {
+            if warm_start {
+                prev_eigvecs = (eigvecs.ncols() == n_returned && n_returned > 0).then_some(eigvecs);
+            }
+            continue;
+        }
+
+        // ---- Rank 0: post-processing ----
+        if eigvecs.ncols() != n_returned {
+            return Err(MatrixOpsError::DimensionMismatch {
+                expected: n_returned,
+                got: eigvecs.ncols(),
+                context: format!(
+                    "bandstructure (rank 0): eigensolver returned {} eigenvalues but {} eigenvectors \
+                     at K index {} (cutoff = {:?}); eigenvectors were not gathered to rank 0",
+                    n_returned,
+                    eigvecs.ncols(),
+                    global_idx,
+                    energy_cutoff
+                ),
+            });
+        }
+
+        // Keep finite eigenvalues (and, with a cutoff, only those <= cutoff),
+        // sorted ascending so "band index" means the same thing at every K.
+        let mut order: Vec<usize> = (0..n_returned)
+            .filter(|&i| {
+                let e = eigvals[i];
+                e.is_finite() && energy_cutoff.map_or(true, |cutoff| e <= cutoff)
+            })
+            .collect();
+        order.sort_by(|&a, &b| eigvals[a].total_cmp(&eigvals[b]));
+
+        let mut kept_eigvals = Vec::with_capacity(order.len());
+        let mut photonic_character = Vec::with_capacity(order.len());
+
+        for &i in &order {
+            kept_eigvals.push(eigvals[i]);
             photonic_character.push(calculate_photonic_character(
                 pp,
                 &eigvecs.column(i).to_owned(),
             )?);
         }
 
-        prev_eigvecs = Some(eigvecs);
+        let kept = Array1::from_vec(kept_eigvals);
+        let n_dropped = n_returned - kept.len();
 
-        if rank == 0 {
-            chunk_k_points.push(k.clone());
-            chunk_eigvals.push(eigvals);
-            chunk_photonic.push(photonic_character);
+        if kept.is_empty() {
+            timed_println!(
+                "  Warning: no eigenstates kept at K index {} (returned {}, cutoff = {:?})",
+                global_idx,
+                n_returned,
+                energy_cutoff
+            );
+        } else {
+            timed_println!(
+                "  Kept {} eigenpairs (dropped {}), E in [{:.6e}, {:.6e}]",
+                kept.len(),
+                n_dropped,
+                kept[0],
+                kept[kept.len() - 1]
+            );
         }
+
+        if warm_start {
+            prev_eigvecs = (eigvecs.ncols() > 0).then_some(eigvecs);
+        }
+
+        chunk_k_points.push(k.clone());
+        chunk_eigvals.push(kept);
+        chunk_photonic.push(photonic_character);
     }
 
-    if rank == 0 {
+    if is_root {
         let chunk_data = ColorBandData::from_results(
             chunk_k_points.clone(),
             chunk_eigvals.clone(),
@@ -330,12 +428,12 @@ where
 pub fn gather_color_band_structure_chunks(
     n_k_points: usize,
     n_eig: usize,
+    energy_cutoff: Option<f64>,
     pp_config: &PPConfig,
     zoomed: bool,
     n_chunks: usize,
 ) -> Result<(Vec<Vec<f64>>, Vec<Array1<f64>>, Vec<Vec<f64>>), MatrixOpsError> {
-    let save_dir = "pp_data";
-    std::fs::create_dir_all(save_dir).ok();
+    std::fs::create_dir_all(BAND_SAVE_DIR).ok();
 
     let mut all_k_points = Vec::new();
     let mut all_eigvals = Vec::new();
@@ -344,9 +442,10 @@ pub fn gather_color_band_structure_chunks(
     for chunk_index in 0..n_chunks {
         let chunk_filename = color_band_chunk_filename(
             pp_config,
-            save_dir,
+            BAND_SAVE_DIR,
             n_k_points,
             n_eig,
+            energy_cutoff,
             zoomed,
             chunk_index,
             n_chunks,
@@ -366,7 +465,26 @@ pub fn gather_color_band_structure_chunks(
         all_photonic.extend(phot);
     }
 
-    let final_filename = color_band_filename(pp_config, save_dir, n_k_points, n_eig, zoomed);
+    if let (Some(min_count), Some(max_count)) = (
+        all_eigvals.iter().map(|e| e.len()).min(),
+        all_eigvals.iter().map(|e| e.len()).max(),
+    ) {
+        timed_println!(
+            "Gathered {} K points; states per K point: min = {}, max = {}",
+            all_k_points.len(),
+            min_count,
+            max_count
+        );
+    }
+
+    let final_filename = color_band_filename(
+        pp_config,
+        BAND_SAVE_DIR,
+        n_k_points,
+        n_eig,
+        energy_cutoff,
+        zoomed,
+    );
 
     let final_data = ColorBandData::from_results(
         all_k_points.clone(),

@@ -27,3 +27,13 @@ pub fn hash_quantized_f64<H: std::hash::Hasher>(x: f64, hasher: &mut H) {
 
     quantize_f64_for_hash(x).hash(hasher);
 }
+
+/// Filename tag describing how the eigenstates were selected.
+/// `None`  -> "neig{n_eig}"   (unchanged from before, old caches stay valid)
+/// `Some`  -> "ecut{E:.6e}"   (n_eig is ignored when a cutoff is given)
+pub fn eig_selection_tag(n_eig: usize, energy_cutoff: Option<f64>) -> String {
+    match energy_cutoff {
+        Some(cutoff) => format!("ecut{:.6e}", cutoff),
+        None => format!("neig{}", n_eig),
+    }
+}

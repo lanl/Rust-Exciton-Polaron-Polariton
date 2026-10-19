@@ -43,6 +43,7 @@ all_sources*
 /output_figures/
 /logs/
 */release/
+/pipeline_runs/
 
 # temp/cache files
 *.tmp.*

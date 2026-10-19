@@ -130,6 +130,8 @@ pub struct BandstructureArgs {
     #[arg(long, default_value_t = 32)]
     pub n_ex_eig: usize,
 
+    /// Number of lowest eigenstates per K point. When --energy-cutoff is
+    /// given this is only used as the initial batch-size hint.
     #[arg(long, default_value_t = 512)]
     pub n_eig: usize,
 
@@ -190,6 +192,11 @@ pub struct BandstructureArgs {
     /// Defaults to K_N_CHUNKS or SLURM_ARRAY_TASK_COUNT.
     #[arg(long)]
     pub k_n_chunks: Option<usize>,
+
+    /// Compute ALL eigenstates with energy <= this value at every K point
+    /// (overrides --n-eig). Also used as the upper y-limit of the band plot.
+    #[arg(long, allow_negative_numbers = true)]
+    pub energy_cutoff: Option<f64>,
 }
 
 #[derive(Debug, Clone, Parser)]
@@ -301,6 +308,11 @@ pub struct DielectricArgs {
     /// Print PETSc matrix info.
     #[arg(long, default_value_t = false)]
     pub mat_view_info: bool,
+
+    /// Compute ALL eigenstates with eigenvalue below this absolute energy.
+    /// When set, --n-eig is ignored for the dielectric diagonalization.
+    #[arg(long)]
+    pub energy_cutoff: Option<f64>,
 }
 
 #[derive(Debug, Clone, Parser)]

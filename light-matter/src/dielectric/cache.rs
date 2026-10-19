@@ -1,5 +1,6 @@
 use crate::config::PPConfig;
 use crate::hamiltonian::{Boson, PPHamiltonian};
+use crate::utils::eig_selection_tag;
 use matrix_ops::MatrixOps;
 use ndarray::Array1;
 
@@ -8,19 +9,21 @@ pub fn get_dielectric_cache_filename<M, B>(
     pp_config: &PPConfig,
     save_dir: &str,
     n_eig: usize,
+    energy_cutoff: Option<f64>,
 ) -> String
 where
     M: MatrixOps,
     B: Boson<M>,
 {
-    // Use effective mode parameters if available (hand-entered, no floating-point issues)
+    let eig_tag = eig_selection_tag(n_eig, energy_cutoff);
+
     if let (Some(d_omega), Some(omega_max), Some(reflectivity)) = (
         pp_config.d_omega,
         pp_config.omega_max,
         pp_config.reflectivity,
     ) {
         format!(
-            "{}/dielectric_cache_a0{}_V0{}_nrel{}_omega0{:.6}_domega{:.1e}_omegamax{:.6}_refl{:.7}_nmodes{}_pncoup{:.6}_npn{}_neig{}.bin",
+            "{}/dielectric_cache_a0{}_V0{}_nrel{}_omega0{:.6}_domega{:.1e}_omegamax{:.6}_refl{:.7}_nmodes{}_pncoup{:.6}_npn{}_{}.bin",
             save_dir,
             pp_config.e_config.a0,
             pp_config.e_config.v0,
@@ -32,13 +35,12 @@ where
             pp.polariton.photon.boson.get_modes().len(),
             pp_config.pn_coupling,
             pp_config.pn_n_fock,
-            n_eig
+            eig_tag
         )
     } else {
-        // Fallback to coupling sum (for backward compatibility or non-effective-mode cases)
         let total_coupling = pp_config.lm_couplings.iter().sum::<f64>();
         format!(
-            "{}/dielectric_cache_a0{}_V0{}_nrel{}_lmcoup{:.6}_nmodes{}_pncoup{:.6}_npn{}_neig{}.bin",
+            "{}/dielectric_cache_a0{}_V0{}_nrel{}_lmcoup{:.6}_nmodes{}_pncoup{:.6}_npn{}_{}.bin",
             save_dir,
             pp_config.e_config.a0,
             pp_config.e_config.v0,
@@ -47,7 +49,7 @@ where
             pp.polariton.photon.boson.get_modes().len(),
             pp_config.pn_coupling,
             pp_config.pn_n_fock,
-            n_eig
+            eig_tag
         )
     }
 }
@@ -57,22 +59,23 @@ pub fn get_dielectric_function_filename<M, B>(
     pp_config: &PPConfig,
     save_dir: &str,
     n_eig: usize,
+    energy_cutoff: Option<f64>,
     gamma: f64,
 ) -> String
 where
     M: MatrixOps,
     B: Boson<M>,
 {
-    // Use effective mode parameters if available (hand-entered, no floating-point issues)
+    let eig_tag = eig_selection_tag(n_eig, energy_cutoff);
+    let total_coupling = pp_config.lm_couplings.iter().sum::<f64>();
+
     if let (Some(d_omega), Some(omega_max), Some(reflectivity)) = (
         pp_config.d_omega,
         pp_config.omega_max,
         pp_config.reflectivity,
     ) {
-        let total_coupling = pp_config.lm_couplings.iter().sum::<f64>();
-
         format!(
-            "{}/dielectric_a0{}_V0{}_nrel{}_omega0{:.6}_domega{:.1e}_omegamax{:.6}_refl{:.7}_lmcoup{:.6}_nmodes{}_pncoup{:.6}_npn{}_neig{}_gamma{:.1e}.dat",
+            "{}/dielectric_a0{}_V0{}_nrel{}_omega0{:.6}_domega{:.1e}_omegamax{:.6}_refl{:.7}_lmcoup{:.6}_nmodes{}_pncoup{:.6}_npn{}_{}_gamma{:.1e}.dat",
             save_dir,
             pp_config.e_config.a0,
             pp_config.e_config.v0,
@@ -85,14 +88,12 @@ where
             pp.polariton.photon.boson.get_modes().len(),
             pp_config.pn_coupling,
             pp_config.pn_n_fock,
-            n_eig,
+            eig_tag,
             gamma
         )
     } else {
-        // Fallback to coupling sum (for backward compatibility or non-effective-mode cases)
-        let total_coupling = pp_config.lm_couplings.iter().sum::<f64>();
         format!(
-            "{}/dielectric_a0{}_V0{}_nrel{}_lmcoup{:.6}_nmodes{}_pncoup{:.6}_npn{}_neig{}_gamma{:.1e}.dat",
+            "{}/dielectric_a0{}_V0{}_nrel{}_lmcoup{:.6}_nmodes{}_pncoup{:.6}_npn{}_{}_gamma{:.1e}.dat",
             save_dir,
             pp_config.e_config.a0,
             pp_config.e_config.v0,
@@ -101,7 +102,7 @@ where
             pp.polariton.photon.boson.get_modes().len(),
             pp_config.pn_coupling,
             pp_config.pn_n_fock,
-            n_eig,
+            eig_tag,
             gamma
         )
     }

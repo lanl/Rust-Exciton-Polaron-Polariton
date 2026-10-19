@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=diel_gather
-#SBATCH --output=logs/diel_gather_%j.out
-#SBATCH --error=logs/diel_gather_%j.err
+#SBATCH --output=logs/diel_gather/diel_gather_%j.out
+#SBATCH --error=logs/diel_gather/diel_gather_%j.err
 #SBATCH --partition=standard
 #SBATCH --time=00:30:00
 #SBATCH --nodes=1
@@ -11,12 +11,14 @@
 
 set -euo pipefail
 
-: "${PIPELINE_PARAMS:?PIPELINE_PARAMS was not set. Submit through submit_pipelines.sh}"
+source "/users/mike_tay/rust_exciton_pp/scripts/slurm/pipeline/pipeline_runtime.sh"
+load_submitted_pipeline_config
 
-source "${PIPELINE_PARAMS}"
+# shellcheck disable=SC1090
 source "${ENV_SCRIPT}"
 
 cd "${PROJECT_ROOT}"
+print_submitted_pipeline_config
 
 export RUST_BACKTRACE=full
 
@@ -40,7 +42,7 @@ find dielectric_scan/effective_modes -maxdepth 1 -type f -name 'dielectric_*.dat
 
 # Use calculate=false to trigger the plotting/gather branch in app/dielectric.rs.
 # Do not pass --reflectivity-index here: this gather step plots all reflectivities.
-"${TARGET_DIR}/release/light-matter" \
+"${BINARY_PATH}" \
   --rayon-threads "${SLURM_CPUS_PER_TASK}" \
   dielectric \
   "${EXCITON_ARGS[@]}" \

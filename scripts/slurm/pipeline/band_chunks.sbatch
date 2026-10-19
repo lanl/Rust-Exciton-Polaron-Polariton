@@ -1,32 +1,34 @@
 #!/bin/bash
 #SBATCH --job-name=band_chunks
-#SBATCH --output=logs/band_%A_%a.out
-#SBATCH --error=logs/band_%A_%a.err
+#SBATCH --output=logs/band_chunk/band_%A_%a.out
+#SBATCH --error=logs/band_chunk/band_%A_%a.err
 #SBATCH --partition=standard
 #SBATCH --time=16:00:00
-#SBATCH --nodes=1
-#SBATCH --ntasks-per-node=64
-#SBATCH --cpus-per-task=4
+#SBATCH --nodes=8
+#SBATCH --ntasks-per-node=4
+#SBATCH --cpus-per-task=64
 #SBATCH --mem=500000
 
 set -euo pipefail
 
-: "${PIPELINE_PARAMS:?PIPELINE_PARAMS was not set. Submit through submit_pipelines.sh}"
+source "/users/mike_tay/rust_exciton_pp/scripts/slurm/pipeline/pipeline_runtime.sh"
+load_submitted_pipeline_config
 
-source "${PIPELINE_PARAMS}"
+# shellcheck disable=SC1090
 source "${ENV_SCRIPT}"
 
 cd "${PROJECT_ROOT}"
+print_submitted_pipeline_config
 
 export RUST_BACKTRACE=full
 
 export K_N_CHUNKS="${N_BAND_CHUNKS}"
 export K_CHUNK_INDEX="${SLURM_ARRAY_TASK_ID}"
 
-export OMP_NUM_THREADS=1
-export MKL_NUM_THREADS=1
-export OPENBLAS_NUM_THREADS=1
-export RAYON_NUM_THREADS=4
+export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
+export MKL_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
+export OPENBLAS_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
+export RAYON_NUM_THREADS="${SLURM_CPUS_PER_TASK}"
 
 export SLURM_PMIX_DIRECT_CONN=0
 
@@ -64,8 +66,8 @@ echo "Starting bandstructure solve"
 run_pmix_v5 \
   --ntasks="${SLURM_NTASKS}" \
   --cpu-bind=cores \
-  "${TARGET_DIR}/release/light-matter" \
-  --rayon-threads 4 \
+  "${BINARY_PATH}" \
+  --rayon-threads "${SLURM_CPUS_PER_TASK}" \
   bandstructure \
   "${EXCITON_ARGS[@]}" \
   "${BAND_LM_ARGS[@]}" \

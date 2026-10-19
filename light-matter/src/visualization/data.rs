@@ -12,13 +12,13 @@ pub struct DielectricParams {
     pub pn_coupling: f64,
     pub pn_n_fock: usize,
     pub n_eig: usize,
+    pub energy_cutoff: Option<f64>,
     pub gamma: f64,
 }
 
 pub fn extract_params_from_filename(path: &Path) -> Option<DielectricParams> {
     let filename = path.file_name()?.to_str()?;
 
-    // Skip if not a dielectric function file
     if !filename.starts_with("dielectric_") {
         return None;
     }
@@ -33,6 +33,7 @@ pub fn extract_params_from_filename(path: &Path) -> Option<DielectricParams> {
         pn_coupling: 0.0,
         pn_n_fock: 0,
         n_eig: 0,
+        energy_cutoff: None,
         gamma: 0.0,
     };
 
@@ -53,6 +54,8 @@ pub fn extract_params_from_filename(path: &Path) -> Option<DielectricParams> {
             params.pn_n_fock = part[3..].parse::<usize>().unwrap_or(0);
         } else if part.starts_with("neig") {
             params.n_eig = part[4..].parse::<usize>().unwrap_or(0);
+        } else if part.starts_with("ecut") {
+            params.energy_cutoff = part[4..].parse::<f64>().ok();
         } else if part.starts_with("gamma") {
             let gamma_str = part[5..].trim_end_matches(".dat");
             params.gamma = gamma_str.parse::<f64>().unwrap_or(0.0);

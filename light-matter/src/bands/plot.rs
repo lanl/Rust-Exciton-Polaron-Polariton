@@ -1,10 +1,41 @@
-use ndarray::{Array1, s};
+use ndarray::Array1;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 use std::process::Command;
 
 use crate::timed_println;
+
+const DEFAULT_PLOT_MAX_ENERGY: f64 = 0.05;
+const ZOOMED_PLOT_MIN_ENERGY: f64 = -0.04;
+const ZOOMED_PLOT_MAX_ENERGY: f64 = -0.01;
+
+/// y-window of the band plot. If an energy cutoff is supplied it is used as
+/// the exact upper limit (no padding), since no states exist above it.
+fn band_plot_energy_window(
+    data_min: f64,
+    energy_cutoff: Option<f64>,
+    zoomed: bool,
+) -> (f64, f64) {
+    let (mut min_energy, max_energy) = if zoomed {
+        (
+            ZOOMED_PLOT_MIN_ENERGY,
+            energy_cutoff.unwrap_or(ZOOMED_PLOT_MAX_ENERGY),
+        )
+    } else if let Some(cutoff) = energy_cutoff {
+        let padding = 0.05 * (cutoff - data_min);
+        (data_min - padding, cutoff)
+    } else {
+        let padding = 0.05 * (DEFAULT_PLOT_MAX_ENERGY - data_min);
+        (data_min - padding, DEFAULT_PLOT_MAX_ENERGY + padding)
+    };
+
+    if !(max_energy > min_energy) {
+        min_energy = max_energy - 0.05 * max_energy.abs().max(1e-3);
+    }
+
+    (min_energy, max_energy)
+}
 
 pub fn plot_color_band_structure(
     k_points: &Vec<Vec<f64>>,
@@ -13,23 +44,40 @@ pub fn plot_color_band_structure(
     eigvals_list: &Vec<Array1<f64>>,
     photonic_character_list: &Vec<Vec<f64>>,
     n_bands: usize,
+    energy_cutoff: Option<f64>,
     a0: f64,
     save_path: &str,
     v0: f64,
     coupling: f64,
     zoomed: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    if k_points.len() < 2
-        || sym_points.is_empty()
-        || eigvals_list.is_empty()
-        || eigvals_list[0].is_empty()
-    {
+    if k_points.len() < 2 || sym_points.is_empty() || eigvals_list.is_empty() {
         return Err("No color band data to plot".into());
+    }
+
+    if eigvals_list.len() != k_points.len() {
+        return Err(format!(
+            "eigvals_list has {} rows but there are {} k-points",
+            eigvals_list.len(),
+            k_points.len()
+        )
+        .into());
     }
 
     if photonic_character_list.len() != eigvals_list.len() {
         return Err("photonic_character_list length does not match eigvals_list length".into());
     }
+
+    // Rows are ragged when an energy cutoff is used.
+    let max_available = eigvals_list.iter().map(|e| e.len()).max().unwrap_or(0);
+    if max_available == 0 {
+        return Err("No eigenvalue data to plot (all K points are empty)".into());
+    }
+
+    let n_bands = match energy_cutoff {
+        Some(_) => max_available,
+        None => n_bands.min(max_available),
+    };
 
     let dark = false;
 
@@ -44,41 +92,27 @@ pub fn plot_color_band_structure(
         .map(|i| x[i * points_per_segment])
         .collect();
 
-    // Check if we have any data to plot
-    if eigvals_list.is_empty() || eigvals_list[0].is_empty() {
-        return Err("No eigenvalue data to plot".into());
+    let data_min = eigvals_list
+        .iter()
+        .flat_map(|e| e.iter().take(n_bands).copied())
+        .filter(|e| e.is_finite())
+        .fold(f64::INFINITY, f64::min);
+
+    if !data_min.is_finite() {
+        return Err("No finite eigenvalues to plot".into());
     }
 
-    // Find min/max energy values
-    let mut min_energy = f64::INFINITY;
-    let mut max_energy = f64::NEG_INFINITY;
+    let (min_energy, max_energy) = band_plot_energy_window(data_min, energy_cutoff, zoomed);
 
-    // Limit the number of bands to plot based on available data
-    let n_bands = n_bands.min(eigvals_list[0].len());
+    timed_println!(
+        "Band plot: {} bands, y-range [{:.6e}, {:.6e}] (cutoff = {:?}, zoomed = {})",
+        n_bands,
+        min_energy,
+        max_energy,
+        energy_cutoff,
+        zoomed
+    );
 
-    // Find energy range
-    for eigvals in eigvals_list {
-        if eigvals.len() >= n_bands {
-            let slice = eigvals.slice(s![0..n_bands]);
-            min_energy = min_energy.min(slice.fold(f64::INFINITY, |a, &b| a.min(b)));
-            max_energy = max_energy.max(slice.fold(f64::NEG_INFINITY, |a, &b| a.max(b)));
-        }
-    }
-
-    // Set max energy to 0.3 or use calculated max
-    max_energy = 0.05;
-
-    // Add padding to the energy range (5%)
-    let energy_padding = (max_energy - min_energy) * 0.05;
-    min_energy -= energy_padding;
-    max_energy += energy_padding;
-
-    if zoomed {
-        min_energy = -0.04;
-        max_energy = -0.01;
-    }
-
-    // Create data files for gnuplot
     let data_dir = Path::new("gnuplot_data");
     std::fs::create_dir_all(data_dir)?;
 
@@ -90,14 +124,27 @@ pub fn plot_color_band_structure(
         // Write header
         writeln!(file, "# x energy photonic_character")?;
 
-        // Write data points
-        for (i, &x_val) in x.iter().enumerate() {
-            if band_idx < eigvals_list[i].len() && band_idx < photonic_character_list[i].len() {
-                let energy = eigvals_list[i][band_idx];
-                let photonic = photonic_character_list[i][band_idx];
+        // A blank line breaks the gnuplot line wherever this band index does
+        // not exist (fewer states below the cutoff at that K point).
+        let mut segment_open = false;
 
-                // We'll handle transparency in the gnuplot script
-                writeln!(file, "{} {} {}", x_val, energy, photonic)?;
+        for (i, &x_val) in x.iter().enumerate() {
+            let point = eigvals_list[i]
+                .get(band_idx)
+                .copied()
+                .zip(photonic_character_list[i].get(band_idx).copied());
+
+            match point {
+                Some((energy, photonic)) if energy.is_finite() && photonic.is_finite() => {
+                    writeln!(file, "{} {} {}", x_val, energy, photonic)?;
+                    segment_open = true;
+                }
+                _ => {
+                    if segment_open {
+                        writeln!(file)?;
+                        segment_open = false;
+                    }
+                }
             }
         }
     }
@@ -110,12 +157,12 @@ pub fn plot_color_band_structure(
     if dark {
         writeln!(
             script,
-            "set terminal pdfcairo enhanced font 'Arial,40' size 16,12 background rgb '#000000'"
+            "set terminal svg enhanced font 'Arial,40' size 1600,1200 background rgb '#000000'"
         )?;
     } else {
         writeln!(
             script,
-            "set terminal pdfcairo enhanced font 'Arial,40' size 16,12"
+            "set terminal svg enhanced font 'Arial,40' size 1600,1200"
         )?;
     }
     writeln!(script, "set output '{}'", save_path)?;
@@ -126,19 +173,23 @@ pub fn plot_color_band_structure(
     writeln!(script, "set tmargin 3")?;
     writeln!(script, "set bmargin 3")?;
 
+    let cutoff_label = energy_cutoff
+        .map(|c| format!(", E_{{cut}}={:.4e}", c))
+        .unwrap_or_default();
+
     if dark {
         writeln!(
             script,
-            "set title 'Exciton-Polariton Band Structure (a₀={:.1}, V₀={:.1}, g={:.6})' font 'Arial,16' textcolor rgb '#e0e0e0'",
-            a0, v0, coupling
+            "set title 'Exciton-Polariton Band Structure (a₀={:.1}, V₀={:.1}, g={:.6}{})' font 'Arial,16' textcolor rgb '#e0e0e0'",
+            a0, v0, coupling, cutoff_label
         )?;
         writeln!(script, "set xlabel 'Wave vector' textcolor rgb '#e0e0e0'")?;
         writeln!(script, "set ylabel 'Energy (a.u.)' textcolor rgb '#e0e0e0'")?;
     } else {
         writeln!(
             script,
-            "set title 'Exciton-Polariton Band Structure (a₀={:.1}, V₀={:.1}, g={:.6})' font 'Arial,16'",
-            a0, v0, coupling
+            "set title 'Exciton-Polariton Band Structure (a₀={:.1}, V₀={:.1}, g={:.6}{})' font 'Arial,16'",
+            a0, v0, coupling, cutoff_label
         )?;
         writeln!(script, "set xlabel 'Wave vector'")?;
         writeln!(script, "set ylabel 'Energy (a.u.)'")?;
@@ -146,7 +197,6 @@ pub fn plot_color_band_structure(
     writeln!(script, "set xrange [{}:{}]", x[0], x[x.len() - 1])?;
     writeln!(script, "set yrange [{}:{}]", min_energy, max_energy)?;
 
-    // Set up color palette - blue (excitonic) to red (photonic)
     writeln!(script, "set palette rgbformulae 22,13,-22")?;
     writeln!(
         script,
@@ -215,25 +265,16 @@ pub fn plot_color_band_structure(
     writeln!(script, ")")?;
 
     if !zoomed {
-        // Draw vertical lines at symmetry points
         for &pos in &sym_positions {
-            if dark {
-                writeln!(
-                    script,
-                    "set arrow from {},{} to {},{} nohead lc rgb '#606060' lw 6",
-                    pos, min_energy, pos, max_energy
-                )?;
-            } else {
-                writeln!(
-                    script,
-                    "set arrow from {},{} to {},{} nohead lc rgb '#888888' lw 6",
-                    pos, min_energy, pos, max_energy
-                )?;
-            }
+            let color = if dark { "#606060" } else { "#888888" };
+            writeln!(
+                script,
+                "set arrow from {},{} to {},{} nohead lc rgb '{}' lw 6",
+                pos, min_energy, pos, max_energy, color
+            )?;
         }
     }
 
-    // Plot all bands with color mapping and transparency
     write!(script, "plot ")?;
 
     // First add a dummy plot for the colorbar using palette
@@ -257,8 +298,10 @@ pub fn plot_color_band_structure(
     }
     writeln!(script)?;
 
-    // Execute gnuplot
-    let status = Command::new("gnuplot").arg(script_path).status()?;
+    // Make sure the script is closed before gnuplot reads it.
+    drop(script);
+
+    let status = Command::new("gnuplot").arg(&script_path).status()?;
 
     if !status.success() {
         return Err("Failed to execute gnuplot".into());

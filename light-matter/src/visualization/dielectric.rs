@@ -66,6 +66,12 @@ pub fn plot_dielectric_function(
                             (params.pn_coupling - ref_params.pn_coupling).abs() < 1e-10;
                         let pn_n_fock_match = params.pn_n_fock == ref_params.pn_n_fock;
                         let n_eig_match = params.n_eig == ref_params.n_eig;
+                        let cutoff_match = match (params.energy_cutoff, ref_params.energy_cutoff) {
+                            (None, None) => true,
+                            // Filenames store {:.6e}; compare at that precision.
+                            (Some(a), Some(b)) => format!("{:.6e}", a) == format!("{:.6e}", b),
+                            _ => false,
+                        };
                         let gamma_match = (params.gamma - ref_params.gamma).abs() < 1e-12;
 
                         let all_match = a0_match
@@ -75,6 +81,7 @@ pub fn plot_dielectric_function(
                             && pn_coupling_match
                             && pn_n_fock_match
                             && n_eig_match
+                            && cutoff_match
                             && gamma_match;
 
                         if !all_match && verbose {

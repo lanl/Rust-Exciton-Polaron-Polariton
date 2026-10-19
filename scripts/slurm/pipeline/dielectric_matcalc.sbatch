@@ -1,7 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=diel_matcalc
-#SBATCH --output=logs/diel_matcalc_%A_%a.out
-#SBATCH --error=logs/diel_matcalc_%A_%a.err
+#SBATCH --output=logs/diel_matcalc/diel_matcalc_%A_%a.out
+#SBATCH --error=logs/diel_matcalc/diel_matcalc_%A_%a.err
 #SBATCH --partition=standard
 #SBATCH --time=04:00:00
 #SBATCH --nodes=1
@@ -11,12 +11,14 @@
 
 set -euo pipefail
 
-: "${PIPELINE_PARAMS:?PIPELINE_PARAMS was not set. Submit through submit_pipelines.sh}"
+source "/users/mike_tay/rust_exciton_pp/scripts/slurm/pipeline/pipeline_runtime.sh"
+load_submitted_pipeline_config
 
-source "${PIPELINE_PARAMS}"
+# shellcheck disable=SC1090
 source "${ENV_SCRIPT}"
 
 cd "${PROJECT_ROOT}"
+print_submitted_pipeline_config
 
 export RUST_BACKTRACE=full
 export REFLECTIVITY_INDEX="${SLURM_ARRAY_TASK_ID}"
@@ -33,7 +35,7 @@ echo "  REFLECTIVITY_INDEX  =${REFLECTIVITY_INDEX}"
 echo "  RAYON_NUM_THREADS   = ${RAYON_NUM_THREADS}"
 echo "  CACHE_DIR           =${CACHE_DIR}"
 
-"${TARGET_DIR}/release/light-matter" \
+"${BINARY_PATH}" \
   --rayon-threads "${SLURM_CPUS_PER_TASK}" \
   matrix-elem-calc \
   dielectric \

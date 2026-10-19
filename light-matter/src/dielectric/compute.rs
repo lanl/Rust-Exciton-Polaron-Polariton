@@ -2,7 +2,7 @@ use super::cache::{get_dielectric_cache_filename, load_dielectric_cache, save_di
 use crate::{bands, timed_println_rank0};
 use matrix_ops::{
     ConvertFrom, DiagonalizationOptions, Diagonalize, HermitianConjugate, MatrixOps,
-    MatrixOpsError, Norm, Sqrt,
+    MatrixOpsError, Norm, Sqrt, RealCutoff, BatchPolicy
 };
 use ndarray::{Array1, Array2, s};
 use ndarray_linalg::c64;
@@ -30,6 +30,7 @@ pub fn get_dielectric_function<M, B>(
     pp_config: &PPConfig,
     pp: &mut PPHamiltonian<M, B>,
     n_eig: usize,
+    energy_cutoff: Option<f64>,
     omegas: Array1<f64>,
     gamma: f64,
     save_dir: &str,
@@ -46,16 +47,30 @@ where
     B: Boson<M>,
 {
     timed_println_rank0!(
-        "Calculating dielectric function with {} eigenstates, gamma={:.1e}",
+        "Calculating dielectric function with {} eigenstates, gamma={:.1e}, cutoff={:?}",
         n_eig,
-        gamma
+        gamma,
+        energy_cutoff
     );
 
-    let cache_filename = get_dielectric_cache_filename(pp, pp_config, save_dir, n_eig);
+    match energy_cutoff {
+        Some(cutoff) => timed_println_rank0!(
+            "Calculating dielectric function with ALL eigenstates below E = {:.6e} (overrides n_eig = {}), gamma={:.1e}",
+            cutoff,
+            n_eig,
+            gamma
+        ),
+        None => timed_println_rank0!(
+            "Calculating dielectric function with {} eigenstates, gamma={:.1e}",
+            n_eig,
+            gamma
+        ),
+    }
+
+    let cache_filename =
+        get_dielectric_cache_filename(pp, pp_config, save_dir, n_eig, energy_cutoff);
     timed_println_rank0!("Cache filename: {}", cache_filename);
 
-    // Try to load cached data if requested
-    // Load cached eigenvalues/x_pp if possible, otherwise compute everything
     let (pp_vals, x_pp, photonic_chars, phonon_numbers, ground_state_index) =
         if use_cached && std::path::Path::new(&cache_filename).exists() {
             timed_println_rank0!(
@@ -63,24 +78,33 @@ where
                 cache_filename
             );
             match load_dielectric_cache(&cache_filename) {
-                Ok((vals, x, photonic_chars, phonon_numbers, gs_idx)) => {
-                    timed_println_rank0!("Successfully loaded cached data");
+                Ok((vals, x, photonic_chars, phonon_numbers, gs_idx))
+                    if x.len() == vals.len() && gs_idx < vals.len() =>
+                {
+                    timed_println_rank0!("Successfully loaded cached data ({} states)", vals.len());
                     (vals, x, photonic_chars, phonon_numbers, gs_idx)
+                }
+                Ok((vals, x, _, _, gs_idx)) => {
+                    timed_println_rank0!(
+                        "Cache is inconsistent (pp_vals={}, x_pp={}, gs_idx={}), recalculating...",
+                        vals.len(),
+                        x.len(),
+                        gs_idx
+                    );
+                    compute_dielectric_cache(pp_config, pp, n_eig, energy_cutoff)?
                 }
                 Err(e) => {
                     timed_println_rank0!("Failed to load cache ({}), recalculating...", e);
-                    compute_dielectric_cache(pp_config, pp, n_eig)?
+                    compute_dielectric_cache(pp_config, pp, n_eig, energy_cutoff)?
                 }
             }
         } else {
             if !use_cached {
                 timed_println_rank0!("use_cached=false, computing diagonalization data...");
-            } else if !std::path::Path::new(&cache_filename).exists() {
-                timed_println_rank0!("Cache file does not exist, computing diagonalization data...");
             } else {
-                timed_println_rank0!("Computing diagonalization data...");
+                timed_println_rank0!("Cache file does not exist, computing diagonalization data...");
             }
-            let cache_data = compute_dielectric_cache(pp_config, pp, n_eig)?;
+            let cache_data = compute_dielectric_cache(pp_config, pp, n_eig, energy_cutoff)?;
 
             if sim_common::mpi::is_mpi_rank0_env() {
                 timed_println_rank0!("Saving cache to {}", cache_filename);
@@ -101,6 +125,15 @@ where
 
             cache_data
         };
+
+    if pp_vals.is_empty() {
+        return Err(MatrixOpsError::Other {
+            message: format!(
+                "No eigenstates available for dielectric function (energy_cutoff = {:?})",
+                energy_cutoff
+            ),
+        });
+    }
 
     timed_println_rank0!(
         "Relative energies = {:?}",
@@ -150,6 +183,7 @@ fn compute_dielectric_cache<M, B>(
     pp_config: &PPConfig,
     pp: &mut PPHamiltonian<M, B>,
     n_eig: usize,
+    energy_cutoff: Option<f64>,
 ) -> Result<(Array1<f64>, Array1<f64>, Vec<f64>, Vec<f64>, usize), MatrixOpsError>
 where
     M: MatrixOps + Diagonalize,
@@ -224,12 +258,31 @@ where
     // let e_vals_transition = pp.polariton.exciton.e_vals.as_ref().unwrap()
     //     - pp.polariton.exciton.e_vals.as_ref().unwrap()[0];
     // println!("{}", e_vals_transition);
+    
+    let diag_options = match energy_cutoff {
+        Some(cutoff) => {
+            timed_println_rank0!(
+                "Using energy cutoff of {:.6e}: computing ALL eigenvalues below it (n_eig = {} is ignored)",
+                cutoff,
+                n_eig
+            );
+            DiagonalizationOptions::all_real_below(cutoff).real_cutoff(RealCutoff {
+                batch_policy: BatchPolicy::DensityEstimate {
+                    initial: 500,
+                    safety: 1.25,
+                    min_batch: 128,
+                    max_batch: 512,
+                },
+                ..RealCutoff::new(cutoff)
+            })
+        }
+        None => DiagonalizationOptions::smallest_real(n_eig),
+    };
 
-    // Diagonalize at the Gamma point
     timed_println_rank0!("Diagonalizing Hamiltonian of size {}", h_pp.shape().0);
     let (pp_vals, pp_vecs) = h_pp
         .diagonalize(
-            DiagonalizationOptions::smallest_real(n_eig)
+            diag_options
                 .backend(matrix_ops::DiagonalizationBackend::Auto)
                 .hermitian()
                 .max_iterations(50_000)
@@ -238,7 +291,36 @@ where
                 .eigenvectors_rank0_only(),
         )?
         .into_arrays_hermitian();
-    timed_println_rank0!("Diagonalization complete: max energy = {:.4e}, min energy = {:.4e}", pp_vals[0], pp_vals[pp_vals.len() - 1]);
+
+    // Number of eigenpairs actually returned. With an energy cutoff this is
+    // generally != n_eig, so everything below must use n_found.
+    let n_found = pp_vals.len();
+
+    if n_found == 0 {
+        return Err(MatrixOpsError::Other {
+            message: format!(
+                "Diagonalization returned no eigenvalues (energy_cutoff = {:?}, n_eig = {})",
+                energy_cutoff, n_eig
+            ),
+        });
+    }
+
+    let e_min = pp_vals.iter().copied().fold(f64::INFINITY, f64::min);
+    let e_max = pp_vals.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+    timed_println_rank0!(
+        "Diagonalization complete: {} eigenpairs, min energy = {:.6e}, max energy = {:.6e}",
+        n_found,
+        e_min,
+        e_max
+    );
+
+    if energy_cutoff.is_none() && n_found != n_eig {
+        timed_println_rank0!(
+            "Warning: requested n_eig = {} but diagonalization returned {} eigenpairs",
+            n_eig,
+            n_found
+        );
+    }
 
     if !sim_common::mpi::is_mpi_rank0_env() {
         return Ok((
@@ -250,28 +332,26 @@ where
         ));
     }
 
-    // If the phonon coupling is effectively zero we *must* use a single
-    // phonon vacuum state (dimension = 1).  This is independent of the value
-    // stored in `pp_config.pn_n_fock`.
+    if pp_vecs.ncols() != n_found {
+        return Err(MatrixOpsError::DimensionMismatch {
+            expected: n_found,
+            got: pp_vecs.ncols(),
+            context: "dielectric: number of eigenvectors vs eigenvalues on rank 0".to_string(),
+        });
+    }
+
     let n_ph = pp_config.q_values.len() + 1; // photon modes (+ the q=0 mode)
     let n_pn = if pp_config.pn_coupling.abs() < f64::EPSILON {
         1
+    } else if pp_config.pn_n_fock == 0 {
+        timed_println_rank0!(
+            "Warning: phonon coupling non-zero but pn_n_fock == 0 -> forcing n_pn = 1"
+        );
+        1
     } else {
-        // Guard against a user‑provided zero here (which would make the loop
-        // empty and break the indexing logic).
-        if pp_config.pn_n_fock == 0 {
-            timed_println_rank0!(
-                "Warning: phonon coupling non-zero but pn_n_fock == 0 -> forcing n_pn = 1"
-            );
-            1
-        } else {
-            pp_config.pn_n_fock
-        }
+        pp_config.pn_n_fock
     };
 
-    // Sanity check: the size of the ground‑state vector must equal
-    // n_ex_eig * n_ph * n_pn (or be a multiple thereof if extra blocks are
-    // present). If it does not, abort with a clear message.
     let mut vec0 = pp_vecs.column(0);
     let expected_len = pp.layout.pp_dim(n_ex_eig, n_ph, n_pn)?;
     if vec0.len() != expected_len {
@@ -290,24 +370,19 @@ where
 
     while photon_character > 0.1 {
         ground_state_index += 1;
-        if ground_state_index >= pp_vals.len() {
+        if ground_state_index >= n_found {
             panic!(
-                "No ground state with photonic character <= 0.1 found among the computed eigenstates"
+                "No ground state with photonic character <= 0.1 found among the {} computed eigenstates",
+                n_found
             );
         }
         vec0 = pp_vecs.column(ground_state_index);
         photon_character = bands::calculate_photonic_character(pp, &vec0.to_owned())?;
     }
 
-    // We store the magnitude of the scalar transition dipole,
-    //     x_pp[n] = |<0|x|n>|.
-    // This is sufficient for the scalar resonant dielectric function, where the
-    // numerator is |<0|x|n>|^2. For a full tensor dielectric calculation,
-    // one should store complex transition dipoles for each Cartesian component
-    // and form <n|x_i|0><0|x_j|n> explicitly.
-    let mut x_pp_values = Vec::with_capacity(n_eig);
+    let mut x_pp_values = Vec::with_capacity(n_found);
 
-    for idx in 0..n_eig {
+    for idx in 0..n_found {
         let vec1 = pp_vecs.column(idx);
         let mut acc = c64::zero();
 
@@ -336,18 +411,11 @@ where
 
     let x_pp = Array1::from_vec(x_pp_values);
 
-    // -----------------------------------------------------------------
-    // Compute composition data: photonic character and average phonon number
-    // -----------------------------------------------------------------
+    let mut photonic_chars: Vec<f64> = Vec::with_capacity(n_found);
+    let mut phonon_numbers: Vec<f64> = Vec::with_capacity(n_found);
 
-    let mut photonic_chars: Vec<f64> = Vec::with_capacity(n_eig);
-    let mut phonon_numbers: Vec<f64> = Vec::with_capacity(n_eig);
-
-    // Check if the Hamiltonian actually includes phonon degrees of freedom
-    // When pn_coupling == 0, build_pp_hamiltonian returns early without phonon space
     let has_phonon_dof = pp_config.pn_coupling.abs() >= f64::EPSILON && n_pn > 1;
 
-    // Only create phonon number operator if phonons are actually present in the Hamiltonian
     let phonon_number_op = if has_phonon_dof {
         let lm_dim = pp.layout.lm.lm_dim(n_ex_eig, n_ph)?;
         let lm_eye = M::eye(lm_dim);
@@ -358,7 +426,7 @@ where
         None
     };
 
-    for idx in 0..n_eig {
+    for idx in 0..n_found {
         let vec: Array1<M::Scalar> = pp_vecs
             .column(idx)
             .iter()
@@ -366,24 +434,24 @@ where
             .collect::<Array1<M::Scalar>>();
         let vec_dag: Array1<M::Scalar> = vec.iter().map(|x| x.dag()).collect();
 
-        // Photonic character: sum_i <ψ|a_i† a_i|ψ>
         photonic_chars.push(bands::calculate_photonic_character(
             pp,
             &pp_vecs.column(idx).to_owned(),
         )?);
 
-        // Phonon number expectation
-        // Only compute if phonons are actually present in the Hamiltonian
         if let Some(ref op) = phonon_number_op {
-            let mut tmp: Array1<M::Scalar> = Array1::zeros(vec.len()); // zero vector of same shape
+            let mut tmp: Array1<M::Scalar> = Array1::zeros(vec.len());
             op.apply(vec.as_slice().unwrap(), tmp.as_slice_mut().unwrap())?;
             let val: M::Scalar = vec_dag.dot(&tmp);
             phonon_numbers.push(<M as MatrixOps>::Scalar::norm(val));
         } else {
-            // No phonon degrees of freedom, phonon number is always zero
             phonon_numbers.push(0.0);
         }
     }
+
+    debug_assert_eq!(x_pp.len(), n_found);
+    debug_assert_eq!(photonic_chars.len(), n_found);
+    debug_assert_eq!(phonon_numbers.len(), n_found);
 
     Ok((
         pp_vals,

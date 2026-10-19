@@ -230,9 +230,9 @@ fn main() {
 
     // Create configuration
     let config = ExcitonConfig {
-        n_kappa: 11,
+        n_kappa: 7,
         a0: 16.0,
-        v0: 0.03,
+        v0: 0.05,
         k: vec![0.0, 0.0],
         m_e: 0.2,
         m_h: 0.2,

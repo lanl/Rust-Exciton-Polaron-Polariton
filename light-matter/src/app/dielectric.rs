@@ -38,6 +38,7 @@ fn run_dielectric_scan(e_config: ExcitonConfig, args: cli::DielectricArgs) -> Re
     let pn_n_fock = args.pn_n_fock;
 
     let n_eig = args.n_eig;
+    let energy_cutoff = args.energy_cutoff;
     let omegas = Array1::linspace(
         args.omega_min_scan,
         args.omega_max_scan,
@@ -50,7 +51,7 @@ fn run_dielectric_scan(e_config: ExcitonConfig, args: cli::DielectricArgs) -> Re
         (Some(min), Some(max)) => Some((min, max)),
         _ => {
             if !zoomed {
-                Some((0.13, 0.22))
+                Some((0.152, 0.207))
             } else {
                 Some((0.16, 0.17))
             }
@@ -72,6 +73,13 @@ fn run_dielectric_scan(e_config: ExcitonConfig, args: cli::DielectricArgs) -> Re
     timed_println_rank0!("  n_rel           = {}", n_rel);
     timed_println_rank0!("  n_ex_eig        = {}", n_ex_eig);
     timed_println_rank0!("  n_eig           = {}", n_eig);
+    timed_println_rank0!(
+        "  energy_cutoff   = {}",
+        match energy_cutoff {
+            Some(c) => format!("{:.6e} (overrides n_eig)", c),
+            None => "none".to_string(),
+        }
+    );
     timed_println_rank0!("  omega_0         = {}", omega_0);
     timed_println_rank0!("  omega_max       = {}", omega_max);
     timed_println_rank0!("  d_omega         = {}", d_omega);
@@ -167,7 +175,9 @@ fn run_dielectric_scan(e_config: ExcitonConfig, args: cli::DielectricArgs) -> Re
             n_modes: q_values.len(),
             pn_coupling,
             pn_n_fock,
-            n_eig,
+            // Filenames with a cutoff carry no "neig" field, so the parser yields 0.
+            n_eig: if energy_cutoff.is_some() { 0 } else { n_eig },
+            energy_cutoff,
             gamma,
         };
 
@@ -230,6 +240,7 @@ fn run_dielectric_scan(e_config: ExcitonConfig, args: cli::DielectricArgs) -> Re
             &pn_k,
             pn_n_fock,
             n_eig,
+            energy_cutoff,
             &omegas,
             gamma,
             save_dir,
@@ -285,14 +296,21 @@ fn run_dielectric_scan(e_config: ExcitonConfig, args: cli::DielectricArgs) -> Re
         &pp_config,
         &mut pp,
         n_eig,
+        energy_cutoff,
         omegas.clone(),
         gamma,
         save_dir,
         use_cached,
     )?;
 
-    let filename =
-        dielectric::get_dielectric_function_filename(&pp, &pp_config, save_dir, n_eig, gamma);
+    let filename = dielectric::get_dielectric_function_filename(
+        &pp,
+        &pp_config,
+        save_dir,
+        n_eig,
+        energy_cutoff,
+        gamma,
+    );
 
     if sim_common::mpi::is_mpi_rank0_env() {
         timed_println!("Saving dielectric function data to {}", filename);

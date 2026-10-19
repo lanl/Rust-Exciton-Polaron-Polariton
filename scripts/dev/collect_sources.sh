@@ -4,7 +4,7 @@
 INCLUDE_EXAMPLES=true
 SKIP_COMMENTS=false
 SKIP_TESTS=false
-MAX_LINES=20000
+MAX_LINES=16500
 IGNORE_DIRS=()
 
 # Parse command line arguments
@@ -98,7 +98,7 @@ start_new_file() {
 CURRENT_LINE_COUNT=$(write_header "$OUTPUT_FILE" 1)
 
 # Build find command with conditional exclusions
-FIND_CMD="find . -type f \( -name \"*.rs\" -o -name \"*.h\" -o -name \"*.toml\" -o -name \"*.py\" -o -name \"*.sh\" \) ! -path \"*/target*/*\""
+FIND_CMD="find . -type f \( -name \"*.rs\" -o -name \"*.h\" -o -name \"*.toml\" -o -name \"*.py\" -o -name \"*.sh\" -o -name \"*.sbatch\" \) ! -path \"*/target*/*\""
 if [[ "$INCLUDE_EXAMPLES" == false ]]; then
     FIND_CMD="$FIND_CMD ! -path \"*/examples/*\""
 fi
@@ -122,7 +122,7 @@ eval $FIND_CMD | sort | while read -r file; do
         lang="toml"
     elif [[ "$file" == *.py ]]; then
         lang="python"
-    elif [[ "$file" == *.sh ]]; then
+    elif [[ "$file" == *.sh ]] || [[ "$file" == *.sbatch ]]; then
         lang="bash"
     else
         lang="c"
@@ -149,8 +149,7 @@ eval $FIND_CMD | sort | while read -r file; do
         # Filter comments if requested
         if [[ "$SKIP_COMMENTS" == true ]]; then
             if [[ "$lang" == "toml" ]] || [[ "$lang" == "python" ]] || [[ "$lang" == "bash" ]]; then
-                # TOML, Python, and Bash comments start with #
-                grep -v '^\s*#' "$TEMP_FILE" > "${TEMP_FILE}.tmp" && mv "${TEMP_FILE}.tmp" "$TEMP_FILE"
+                grep -v -E '^\s*#($|[^!S]|S[^B])' "$TEMP_FILE" > "${TEMP_FILE}.tmp" && mv "${TEMP_FILE}.tmp" "$TEMP_FILE"
             else
                 # Rust and C comments: // and /* */ multi-line blocks
                 # First remove multi-line /* */ comments

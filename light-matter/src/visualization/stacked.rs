@@ -16,6 +16,7 @@
 use crate::config::PPConfig;
 use crate::dielectric;
 use crate::hamiltonian::{PPHamiltonian, SingExBosons};
+use crate::utils::eig_selection_tag;
 use crate::modes::types::Polarization;
 use crate::plot_photon_freqs;
 use crate::timed_println;
@@ -485,6 +486,7 @@ pub fn generate_stacked_plots(
     pn_k: &Array1<f64>,
     pn_n_fock: usize,
     n_eig: usize,
+    energy_cutoff: Option<f64>,
     omegas: &Array1<f64>,
     gamma: f64,
     save_dir: &str,
@@ -494,6 +496,8 @@ pub fn generate_stacked_plots(
     if !sim_common::mpi::is_mpi_rank0_env() {
         return;
     }
+
+    let eig_tag = eig_selection_tag(n_eig, energy_cutoff);
 
     timed_println!("Generating stacked photonic character plots...");
 
@@ -522,8 +526,13 @@ pub fn generate_stacked_plots(
         let pp_zero: PPHamiltonian<ComposedOperator<c64>, SingExBosons<ComposedOperator<c64>>> =
             PPHamiltonian::from_config(&pp_config_zero);
 
-        let cache_filename_zero =
-            dielectric::get_dielectric_cache_filename(&pp_zero, &pp_config_zero, save_dir, n_eig);
+        let cache_filename_zero = dielectric::get_dielectric_cache_filename(
+            &pp_zero,
+            &pp_config_zero,
+            save_dir,
+            n_eig,
+            energy_cutoff,
+        );
 
         match dielectric::load_dielectric_cache(&cache_filename_zero) {
             Ok((pp_vals_zero, x_pp_zero, _, _, gs_idx_zero)) => {
@@ -593,8 +602,13 @@ pub fn generate_stacked_plots(
             PPHamiltonian::from_config(&pp_config_plot);
 
         // Load cached eigenstate data
-        let cache_filename =
-            dielectric::get_dielectric_cache_filename(&pp_plot, &pp_config_plot, save_dir, n_eig);
+        let cache_filename = dielectric::get_dielectric_cache_filename(
+            &pp_plot,
+            &pp_config_plot,
+            save_dir,
+            n_eig,
+            energy_cutoff,
+        );
 
         match dielectric::load_dielectric_cache(&cache_filename) {
             Ok((pp_vals, x_pp, photonic_chars, phonon_numbers, gs_idx)) => {
@@ -602,7 +616,7 @@ pub fn generate_stacked_plots(
 
                 // Plot photonic character stacked area
                 let photonic_plot_name = format!(
-                    "{}/dielectric_photonic_stacked_a0{}_V0{}_nrel{}_lmcoup{:.6}_nmodes{}_pncoup{}_npn{}_neig{}_gamma{:.1e}.svg",
+                    "{}/dielectric_photonic_stacked_a0{}_V0{}_nrel{}_lmcoup{:.6}_nmodes{}_pncoup{}_npn{}_{}_gamma{:.1e}.svg",
                     save_dir,
                     e_config.a0,
                     e_config.v0,
@@ -611,7 +625,7 @@ pub fn generate_stacked_plots(
                     n_photon_modes,
                     pn_coupling,
                     pn_n_fock,
-                    n_eig,
+                    eig_tag,
                     gamma
                 );
 
@@ -638,7 +652,7 @@ pub fn generate_stacked_plots(
                 // Plot phonon Fock state stacked area
                 if pn_n_fock > 0 {
                     let phonon_plot_name = format!(
-                        "{}/dielectric_phonon_stacked_a0{}_V0{}_nrel{}_lmcoup{:.6}_nmodes{}_pncoup{}_npn{}_neig{}_gamma{:.1e}.svg",
+                        "{}/dielectric_phonon_stacked_a0{}_V0{}_nrel{}_lmcoup{:.6}_nmodes{}_pncoup{}_npn{}_{}_gamma{:.1e}.svg",
                         save_dir,
                         e_config.a0,
                         e_config.v0,
@@ -647,7 +661,7 @@ pub fn generate_stacked_plots(
                         n_photon_modes,
                         pn_coupling,
                         pn_n_fock,
-                        n_eig,
+                        eig_tag,
                         gamma
                     );
 
