@@ -119,5 +119,8 @@ DIELECTRIC_ARGS=(
   --omega-max-scan 0.3
   --n-omega-points 100000
   --output-dir dielectric_scan/effective_modes
+  --dielectric-method slab
+  --exciton-density 2.8e-5
+  --slab-thickness-bohr 11.6
   --eps-monitor
 )
