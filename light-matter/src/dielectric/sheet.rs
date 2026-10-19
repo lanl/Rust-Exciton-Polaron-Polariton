@@ -139,6 +139,8 @@ where
     cfg0.e_config.k = vec![0.0, 0.0];
     let mut pp0 = PPHamiltonian::<M, B>::from_config(&cfg0);
     let h0 = pp0.build_pp_hamiltonian(None)?;
+    pp0.polariton.matrix_elements.clear_relative_cache();
+    pp0.polariton.matrix_elements.clear_full_cache_maps();
     let e_vecs0 = pp0
         .polariton
         .exciton
@@ -186,6 +188,8 @@ where
     cfgq.e_config.k = vec![q_probe, 0.0];
     let mut ppq = PPHamiltonian::<M, B>::from_config(&cfgq);
     let hq = ppq.build_pp_hamiltonian(None)?;
+    ppq.polariton.matrix_elements.clear_relative_cache();
+    ppq.polariton.matrix_elements.clear_full_cache_maps();
     let e_vecs_q = ppq
         .polariton
         .exciton
