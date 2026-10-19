@@ -13,6 +13,6 @@ pub use response::{
     DielectricNormalization, epsilon_and_alpha, lehmann_sum, method_tag, transitions_from_cache,
 };
 pub use sheet::{
-    SheetDielectricCache, compute_sheet_dielectric_cache, exciton_dipole_cross,
+    SHEET_CACHE_VERSION, SheetDielectricCache, compute_sheet_dielectric_cache, exciton_dipole_cross,
     get_sheet_dielectric_cache_filename, sheet_dielectric_result,
 };

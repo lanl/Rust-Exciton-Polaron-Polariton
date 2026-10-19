@@ -60,12 +60,16 @@ pub fn exciton_dipole_cross(
     result
 }
 
+pub const SHEET_CACHE_VERSION: u32 = 2;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SheetDielectricCache {
     pub version: u32,
     pub q_probe: f64,
     pub include_photon_recoil: bool,
     pub e0: f64,
+    /// Index into energies_q of the K=q boosted ground state.
+    pub ground_state_index_q: usize,
     pub energies_q: Vec<f64>,
     pub x_q: Vec<f64>,
     pub photonic_chars_q: Vec<f64>,
@@ -218,10 +222,11 @@ where
 
     if !sim_common::mpi::is_mpi_rank0_env() {
         return Ok(SheetDielectricCache {
-            version: 1,
+            version: SHEET_CACHE_VERSION,
             q_probe,
             include_photon_recoil: pp_config.include_photon_recoil,
             e0,
+            ground_state_index_q: 0,
             energies_q: Vec::new(),
             x_q: Vec::new(),
             photonic_chars_q: Vec::new(),
@@ -233,6 +238,22 @@ where
         return Err(MatrixOpsError::Other {
             message: "K=q sheet diagonalization returned inconsistent eigenpairs".to_string(),
         });
+    }
+
+    let ground_state_index_q = select_ground_state(&ppq, &vecs_q)?;
+    let boost_shift = energies_q[ground_state_index_q] - e0;
+    let m_total = pp_config.e_config.m_e + pp_config.e_config.m_h;
+    let expected_shift = q_probe * q_probe / (2.0 * m_total);
+    timed_println_rank0!(
+        "sheet2d: E_gs(q) - E_gs(0) = {:.6e} (free-COM estimate q^2/2M = {:.6e})",
+        boost_shift,
+        expected_shift
+    );
+    if boost_shift < -1e-10 {
+        timed_println_rank0!(
+            "Warning: boosted ground state lies BELOW the K=0 ground state by {:.3e}; check K handling",
+            -boost_shift
+        );
     }
 
     let psi0 = psi0.expect("rank 0 must retain the K=0 ground state");
@@ -288,10 +309,11 @@ where
     }
 
     Ok(SheetDielectricCache {
-        version: 1,
+        version: SHEET_CACHE_VERSION,
         q_probe,
         include_photon_recoil: pp_config.include_photon_recoil,
         e0,
+        ground_state_index_q,
         energies_q: energies_q.to_vec(),
         x_q,
         photonic_chars_q,
@@ -307,32 +329,28 @@ pub fn sheet_dielectric_result(
     q_probe: f64,
     antiresonant: bool,
 ) -> DielectricResult {
-    let mut removed = 0usize;
+    let gs = cache.ground_state_index_q;
     let transitions: Vec<(f64, f64)> = cache
         .energies_q
         .iter()
         .zip(cache.x_q.iter())
-        .filter_map(|(&energy, &x)| {
-            let delta = energy - cache.e0;
-            if delta > 1e-12 {
-                Some((delta, x * x))
-            } else {
-                removed += 1;
-                None
-            }
-        })
+        .enumerate()
+        .filter(|(index, _)| *index != gs)
+        .map(|(_, (&energy, &x))| (energy - cache.e0, x * x))
         .collect();
 
-    timed_println_rank0!(
-        "sheet2d: removed {} non-positive transitions (expected exactly 1)",
-        removed
-    );
-    if !cache.energies_q.is_empty() && removed != 1 {
+    let n_nonpositive = transitions.iter().filter(|(delta, _)| *delta <= 0.0).count();
+    if n_nonpositive > 0 {
         timed_println_rank0!(
-            "Warning: sheet2d removed {} non-positive transitions; expected exactly 1",
-            removed
+            "Warning: sheet2d has {} transitions with Delta <= 0 after removing the boosted ground state",
+            n_nonpositive
         );
     }
+    timed_println_rank0!(
+        "sheet2d: skipped boosted ground state index {} (|X_00| = {:.3e})",
+        gs,
+        cache.x_q.get(gs).copied().unwrap_or(0.0)
+    );
 
     let values: Vec<(c64, Option<c64>)> = omegas
         .as_slice()

@@ -422,7 +422,8 @@ fn run_dielectric_scan(e_config: ExcitonConfig, args: cli::DielectricArgs) -> Re
                 &cache_filename,
             ) {
                 Ok(cache)
-                    if cache.version == 1
+                    if cache.version == dielectric::SHEET_CACHE_VERSION
+                        && cache.ground_state_index_q < cache.energies_q.len()
                         && (cache.q_probe - q_probe).abs() < 1e-12
                         && cache.include_photon_recoil == pp_config.include_photon_recoil =>
                 {
