@@ -62,20 +62,14 @@ pub struct SheetDielectricCache {
     pub phonon_numbers_q: Vec<f64>,
 }
 
-pub fn get_sheet_dielectric_cache_filename<M, B>(
-    pp: &PPHamiltonian<M, B>,
+pub fn get_sheet_dielectric_cache_filename(
     pp_config: &PPConfig,
     save_dir: &str,
     q_probe: f64,
     n_eig: usize,
     energy_cutoff: Option<f64>,
-) -> String
-where
-    M: MatrixOps,
-    B: Boson<M>,
-{
-    let base = super::cache::get_dielectric_cache_filename(
-        pp,
+) -> String {
+    let base = super::cache::get_dielectric_cache_filename_from_config(
         pp_config,
         save_dir,
         n_eig,

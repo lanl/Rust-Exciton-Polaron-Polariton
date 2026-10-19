@@ -4,7 +4,8 @@ pub mod response;
 pub mod sheet;
 
 pub use cache::{
-    get_dielectric_cache_filename, get_dielectric_function_filename,
+    get_dielectric_cache_filename, get_dielectric_cache_filename_from_config,
+    get_dielectric_function_filename, get_dielectric_function_filename_from_config,
     load_dielectric_cache, save_dielectric_cache,
 };
 

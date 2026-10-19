@@ -5,7 +5,7 @@ use matrix_ops::MatrixOps;
 use ndarray::Array1;
 
 pub fn get_dielectric_cache_filename<M, B>(
-    pp: &PPHamiltonian<M, B>,
+    _pp: &PPHamiltonian<M, B>,
     pp_config: &PPConfig,
     save_dir: &str,
     n_eig: usize,
@@ -15,6 +15,15 @@ where
     M: MatrixOps,
     B: Boson<M>,
 {
+    get_dielectric_cache_filename_from_config(pp_config, save_dir, n_eig, energy_cutoff)
+}
+
+pub fn get_dielectric_cache_filename_from_config(
+    pp_config: &PPConfig,
+    save_dir: &str,
+    n_eig: usize,
+    energy_cutoff: Option<f64>,
+) -> String {
     let eig_tag = eig_selection_tag(n_eig, energy_cutoff);
 
     if let (Some(d_omega), Some(omega_max), Some(reflectivity)) = (
@@ -33,7 +42,7 @@ where
             d_omega,
             omega_max,
             reflectivity,
-            pp.polariton.photon.boson.get_modes().len(),
+            pp_config.q_values.len(),
             pp_config.pn_coupling,
             pp_config.pn_n_fock,
             eig_tag,
@@ -49,7 +58,7 @@ where
             pp_config.e_config.v0,
             pp_config.n_rel,
             total_coupling,
-            pp.polariton.photon.boson.get_modes().len(),
+            pp_config.q_values.len(),
             pp_config.pn_coupling,
             pp_config.pn_n_fock,
             eig_tag,
@@ -59,7 +68,7 @@ where
 }
 
 pub fn get_dielectric_function_filename<M, B>(
-    pp: &PPHamiltonian<M, B>,
+    _pp: &PPHamiltonian<M, B>,
     pp_config: &PPConfig,
     save_dir: &str,
     n_eig: usize,
@@ -71,6 +80,24 @@ where
     M: MatrixOps,
     B: Boson<M>,
 {
+    get_dielectric_function_filename_from_config(
+        pp_config,
+        save_dir,
+        n_eig,
+        energy_cutoff,
+        gamma,
+        response_tag,
+    )
+}
+
+pub fn get_dielectric_function_filename_from_config(
+    pp_config: &PPConfig,
+    save_dir: &str,
+    n_eig: usize,
+    energy_cutoff: Option<f64>,
+    gamma: f64,
+    response_tag: &str,
+) -> String {
     let eig_tag = eig_selection_tag(n_eig, energy_cutoff);
     let total_coupling = pp_config.lm_couplings.iter().sum::<f64>();
 
@@ -90,7 +117,7 @@ where
             omega_max,
             reflectivity,
             total_coupling,
-            pp.polariton.photon.boson.get_modes().len(),
+            pp_config.q_values.len(),
             pp_config.pn_coupling,
             pp_config.pn_n_fock,
             eig_tag,
@@ -105,7 +132,7 @@ where
             pp_config.e_config.v0,
             pp_config.n_rel,
             total_coupling,
-            pp.polariton.photon.boson.get_modes().len(),
+            pp_config.q_values.len(),
             pp_config.pn_coupling,
             pp_config.pn_n_fock,
             eig_tag,

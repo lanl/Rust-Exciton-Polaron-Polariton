@@ -404,12 +404,16 @@ fn run_dielectric_scan(e_config: ExcitonConfig, args: cli::DielectricArgs) -> Re
 
     timed_println_rank0!("Using ComposedOperator + distributed SLEPc shell backend");
 
-    let mut pp: PPHamiltonian<ComposedOperator<c64>, SingExBosons<ComposedOperator<c64>>> =
-        PPHamiltonian::from_config(&pp_config);
-
+    let filename = dielectric::get_dielectric_function_filename_from_config(
+        &pp_config,
+        save_dir,
+        n_eig,
+        energy_cutoff,
+        gamma,
+        &response_tag,
+    );
     let result = if matches!(args.dielectric_method, cli::DielectricMethodArg::Sheet2d) {
         let cache_filename = dielectric::get_sheet_dielectric_cache_filename(
-            &pp,
             &pp_config,
             save_dir,
             q_probe,
@@ -486,6 +490,8 @@ fn run_dielectric_scan(e_config: ExcitonConfig, args: cli::DielectricArgs) -> Re
             args.antiresonant,
         )
     } else {
+        let mut pp: PPHamiltonian<ComposedOperator<c64>, SingExBosons<ComposedOperator<c64>>> =
+            PPHamiltonian::from_config(&pp_config);
         dielectric::get_dielectric_function(
             &pp_config,
             &mut pp,
@@ -499,16 +505,6 @@ fn run_dielectric_scan(e_config: ExcitonConfig, args: cli::DielectricArgs) -> Re
             args.antiresonant,
         )?
     };
-
-    let filename = dielectric::get_dielectric_function_filename(
-        &pp,
-        &pp_config,
-        save_dir,
-        n_eig,
-        energy_cutoff,
-        gamma,
-        &response_tag,
-    );
 
     if sim_common::mpi::is_mpi_rank0_env() {
         timed_println!("Saving dielectric function data to {}", filename);
