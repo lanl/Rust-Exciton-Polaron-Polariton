@@ -1,18 +1,134 @@
 use super::cache::{get_dielectric_cache_filename, load_dielectric_cache, save_dielectric_cache};
+use super::response::{
+    DielectricNormalization, epsilon_and_alpha, lehmann_sum, transitions_from_cache,
+};
+use super::sheet::exciton_dipole_cross;
 use crate::{bands, timed_println_rank0};
 use matrix_ops::{
     ConvertFrom, DiagonalizationOptions, Diagonalize, HermitianConjugate, MatrixOps,
     MatrixOpsError, Norm, Sqrt, RealCutoff, BatchPolicy
 };
-use ndarray::{Array1, Array2, s};
+use ndarray::{Array1, Array2, ArrayView1, s};
 use ndarray_linalg::c64;
 use num_traits::Zero;
 use rayon::prelude::*;
-use std::f64::consts::PI;
 use std::iter::Sum;
 
 use crate::config::PPConfig;
-use crate::hamiltonian::{Boson, PPHamiltonian};
+use crate::hamiltonian::{Boson, PPBasisLayout, PPHamiltonian};
+
+pub(crate) fn pp_dipole(
+    bra: ArrayView1<'_, c64>,
+    ket: ArrayView1<'_, c64>,
+    x_ex: &Array2<c64>,
+    layout: PPBasisLayout,
+    n_ex: usize,
+    n_ph: usize,
+    n_pn: usize,
+) -> Result<c64, MatrixOpsError> {
+    let mut acc = c64::zero();
+
+    for ex_ind1 in 0..n_ex {
+        for ex_ind2 in 0..n_ex {
+            let x_element = x_ex[[ex_ind1, ex_ind2]];
+
+            for ph_idx in 0..n_ph {
+                for pn_idx in 0..n_pn {
+                    let pp_ind1 = layout.pp_index(ex_ind1, ph_idx, pn_idx, n_ex, n_ph, n_pn)?;
+                    let pp_ind2 = layout.pp_index(ex_ind2, ph_idx, pn_idx, n_ex, n_ph, n_pn)?;
+                    acc += bra[pp_ind1].conj() * ket[pp_ind2] * x_element;
+                }
+            }
+        }
+    }
+
+    Ok(acc)
+}
+
+pub(crate) fn n_ph_n_pn(pp_config: &PPConfig) -> (usize, usize) {
+    let n_ph = pp_config.q_values.len() + 1;
+    let n_pn = if pp_config.pn_coupling.abs() < f64::EPSILON {
+        1
+    } else if pp_config.pn_n_fock == 0 {
+        timed_println_rank0!(
+            "Warning: phonon coupling non-zero but pn_n_fock == 0 -> forcing n_pn = 1"
+        );
+        1
+    } else {
+        pp_config.pn_n_fock
+    };
+
+    (n_ph, n_pn)
+}
+
+pub(crate) fn select_ground_state<M, B>(
+    pp: &PPHamiltonian<M, B>,
+    vecs: &Array2<c64>,
+) -> Result<usize, MatrixOpsError>
+where
+    M: MatrixOps,
+    B: Boson<M>,
+{
+    let mut ground_state_index = 0;
+    let mut photon_character = bands::calculate_photonic_character(
+        pp,
+        &vecs.column(ground_state_index).to_owned(),
+    )?;
+
+    while photon_character > 0.1 {
+        ground_state_index += 1;
+        if ground_state_index >= vecs.ncols() {
+            return Err(MatrixOpsError::Other {
+                message: format!(
+                    "No ground state with photonic character <= 0.1 found among the {} computed eigenstates",
+                    vecs.ncols()
+                ),
+            });
+        }
+        photon_character = bands::calculate_photonic_character(
+            pp,
+            &vecs.column(ground_state_index).to_owned(),
+        )?;
+    }
+
+    Ok(ground_state_index)
+}
+
+pub(crate) fn exciton_x_rel<M, B>(pp: &PPHamiltonian<M, B>, n_rel: usize) -> Array2<f64>
+where
+    M: MatrixOps,
+    B: Boson<M>,
+{
+    let (lag_coeffs, states) = pp
+        .polariton
+        .matrix_elements
+        .get_laguerre_coeffs(n_rel);
+    let mu = pp.polariton.exciton.exciton_ham.rel_ham.mu;
+
+    Array2::from_shape_fn((n_rel, n_rel), |(r_ind1, r_ind2)| {
+        pp.polariton
+            .matrix_elements
+            .get_x(&states[r_ind1], &states[r_ind2], mu, &lag_coeffs)
+    })
+}
+
+pub(crate) fn dielectric_diagonalization_options(
+    n_eig: usize,
+    energy_cutoff: Option<f64>,
+) -> DiagonalizationOptions {
+    match energy_cutoff {
+        Some(cutoff) => DiagonalizationOptions::all_real_below(cutoff).real_cutoff(RealCutoff {
+            batch_policy: BatchPolicy::DensityEstimate {
+                initial: 500,
+                safety: 1.25,
+                min_batch: 128,
+                max_batch: 512,
+            },
+            ..RealCutoff::new(cutoff)
+        }),
+        None => DiagonalizationOptions::smallest_real(n_eig),
+    }
+}
 
 /// Result of dielectric‑function calculation including composition data.
 /// The real and imaginary parts of the dielectric function are returned as
@@ -21,6 +137,8 @@ use crate::hamiltonian::{Boson, PPHamiltonian};
 pub struct DielectricResult {
     pub real: Array1<f64>,
     pub imag: Array1<f64>,
+    pub alpha_re: Option<Array1<f64>>,
+    pub alpha_im: Option<Array1<f64>>,
     pub photonic_chars: Vec<f64>,
     pub phonon_numbers: Vec<f64>,
 }
@@ -35,6 +153,8 @@ pub fn get_dielectric_function<M, B>(
     gamma: f64,
     save_dir: &str,
     use_cached: bool,
+    norm: DielectricNormalization,
+    antiresonant: bool,
 ) -> Result<DielectricResult, MatrixOpsError>
 where
     M: MatrixOps + Diagonalize,
@@ -144,35 +264,61 @@ where
     // x_pp[n] stores |<0|x|n>|, so the numerator is x_pp[n]^2.
     let ground_energy = pp_vals[ground_state_index];
 
-    let transitions: Vec<(f64, f64)> = pp_vals
-        .iter()
-        .zip(x_pp.iter())
-        .enumerate()
-        .filter(|(idx, _)| *idx != ground_state_index)
-        .map(|(_, (&energy, &x))| (energy - ground_energy, x * x))
-        .collect();
+    let transitions = transitions_from_cache(
+        &pp_vals,
+        &x_pp,
+        ground_energy,
+        Some(ground_state_index),
+    );
 
-    let dielectric_vec: Vec<c64> = omegas
+    let f_sum: f64 = transitions
+        .iter()
+        .map(|&(delta, strength)| 2.0 * delta * strength)
+        .sum();
+    let inverse_mu = 1.0 / pp.polariton.exciton.exciton_ham.rel_ham.mu;
+    timed_println_rank0!(
+        "f_sum = {:.6e}, 1/mu = {:.6e}, ratio = {:.6e}",
+        f_sum,
+        inverse_mu,
+        f_sum / inverse_mu
+    );
+
+    let dielectric_vec: Vec<(c64, Option<c64>)> = omegas
         .as_slice()
         .expect("omegas should be contiguous")
         .par_iter()
         .map(|&omega| {
-            let result: c64 = transitions
-                .iter()
-                .map(|&(delta_e, strength)| {
-                    c64::new(strength, 0.0) / (c64::new(omega - delta_e, gamma))
-                })
-                .sum();
-
-            c64::new(1.0, 0.0) - c64::new(4.0 * PI, 0.0) * result
+            let sum = lehmann_sum(omega, gamma, &transitions, antiresonant);
+            epsilon_and_alpha(sum, norm)
         })
         .collect();
 
-    let dielectric_function = Array1::from_vec(dielectric_vec);
+    let dielectric_function = Array1::from_iter(dielectric_vec.iter().map(|(eps, _)| eps.re));
+    let dielectric_imag = Array1::from_iter(dielectric_vec.iter().map(|(eps, _)| eps.im));
+    let alpha_re = if dielectric_vec.iter().any(|(_, alpha)| alpha.is_some()) {
+        Some(Array1::from_iter(
+            dielectric_vec
+                .iter()
+                .map(|(_, alpha)| alpha.expect("normalization alpha must be present").re),
+        ))
+    } else {
+        None
+    };
+    let alpha_im = if dielectric_vec.iter().any(|(_, alpha)| alpha.is_some()) {
+        Some(Array1::from_iter(
+            dielectric_vec
+                .iter()
+                .map(|(_, alpha)| alpha.expect("normalization alpha must be present").im),
+        ))
+    } else {
+        None
+    };
 
     Ok(DielectricResult {
-        real: dielectric_function.map(|&x| x.re),
-        imag: dielectric_function.map(|&x| x.im),
+        real: dielectric_function,
+        imag: dielectric_imag,
+        alpha_re,
+        alpha_im,
         photonic_chars,
         phonon_numbers,
     })
@@ -204,80 +350,21 @@ where
     pp.polariton.matrix_elements.clear_relative_cache();
     pp.polariton.matrix_elements.clear_full_cache_maps();
 
-    // Lag Coeffs for Relative coordinates
-    let (lag_coeffs, states) = &pp
-        .polariton
-        .matrix_elements
-        .get_laguerre_coeffs(pp.polariton.exciton.n_rel);
-    let mu = pp.polariton.exciton.exciton_ham.rel_ham.mu;
-
-    // Get <0|x|n> matrix elements in the exciton basis
-
-    // Calculate the matrix elements using iterators
     let e_vecs = pp.polariton.exciton.e_vecs.as_ref().unwrap();
     let n_com = pp.polariton.exciton.exciton_ham.kappa_vectors.len();
     let n_rel = pp_config.n_rel;
     let n_ex_eig = pp_config.n_ex_eig;
+    let x_rel = exciton_x_rel(pp, n_rel);
+    let x_exc = exciton_dipole_cross(e_vecs, e_vecs, &x_rel, n_com);
 
-    let x_rel = &Array2::from_shape_fn((n_rel, n_rel), |(r_ind1, r_ind2)| {
-        pp.polariton
-            .matrix_elements
-            .get_x(&states[r_ind1], &states[r_ind2], mu, &lag_coeffs)
-    });
-
-    // timed_println_rank0!("<x> for Relative Coordinate:");
-    // println!("{}", PrettyArray2(&x_rel, 4));
-
-    // Get <x> in the Exciton basis
-    let x_exc = &Array2::from_shape_fn((n_ex_eig, n_ex_eig), |(idx1, idx2)| {
-        let vec1 = &e_vecs.column(idx1);
-        let vec2 = &e_vecs.column(idx2);
-
-        // Calculate the matrix elements using iterators
-        (0..n_rel)
-            .flat_map(|rel_ind1| {
-                (0..n_rel).flat_map(move |rel_ind2| {
-                    (0..n_com).map(move |com_ind| {
-                        let i1 = com_ind * n_rel + rel_ind1;
-                        let i2 = com_ind * n_rel + rel_ind2;
-                        let a1 = vec1[i1];
-                        let a2 = vec2[i2];
-
-                        a1.conj() * a2 * x_rel[[rel_ind1, rel_ind2]]
-                    })
-                })
-            })
-            .fold(c64::zero(), |acc, val| acc + val)
-    });
-
-    // timed_println_rank0!("|<x>| for exciton:");
-    // let x_exc_mag: Array2<f64> = x_exc.mapv(|val| val.norm());
-    // println!("{}", PrettyArray2(&x_exc_mag, 4));
-
-    // timed_println_rank0!("Exciton eigenvalues transitions");
-    // let e_vals_transition = pp.polariton.exciton.e_vals.as_ref().unwrap()
-    //     - pp.polariton.exciton.e_vals.as_ref().unwrap()[0];
-    // println!("{}", e_vals_transition);
-    
-    let diag_options = match energy_cutoff {
-        Some(cutoff) => {
-            timed_println_rank0!(
-                "Using energy cutoff of {:.6e}: computing ALL eigenvalues below it (n_eig = {} is ignored)",
-                cutoff,
-                n_eig
-            );
-            DiagonalizationOptions::all_real_below(cutoff).real_cutoff(RealCutoff {
-                batch_policy: BatchPolicy::DensityEstimate {
-                    initial: 500,
-                    safety: 1.25,
-                    min_batch: 128,
-                    max_batch: 512,
-                },
-                ..RealCutoff::new(cutoff)
-            })
-        }
-        None => DiagonalizationOptions::smallest_real(n_eig),
-    };
+    if let Some(cutoff) = energy_cutoff {
+        timed_println_rank0!(
+            "Using energy cutoff of {:.6e}: computing ALL eigenvalues below it (n_eig = {} is ignored)",
+            cutoff,
+            n_eig
+        );
+    }
+    let diag_options = dielectric_diagonalization_options(n_eig, energy_cutoff);
 
     timed_println_rank0!("Diagonalizing Hamiltonian of size {}", h_pp.shape().0);
     let (pp_vals, pp_vecs) = h_pp
@@ -340,24 +427,12 @@ where
         });
     }
 
-    let n_ph = pp_config.q_values.len() + 1; // photon modes (+ the q=0 mode)
-    let n_pn = if pp_config.pn_coupling.abs() < f64::EPSILON {
-        1
-    } else if pp_config.pn_n_fock == 0 {
-        timed_println_rank0!(
-            "Warning: phonon coupling non-zero but pn_n_fock == 0 -> forcing n_pn = 1"
-        );
-        1
-    } else {
-        pp_config.pn_n_fock
-    };
-
-    let mut vec0 = pp_vecs.column(0);
+    let (n_ph, n_pn) = n_ph_n_pn(pp_config);
     let expected_len = pp.layout.pp_dim(n_ex_eig, n_ph, n_pn)?;
-    if vec0.len() != expected_len {
+    if pp_vecs.nrows() != expected_len {
         panic!(
-            "Inconsistent basis dimensions: vec0.len() = {}, expected {} (n_ex_eig={} * n_ph={} * n_pn={})",
-            vec0.len(),
+            "Inconsistent basis dimensions: pp_vecs.nrows() = {}, expected {} (n_ex_eig={} * n_ph={} * n_pn={})",
+            pp_vecs.nrows(),
             expected_len,
             n_ex_eig,
             n_ph,
@@ -365,48 +440,25 @@ where
         );
     }
 
-    let mut photon_character = bands::calculate_photonic_character(pp, &vec0.to_owned())?;
-    let mut ground_state_index = 0;
-
-    while photon_character > 0.1 {
-        ground_state_index += 1;
-        if ground_state_index >= n_found {
-            panic!(
-                "No ground state with photonic character <= 0.1 found among the {} computed eigenstates",
-                n_found
-            );
-        }
-        vec0 = pp_vecs.column(ground_state_index);
-        photon_character = bands::calculate_photonic_character(pp, &vec0.to_owned())?;
-    }
+    let ground_state_index = select_ground_state(pp, &pp_vecs)?;
+    let vec0 = pp_vecs.column(ground_state_index);
 
     let mut x_pp_values = Vec::with_capacity(n_found);
 
     for idx in 0..n_found {
         let vec1 = pp_vecs.column(idx);
-        let mut acc = c64::zero();
-
-        for ex_ind1 in 0..n_ex_eig {
-            for ex_ind2 in 0..n_ex_eig {
-                let x_element = x_exc[[ex_ind1, ex_ind2]];
-
-                for ph_idx in 0..n_ph {
-                    for pn_idx in 0..n_pn {
-                        let pp_ind1 = pp
-                            .layout
-                            .pp_index(ex_ind1, ph_idx, pn_idx, n_ex_eig, n_ph, n_pn)?;
-
-                        let pp_ind2 = pp
-                            .layout
-                            .pp_index(ex_ind2, ph_idx, pn_idx, n_ex_eig, n_ph, n_pn)?;
-
-                        acc += vec0[pp_ind1].conj() * vec1[pp_ind2] * x_element;
-                    }
-                }
-            }
-        }
-
-        x_pp_values.push(acc.norm());
+        x_pp_values.push(
+            pp_dipole(
+                vec0,
+                vec1,
+                &x_exc,
+                pp.layout,
+                n_ex_eig,
+                n_ph,
+                n_pn,
+            )?
+            .norm(),
+        );
     }
 
     let x_pp = Array1::from_vec(x_pp_values);

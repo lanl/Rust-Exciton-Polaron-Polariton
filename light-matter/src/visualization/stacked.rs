@@ -15,6 +15,7 @@
 
 use crate::config::PPConfig;
 use crate::dielectric;
+use crate::dielectric::{DielectricNormalization, epsilon_and_alpha, lehmann_sum};
 use crate::hamiltonian::{PPHamiltonian, SingExBosons};
 use crate::utils::eig_selection_tag;
 use crate::modes::types::Polarization;
@@ -26,7 +27,6 @@ use matrix_ops::ComposedOperator;
 use ndarray::Array1;
 use ndarray_linalg::c64;
 use plotters::prelude::*;
-use std::f64::consts::PI;
 
 /// Compute the weighted‑average colour fields for the dielectric function.
 ///
@@ -101,6 +101,8 @@ pub fn plot_dielectric_stacked_photonic(
     omega_range: Option<(f64, f64)>,
     q_values: Option<&Vec<Vector3D>>,
     zero_coupling_imag: Option<&Array1<f64>>,
+    norm: DielectricNormalization,
+    antiresonant: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Compute the imaginary part of the dielectric function at each frequency
     let ground_state_energy = pp_vals[ground_state_index];
@@ -146,14 +148,15 @@ pub fn plot_dielectric_stacked_photonic(
     }
 
     for (w_idx, &omega) in omegas.iter().enumerate() {
-        let mut eps_contrib = c64::new(0.0, 0.0);
         let mut weight_sum = 0.0;
         let mut photonic_sum = 0.0;
 
         for i in 0..pp_vals.len() {
+            if i == ground_state_index {
+                continue;
+            }
             let delta_e = pp_vals[i] - ground_state_energy;
             let contrib = x_pp[i] * x_pp[i] / (omega - delta_e + c64::i() * gamma);
-            eps_contrib += contrib;
 
             // Weight by the absolute value of the imaginary part of the contribution (absorption)
             let weight = contrib.im.abs();
@@ -161,7 +164,20 @@ pub fn plot_dielectric_stacked_photonic(
             photonic_sum += weight * photonic_chars[i];
         }
 
-        im_eps[w_idx] = (1.0 - 4.0 * PI * eps_contrib).im.abs();
+        let transitions: Vec<(f64, f64)> = (0..pp_vals.len())
+            .filter(|&i| i != ground_state_index)
+            .map(|i| {
+                let delta_e = pp_vals[i] - ground_state_energy;
+                (delta_e, x_pp[i] * x_pp[i])
+            })
+            .collect();
+        im_eps[w_idx] = epsilon_and_alpha(
+            lehmann_sum(omega, gamma, &transitions, antiresonant),
+            norm,
+        )
+        .0
+        .im
+        .abs();
 
         if weight_sum > 1e-12 {
             photonic_weighted[w_idx] = photonic_sum / weight_sum;
@@ -304,6 +320,8 @@ pub fn plot_dielectric_stacked_phonon(
     omega_range: Option<(f64, f64)>,
     q_values: Option<&Vec<Vector3D>>,
     zero_coupling_imag: Option<&Array1<f64>>,
+    norm: DielectricNormalization,
+    antiresonant: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Compute the imaginary part and contributions from each Fock state
     let ground_state_energy = pp_vals[ground_state_index];
@@ -314,7 +332,6 @@ pub fn plot_dielectric_stacked_phonon(
         vec![Array1::<f64>::zeros(omegas.len()); n_fock + 1];
 
     for (w_idx, &omega) in omegas.iter().enumerate() {
-        let mut eps_contrib = c64::new(0.0, 0.0);
         let mut total_weight = 0.0;
         let mut fock_weights: Vec<f64> = vec![0.0; n_fock + 1];
 
@@ -324,7 +341,6 @@ pub fn plot_dielectric_stacked_phonon(
             }
             let delta_e = pp_vals[i] - ground_state_energy;
             let contrib = x_pp[i] * x_pp[i] / (omega - delta_e + c64::i() * gamma);
-            eps_contrib += contrib;
 
             // Weight by the absolute value of the imaginary part of the contribution (absorption)
             let weight = contrib.im.abs();
@@ -336,7 +352,20 @@ pub fn plot_dielectric_stacked_phonon(
             fock_weights[fock_idx] += weight;
         }
 
-        im_eps[w_idx] = (1.0 - 4.0 * PI * eps_contrib).im.abs();
+        let transitions: Vec<(f64, f64)> = (0..pp_vals.len())
+            .filter(|&i| i != ground_state_index)
+            .map(|i| {
+                let delta_e = pp_vals[i] - ground_state_energy;
+                (delta_e, x_pp[i] * x_pp[i])
+            })
+            .collect();
+        im_eps[w_idx] = epsilon_and_alpha(
+            lehmann_sum(omega, gamma, &transitions, antiresonant),
+            norm,
+        )
+        .0
+        .im
+        .abs();
 
         // Normalize the Fock contributions to sum to im_eps[w_idx]
         if total_weight > 1e-12 {
@@ -492,6 +521,9 @@ pub fn generate_stacked_plots(
     save_dir: &str,
     zoomed: bool,
     omega_range: Option<(f64, f64)>,
+    norm: DielectricNormalization,
+    antiresonant: bool,
+    long_wavelength: bool,
 ) {
     if !sim_common::mpi::is_mpi_rank0_env() {
         return;
@@ -504,7 +536,7 @@ pub fn generate_stacked_plots(
     // Load zero-coupling dielectric function for overlay (use first q_values set)
     let zero_coupling_imag = {
         let zero_couplings = vec![0.0; all_q_values[0].len()];
-        let pp_config_zero = PPConfig::new_with_effective_modes_and_polarizations(
+        let mut pp_config_zero = PPConfig::new_with_effective_modes_and_polarizations(
             e_config.clone(),
             n_rel,
             n_ex_eig,
@@ -522,6 +554,7 @@ pub fn generate_stacked_plots(
             omega_max,
             reflectivities[0],
         );
+        pp_config_zero.include_photon_recoil = !long_wavelength;
 
         let pp_zero: PPHamiltonian<ComposedOperator<c64>, SingExBosons<ComposedOperator<c64>>> =
             PPHamiltonian::from_config(&pp_config_zero);
@@ -541,19 +574,20 @@ pub fn generate_stacked_plots(
                 let mut im_eps_zero = Array1::<f64>::zeros(omegas.len());
 
                 for (w_idx, &omega) in omegas.iter().enumerate() {
-                    let mut eps_contrib = c64::new(0.0, 0.0);
-
-                    for i in 0..pp_vals_zero.len() {
-                        if i == gs_idx_zero {
-                            continue;
-                        }
-                        let delta_e = pp_vals_zero[i] - ground_state_energy;
-                        let contrib =
-                            x_pp_zero[i] * x_pp_zero[i] / (omega - delta_e + c64::i() * gamma);
-                        eps_contrib += contrib;
-                    }
-
-                    im_eps_zero[w_idx] = (1.0 - 4.0 * PI * eps_contrib).im.abs();
+                    let transitions: Vec<(f64, f64)> = (0..pp_vals_zero.len())
+                        .filter(|&i| i != gs_idx_zero)
+                        .map(|i| {
+                            let delta_e = pp_vals_zero[i] - ground_state_energy;
+                            (delta_e, x_pp_zero[i] * x_pp_zero[i])
+                        })
+                        .collect();
+                    im_eps_zero[w_idx] = epsilon_and_alpha(
+                        lehmann_sum(omega, gamma, &transitions, antiresonant),
+                        norm,
+                    )
+                    .0
+                    .im
+                    .abs();
                 }
 
                 Some(im_eps_zero)
@@ -579,7 +613,7 @@ pub fn generate_stacked_plots(
         let reflectivity = reflectivities[idx];
 
         // Create PP config for this coupling with effective mode parameters
-        let pp_config_plot = PPConfig::new_with_effective_modes_and_polarizations(
+        let mut pp_config_plot = PPConfig::new_with_effective_modes_and_polarizations(
             e_config.clone(),
             n_rel,
             n_ex_eig,
@@ -597,6 +631,7 @@ pub fn generate_stacked_plots(
             omega_max,
             reflectivity,
         );
+        pp_config_plot.include_photon_recoil = !long_wavelength;
 
         let pp_plot: PPHamiltonian<ComposedOperator<c64>, SingExBosons<ComposedOperator<c64>>> =
             PPHamiltonian::from_config(&pp_config_plot);
@@ -641,6 +676,8 @@ pub fn generate_stacked_plots(
                     omega_range,
                     Some(q_values),
                     zero_coupling_imag.as_ref(),
+                    norm,
+                    antiresonant,
                 ) {
                     Ok(_) => timed_println!(
                         "Successfully plotted photonic stacked area for coupling {:.6}",
@@ -678,6 +715,8 @@ pub fn generate_stacked_plots(
                         omega_range,
                         Some(q_values),
                         zero_coupling_imag.as_ref(),
+                        norm,
+                        antiresonant,
                     ) {
                         Ok(_) => timed_println!(
                             "Successfully plotted phonon stacked area for coupling {:.6}",
