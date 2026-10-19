@@ -106,6 +106,12 @@ pub fn plot_dielectric_stacked_photonic(
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Compute the imaginary part of the dielectric function at each frequency
     let ground_state_energy = pp_vals[ground_state_index];
+    let transitions = dielectric::transitions_from_cache(
+        pp_vals,
+        x_pp,
+        ground_state_energy,
+        Some(ground_state_index),
+    );
     let mut im_eps = Array1::<f64>::zeros(omegas.len());
     let mut photonic_weighted = Array1::<f64>::zeros(omegas.len());
 
@@ -164,13 +170,6 @@ pub fn plot_dielectric_stacked_photonic(
             photonic_sum += weight * photonic_chars[i];
         }
 
-        let transitions: Vec<(f64, f64)> = (0..pp_vals.len())
-            .filter(|&i| i != ground_state_index)
-            .map(|i| {
-                let delta_e = pp_vals[i] - ground_state_energy;
-                (delta_e, x_pp[i] * x_pp[i])
-            })
-            .collect();
         im_eps[w_idx] = epsilon_and_alpha(
             lehmann_sum(omega, gamma, &transitions, antiresonant),
             norm,
@@ -325,6 +324,12 @@ pub fn plot_dielectric_stacked_phonon(
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Compute the imaginary part and contributions from each Fock state
     let ground_state_energy = pp_vals[ground_state_index];
+    let transitions = dielectric::transitions_from_cache(
+        pp_vals,
+        x_pp,
+        ground_state_energy,
+        Some(ground_state_index),
+    );
     let mut im_eps = Array1::<f64>::zeros(omegas.len());
 
     // For each Fock state, compute its weighted contribution at each frequency
@@ -352,13 +357,6 @@ pub fn plot_dielectric_stacked_phonon(
             fock_weights[fock_idx] += weight;
         }
 
-        let transitions: Vec<(f64, f64)> = (0..pp_vals.len())
-            .filter(|&i| i != ground_state_index)
-            .map(|i| {
-                let delta_e = pp_vals[i] - ground_state_energy;
-                (delta_e, x_pp[i] * x_pp[i])
-            })
-            .collect();
         im_eps[w_idx] = epsilon_and_alpha(
             lehmann_sum(omega, gamma, &transitions, antiresonant),
             norm,
@@ -571,18 +569,17 @@ pub fn generate_stacked_plots(
             Ok((pp_vals_zero, x_pp_zero, _, _, gs_idx_zero)) => {
                 // Compute Im[ε] for zero coupling
                 let ground_state_energy = pp_vals_zero[gs_idx_zero];
+                let transitions_zero = dielectric::transitions_from_cache(
+                    &pp_vals_zero,
+                    &x_pp_zero,
+                    ground_state_energy,
+                    Some(gs_idx_zero),
+                );
                 let mut im_eps_zero = Array1::<f64>::zeros(omegas.len());
 
                 for (w_idx, &omega) in omegas.iter().enumerate() {
-                    let transitions: Vec<(f64, f64)> = (0..pp_vals_zero.len())
-                        .filter(|&i| i != gs_idx_zero)
-                        .map(|i| {
-                            let delta_e = pp_vals_zero[i] - ground_state_energy;
-                            (delta_e, x_pp_zero[i] * x_pp_zero[i])
-                        })
-                        .collect();
                     im_eps_zero[w_idx] = epsilon_and_alpha(
-                        lehmann_sum(omega, gamma, &transitions, antiresonant),
+                        lehmann_sum(omega, gamma, &transitions_zero, antiresonant),
                         norm,
                     )
                     .0
