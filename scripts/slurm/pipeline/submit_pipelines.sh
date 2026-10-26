@@ -165,7 +165,7 @@ submit_band() {
 }
 
 submit_dielectric() {
-    echo "Submitting dielectric pipeline with${N_REFLECTIVITIES} reflectivity jobs"
+    echo "Submitting dielectric pipeline with ${N_REFLECTIVITIES} reflectivity jobs"
 
     local diel_mat_job
     local diel_calc_job

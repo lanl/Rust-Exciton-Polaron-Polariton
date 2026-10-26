@@ -3,11 +3,11 @@
 #SBATCH --output=logs/diel_matcalc/diel_matcalc_%A_%a.out
 #SBATCH --error=logs/diel_matcalc/diel_matcalc_%A_%a.err
 #SBATCH --partition=standard
-#SBATCH --time=04:00:00
+#SBATCH --time=06:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=128
-#SBATCH --mem=400G
+#SBATCH --mem=500000
 
 set -euo pipefail
 

@@ -5,8 +5,8 @@
 #SBATCH --partition=standard
 #SBATCH --time=5-00:00:00
 #SBATCH --nodes=4
-#SBATCH --ntasks-per-node=8
-#SBATCH --cpus-per-task=32
+#SBATCH --ntasks-per-node=4
+#SBATCH --cpus-per-task=64
 #SBATCH --mem=500000
 #SBATCH --qos=long
 

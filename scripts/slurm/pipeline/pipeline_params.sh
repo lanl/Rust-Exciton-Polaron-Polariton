@@ -101,27 +101,52 @@ export BAND_METHOD="linop"
 # Used by BOTH dielectric matcalc and dielectric solve.
 # Sheet2D runs should use --output-dir dielectric_scan/sheet in a copied params file.
 # -------------------------------------------------------------------
+# DIELECTRIC_ARGS=(
+#   --photon-modes effective
+#   --n-rel 16
+#   --n-ex-eig 16
+#   --energy-cutoff 0.04
+#   --omega-0 0.16
+#   --omega-max 0.26
+#   --d-omega 2e-4
+#   --n-modes 45
+#   --reflectivities "${REFLECTIVITIES_CSV}"
+#   --photon-coupling-scale 250.0
+#   --pn-coupling 1e-3
+#   --pn-omega 0.0025
+#   --pn-k-x 0.05
+#   --pn-n-fock 1
+#   --omega-min-scan 0.0
+#   --omega-max-scan 0.3
+#   --n-omega-points 100000
+#   --output-dir dielectric_scan/slab
+#   --dielectric-method slab
+#   --exciton-density 1e-5
+#   --slab-thickness-bohr 10
+#   --eps-monitor
+# )
+
 DIELECTRIC_ARGS=(
   --photon-modes effective
   --n-rel 16
   --n-ex-eig 16
-  --energy-cutoff 0.023
+  --energy-cutoff 0.04
   --omega-0 0.16
   --omega-max 0.21
   --d-omega 2e-4
-  --n-modes 23
+  --n-modes 45
   --reflectivities "${REFLECTIVITIES_CSV}"
   --photon-coupling-scale 250.0
   --pn-coupling 1e-3
   --pn-omega 0.0025
   --pn-k-x 0.05
-  --pn-n-fock 6
+  --pn-n-fock 4
   --omega-min-scan 0.0
   --omega-max-scan 0.3
   --n-omega-points 100000
-  --output-dir dielectric_scan/slab
-  --dielectric-method slab
-  --exciton-density 2.8e-5
-  --slab-thickness-bohr 11.6
+  --output-dir dielectric_scan/sheet
+  --dielectric-method sheet2d
+  --exciton-density 1e-5
+  --probe-q-in-dq 2
   --eps-monitor
 )

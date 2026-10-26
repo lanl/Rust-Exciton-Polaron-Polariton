@@ -54,7 +54,7 @@ fn run_dielectric_scan(e_config: ExcitonConfig, args: cli::DielectricArgs) -> Re
         (Some(min), Some(max)) => Some((min, max)),
         _ => {
             if !zoomed {
-                Some((0.152, 0.207))
+                Some((0.152, 0.21))
             } else {
                 Some((0.16, 0.17))
             }
@@ -207,20 +207,21 @@ fn run_dielectric_scan(e_config: ExcitonConfig, args: cli::DielectricArgs) -> Re
 
     // Output plot filenames.
     let suffix = if zoomed { "_zoomed.svg" } else { ".svg" };
+    let lwa_tag = if args.long_wavelength { "_lwa" } else { "" };
 
     let real_filename = format!(
-        "{}/dielectric_real_a0{}_V0{}_nrel{}_nmodes{}_pncoup{}_npn{}{}",
-        save_dir, e_config.a0, e_config.v0, n_rel, n_modes, pn_coupling, pn_n_fock, suffix,
+        "{}/dielectric_real_a0{}_V0{}_nrel{}_nmodes{}_pncoup{}_npn{}{}{}",
+        save_dir, e_config.a0, e_config.v0, n_rel, n_modes, pn_coupling, pn_n_fock, lwa_tag, suffix,
     );
 
     let imag_filename = format!(
-        "{}/dielectric_imag_a0{}_V0{}_nrel{}_nmodes{}_pncoup{}_npn{}{}",
-        save_dir, e_config.a0, e_config.v0, n_rel, n_modes, pn_coupling, pn_n_fock, suffix,
+        "{}/dielectric_imag_a0{}_V0{}_nrel{}_nmodes{}_pncoup{}_npn{}{}{}",
+        save_dir, e_config.a0, e_config.v0, n_rel, n_modes, pn_coupling, pn_n_fock, lwa_tag, suffix,
     );
 
     let both_filename = format!(
-        "{}/dielectric_both_a0{}_V0{}_nrel{}_nmodes{}_pncoup{}_npn{}{}",
-        save_dir, e_config.a0, e_config.v0, n_rel, n_modes, pn_coupling, pn_n_fock, suffix,
+        "{}/dielectric_both_a0{}_V0{}_nrel{}_nmodes{}_pncoup{}_npn{}{}{}",
+        save_dir, e_config.a0, e_config.v0, n_rel, n_modes, pn_coupling, pn_n_fock, lwa_tag, suffix,
     );
 
     if !calculate {
