@@ -51,6 +51,7 @@ all_sources*
 
 # generated source dumps
 /all_sources*.md
+/.rust-skills/
 
 # editor/system
 .DS_Store

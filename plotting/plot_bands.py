@@ -29,8 +29,18 @@ from band_data import build_path_axis, load_band_inputs
 ColorKind = Literal["photonic", "n-expectation", "generic"]
 
 
-def configure_matplotlib() -> None:
+def theme_colors(dark_mode: bool) -> tuple[str, str]:
+    """Return the background and foreground colors for the selected theme."""
+    if dark_mode:
+        return "black", "#f2f2f2"
+
+    return "white", "black"
+
+
+def configure_matplotlib(dark_mode: bool = False) -> None:
     """Set publication-oriented Matplotlib defaults."""
+    background_color, foreground_color = theme_colors(dark_mode)
+
     mpl.rcParams.update(
         {
             "font.family": "sans-serif",
@@ -45,7 +55,15 @@ def configure_matplotlib() -> None:
             "axes.labelsize": 8.5,
             "axes.titlesize": 9.0,
             "axes.linewidth": 0.7,
+            "axes.facecolor": background_color,
+            "axes.edgecolor": foreground_color,
+            "axes.labelcolor": foreground_color,
             "axes.unicode_minus": True,
+            "figure.facecolor": background_color,
+            "savefig.facecolor": background_color,
+            "text.color": foreground_color,
+            "xtick.color": foreground_color,
+            "ytick.color": foreground_color,
             "xtick.labelsize": 7.5,
             "ytick.labelsize": 7.5,
             "xtick.major.size": 3.0,
@@ -244,12 +262,13 @@ def add_symmetry_guides(
     ax: mpl.axes.Axes,
     positions: np.ndarray,
     labels: list[str],
+    color: str = "0.82",
 ) -> None:
     """Add high-symmetry ticks and unobtrusive vertical guides."""
     for position in positions:
         ax.axvline(
             position,
-            color="0.82",
+            color=color,
             linewidth=0.55,
             zorder=0,
         )
@@ -288,7 +307,14 @@ def plot_bands(args: argparse.Namespace) -> None:
         mode=args.path_mode,
     )
 
-    configure_matplotlib()
+    configure_matplotlib(args.dark_mode)
+    background_color, foreground_color = theme_colors(args.dark_mode)
+    line_color = args.line_color or (
+        "#888888" if args.dark_mode else "0.25"
+    )
+    uncolored_line_color = args.uncolored_line_color or (
+        foreground_color if args.dark_mode else "#222222"
+    )
 
     if args.color_kind == "auto":
         color_kind = infer_color_kind(
@@ -313,6 +339,8 @@ def plot_bands(args: argparse.Namespace) -> None:
         figsize=(args.width, args.height),
         constrained_layout=True,
     )
+    fig.patch.set_facecolor(background_color)
+    ax.set_facecolor(background_color)
 
     rasterize_dense_layers = not args.vector_points
 
@@ -327,7 +355,7 @@ def plot_bands(args: argparse.Namespace) -> None:
         if segments.size:
             line_collection = LineCollection(
                 segments,
-                colors=args.line_color,
+                colors=line_color,
                 linewidths=args.line_width,
                 alpha=args.line_alpha,
                 zorder=1,
@@ -377,7 +405,10 @@ def plot_bands(args: argparse.Namespace) -> None:
             vmax=color_max,
             clip=True,
         )
-        cmap = mpl.colormaps[args.cmap]
+        cmap_name = args.cmap or (
+            "bwr" if args.dark_mode else "Spectral_r"
+        )
+        cmap = mpl.colormaps[cmap_name]
 
         normalized = norm(color_points)
         order = rendering_order(normalized, emphasis)
@@ -427,10 +458,14 @@ def plot_bands(args: argparse.Namespace) -> None:
             args.colorbar_label
             or default_colorbar_label(color_kind)
         )
+        colorbar.ax.set_facecolor(background_color)
+        colorbar.ax.yaxis.label.set_color(foreground_color)
         colorbar.outline.set_linewidth(0.6)
+        colorbar.outline.set_edgecolor(foreground_color)
         colorbar.ax.tick_params(
             width=0.6,
             length=2.5,
+            colors=foreground_color,
         )
 
         if color_kind == "photonic" and (
@@ -447,7 +482,7 @@ def plot_bands(args: argparse.Namespace) -> None:
             ax.plot(
                 x,
                 energies[:, band_index],
-                color=args.uncolored_line_color,
+                color=uncolored_line_color,
                 linewidth=args.uncolored_line_width,
                 zorder=2,
                 rasterized=rasterize_dense_layers,
@@ -458,6 +493,7 @@ def plot_bands(args: argparse.Namespace) -> None:
             ax,
             symmetry_positions,
             symmetry_labels,
+            color="#4c4c4c" if args.dark_mode else "0.82",
         )
 
     ax.set_xlim(float(x[0]), float(x[-1]))
@@ -495,16 +531,19 @@ def plot_bands(args: argparse.Namespace) -> None:
     ax.set_ylim(energy_min, energy_max)
 
     if args.xlabel is not None:
-        ax.set_xlabel(args.xlabel)
+        ax.set_xlabel(args.xlabel, color=foreground_color)
     elif symmetry_positions is None:
-        ax.set_xlabel(r"Wave vector")
+        ax.set_xlabel(r"Wave vector", color=foreground_color)
     else:
-        ax.set_xlabel("")
+        ax.set_xlabel("", color=foreground_color)
 
-    ax.set_ylabel(args.ylabel)
+    ax.set_ylabel(args.ylabel, color=foreground_color)
 
     if args.title:
-        ax.set_title(args.title, pad=5.0)
+        ax.set_title(args.title, pad=5.0, color=foreground_color)
+
+    for spine in ax.spines.values():
+        spine.set_color(foreground_color)
 
     ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
@@ -513,6 +552,7 @@ def plot_bands(args: argparse.Namespace) -> None:
         which="both",
         top=False,
         right=False,
+        colors=foreground_color,
     )
 
     if args.y_minor_ticks:
@@ -668,8 +708,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument(
         "--cmap",
-        default="Spectral_r",
-        help="Matplotlib colormap name.",
+        default=None,
+        help=(
+            "Matplotlib colormap name. Defaults to Spectral_r in light "
+            "mode and bwr in dark mode."
+        ),
     )
 
     parser.add_argument(
@@ -737,8 +780,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument(
         "--line-color",
-        default="0.25",
-        help="Color of faint connectivity lines.",
+        default=None,
+        help=(
+            "Color of faint connectivity lines. Defaults to dark gray in "
+            "light mode and light gray in dark mode."
+        ),
     )
 
     parser.add_argument(
@@ -763,8 +809,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument(
         "--uncolored-line-color",
-        default="#222222",
-        help="Band color for an uncolored plot.",
+        default=None,
+        help=(
+            "Band color for an uncolored plot. Defaults to near-black in "
+            "light mode and near-white in dark mode."
+        ),
     )
 
     parser.add_argument(
@@ -838,6 +887,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--transparent",
         action="store_true",
         help="Save with a transparent figure background.",
+    )
+
+    parser.add_argument(
+        "--dark-mode",
+        "--dark",
+        dest="dark_mode",
+        action="store_true",
+        help="Use a black figure and axes background with light annotations.",
     )
 
     parser.add_argument(
