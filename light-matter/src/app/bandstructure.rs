@@ -165,6 +165,13 @@ where
         }
         timed_println_rank0!("Calculating color-coded band structure...");
 
+        let checkpoint = args.ckpt.to_checkpoint();
+        if checkpoint.is_some() && energy_cutoff.is_none() {
+            timed_println_rank0!(
+                "Warning: --checkpoint only applies to --energy-cutoff solves; ignoring"
+            );
+        }
+
         (k_points_color, eigvals_list_color, photonic_character_list) =
             run_bandstructure_parallel_mode(
                 &mut pp,
@@ -178,6 +185,7 @@ where
                 zoomed,
                 chunk_index,
                 n_chunks,
+                checkpoint.as_ref(),
             )?;
 
         timed_println!(
@@ -239,6 +247,7 @@ fn run_bandstructure_parallel_mode<M, B>(
     zoomed: bool,
     chunk_index: usize,
     n_chunks: usize,
+    checkpoint: Option<&crate::checkpoint::DiagCheckpoint>,
 ) -> Result<(Vec<Vec<f64>>, Vec<Array1<f64>>, Vec<Vec<f64>>)>
 where
     M: MatrixOps + matrix_ops::Diagonalize,
@@ -250,40 +259,17 @@ where
 {
     match parallel {
         BandParallelModeArg::Serial => bands::calculate_color_band_structure_distributed_chunk(
-            pp,
-            n_k_points,
-            n_eig,
-            energy_cutoff,
-            sym_points,
-            pp_config,
-            use_cached,
-            zoomed,
-            0,
-            1,
+            pp, n_k_points, n_eig, energy_cutoff, sym_points, pp_config, use_cached, zoomed,
+            0, 1, checkpoint,
         ),
-
         BandParallelModeArg::DistributedChunks => {
             bands::calculate_color_band_structure_distributed_chunk(
-                pp,
-                n_k_points,
-                n_eig,
-                energy_cutoff,
-                sym_points,
-                pp_config,
-                use_cached,
-                zoomed,
-                chunk_index,
-                n_chunks,
+                pp, n_k_points, n_eig, energy_cutoff, sym_points, pp_config, use_cached, zoomed,
+                chunk_index, n_chunks, checkpoint,
             )
         }
-
         BandParallelModeArg::GatherChunks => bands::gather_color_band_structure_chunks(
-            n_k_points,
-            n_eig,
-            energy_cutoff,
-            pp_config,
-            zoomed,
-            n_chunks,
+            n_k_points, n_eig, energy_cutoff, pp_config, zoomed, n_chunks,
         ),
     }
 }

@@ -1296,6 +1296,8 @@ dependencies = [
  "num-complex 0.4.6",
  "num-traits",
  "rayon",
+ "serde",
+ "serde_json",
  "slepc-rs",
  "sprs",
 ]

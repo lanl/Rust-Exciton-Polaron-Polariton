@@ -10,6 +10,7 @@ use std::path::Path;
 
 use crate::{timed_println, timed_println_rank0};
 use crate::utils::eig_selection_tag;
+use crate::checkpoint::DiagCheckpoint;
 
 use crate::config::PPConfig;
 use crate::hamiltonian::{Boson, PPBasisLayout, PPHamiltonian};
@@ -226,6 +227,7 @@ pub fn calculate_color_band_structure_distributed_chunk<M, B>(
     zoomed: bool,
     chunk_index: usize,
     n_chunks: usize,
+    checkpoint: Option<&DiagCheckpoint>,
 ) -> Result<(Vec<Vec<f64>>, Vec<Array1<f64>>, Vec<Vec<f64>>), MatrixOpsError>
 where
     M: MatrixOps + Diagonalize,
@@ -236,16 +238,13 @@ where
     let world_size = sim_common::mpi::mpi_size_env_or_one();
     let is_root = rank == 0;
 
-    // Warm-starting from the previous K point requires that every rank holds
-    // the previous eigenvectors (setting the initial space is collective).
-    // In cutoff mode eigenvectors live on rank 0 only, so it is disabled.
     let warm_start = energy_cutoff.is_none();
+    let ckpt = checkpoint.zip(energy_cutoff);
 
     std::fs::create_dir_all(BAND_SAVE_DIR).ok();
 
     let k_points = generate_band_k_points(n_k_points, sym_points, pp_config.e_config.a0, zoomed);
     let total_k_points = k_points.len();
-
     let (start_idx, end_idx) = sim_common::mpi::chunk_bounds(total_k_points, chunk_index, n_chunks);
 
     let chunk_filename = color_band_chunk_filename(
@@ -272,11 +271,15 @@ where
     match energy_cutoff {
         Some(cutoff) => timed_println_rank0!(
             "Eigenstate selection: ALL states with E <= {:.6e} (n_eig = {} used only as batch hint); \
-                eigenvectors on rank 0 only, warm start disabled",
+             eigenvectors on rank 0 only, warm start disabled, checkpoint = {}",
             cutoff,
+            n_eig,
+            ckpt.is_some()
+        ),
+        None => timed_println_rank0!(
+            "Eigenstate selection: lowest {} states (warm start enabled)",
             n_eig
         ),
-        None => timed_println_rank0!("Eigenstate selection: lowest {} states (warm start enabled)", n_eig),
     }
 
     if use_cached && Path::new(&chunk_filename).exists() {
@@ -296,7 +299,6 @@ where
     let mut chunk_k_points = Vec::new();
     let mut chunk_eigvals = Vec::new();
     let mut chunk_photonic = Vec::new();
-
     let mut prev_eigvecs: Option<Array2<c64>> = None;
 
     for global_idx in start_idx..end_idx {
@@ -311,7 +313,14 @@ where
             k,
         );
 
-        // ---- Collective part: every rank must execute this identically ----
+        // Per-K checkpoint config. Must be prepared BEFORE build_pp_hamiltonian,
+        // which recomputes the exciton basis when K changes.
+        let ckpt_cfg = ckpt.map(|(c, cut)| {
+            let mut cfg_k = pp_config.clone();
+            cfg_k.e_config.k = k.clone();
+            c.prepare(pp, &cfg_k, &format!("band_k{global_idx}"), cut)
+        });
+
         let (eigvals, eigvecs) = {
             let h_pp = pp.build_pp_hamiltonian(Some(k.clone()))?;
 
@@ -319,20 +328,19 @@ where
             pp.polariton.matrix_elements.clear_full_cache_maps();
 
             let mut options = band_diagonalization_options(n_eig, energy_cutoff);
-
             if energy_cutoff.is_some() {
                 options = options.eigenvectors_rank0_only();
             }
-
+            if let Some(cfg) = ckpt_cfg {
+                options = options.checkpoint(cfg);
+            }
             options.initial_guess = if warm_start { prev_eigvecs.take() } else { None };
 
-            let result = h_pp.diagonalize(options)?;
-            result.into_arrays_hermitian()
+            h_pp.diagonalize(options)?.into_arrays_hermitian()
         };
 
         let n_returned = eigvals.len();
 
-        // ---- Non-root ranks: nothing is stored, eigenvectors may be empty ----
         if !is_root {
             if warm_start {
                 prev_eigvecs = (eigvecs.ncols() == n_returned && n_returned > 0).then_some(eigvecs);
@@ -340,7 +348,6 @@ where
             continue;
         }
 
-        // ---- Rank 0: post-processing ----
         if eigvecs.ncols() != n_returned {
             return Err(MatrixOpsError::DimensionMismatch {
                 expected: n_returned,
@@ -356,8 +363,6 @@ where
             });
         }
 
-        // Keep finite eigenvalues (and, with a cutoff, only those <= cutoff),
-        // sorted ascending so "band index" means the same thing at every K.
         let mut order: Vec<usize> = (0..n_returned)
             .filter(|&i| {
                 let e = eigvals[i];
@@ -368,7 +373,6 @@ where
 
         let mut kept_eigvals = Vec::with_capacity(order.len());
         let mut photonic_character = Vec::with_capacity(order.len());
-
         for &i in &order {
             kept_eigvals.push(eigvals[i]);
             photonic_character.push(calculate_photonic_character(
@@ -420,6 +424,11 @@ where
             })?;
 
         timed_println!("Saved band chunk to {}", chunk_filename);
+
+        // Chunk is on disk: per-K eigenvector checkpoints can go.
+        if let Some(c) = checkpoint {
+            c.finish();
+        }
 
         Ok((chunk_k_points, chunk_eigvals, chunk_photonic))
     } else {

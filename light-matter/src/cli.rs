@@ -208,6 +208,9 @@ pub struct BandstructureArgs {
     /// (overrides --n-eig). Also used as the upper y-limit of the band plot.
     #[arg(long, allow_negative_numbers = true)]
     pub energy_cutoff: Option<f64>,
+
+    #[command(flatten)]
+    pub ckpt: CheckpointArgs,
 }
 
 #[derive(Debug, Clone, Parser)]
@@ -350,6 +353,9 @@ pub struct DielectricArgs {
     /// When set, --n-eig is ignored for the dielectric diagonalization.
     #[arg(long)]
     pub energy_cutoff: Option<f64>,
+
+    #[command(flatten)]
+    pub ckpt: CheckpointArgs,
 }
 
 #[derive(Debug, Clone, Parser)]
@@ -405,4 +411,35 @@ pub struct MatrixElemDielectricArgs {
 
     #[command(flatten)]
     pub common: MatrixElemCommonArgs,
+}
+
+#[derive(Debug, Clone, Parser)]
+pub struct CheckpointArgs {
+    /// Checkpoint eigenpairs after every batch of an --energy-cutoff solve.
+    #[arg(long, default_value_t = false)]
+    pub checkpoint: bool,
+
+    /// Directory for diagonalization checkpoints.
+    #[arg(long, default_value = "/lustre/scratch5/mike_tay/saved_data_lm/diag_checkpoints")]
+    pub checkpoint_dir: PathBuf,
+
+    /// Resume from existing checkpoints (set false to force a fresh solve).
+    #[arg(long, default_value_t = true, action = ArgAction::Set)]
+    pub checkpoint_resume: bool,
+
+    /// Keep checkpoints after the final cache/chunk is written.
+    #[arg(long, default_value_t = false)]
+    pub keep_checkpoint: bool,
+}
+
+impl CheckpointArgs {
+    pub fn to_checkpoint(&self) -> Option<crate::checkpoint::DiagCheckpoint> {
+        self.checkpoint.then(|| {
+            crate::checkpoint::DiagCheckpoint::new(
+                self.checkpoint_dir.clone(),
+                self.checkpoint_resume,
+                self.keep_checkpoint,
+            )
+        })
+    }
 }

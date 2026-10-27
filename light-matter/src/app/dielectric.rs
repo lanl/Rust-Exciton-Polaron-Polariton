@@ -21,6 +21,20 @@ fn run_dielectric_scan(e_config: ExcitonConfig, args: cli::DielectricArgs) -> Re
 
     configure_petsc_slepc_diagnostics(&args)?;
 
+    let checkpoint = args.ckpt.to_checkpoint();
+    match (&checkpoint, args.energy_cutoff) {
+        (Some(c), Some(_)) => timed_println_rank0!(
+            "  checkpoint      = {} (resume = {}, keep = {})",
+            c.dir.display(),
+            c.resume,
+            c.keep
+        ),
+        (Some(_), None) => timed_println_rank0!(
+            "Warning: --checkpoint only applies to --energy-cutoff solves; ignoring"
+        ),
+        _ => {}
+    }
+
     let calculate = args.calculate;
     let use_cached = args.use_cached;
     let zoomed = args.zoomed;
@@ -421,6 +435,13 @@ fn run_dielectric_scan(e_config: ExcitonConfig, args: cli::DielectricArgs) -> Re
             n_eig,
             energy_cutoff,
         );
+        let compute = || {
+            dielectric::compute_sheet_dielectric_cache::<
+                ComposedOperator<c64>,
+                SingExBosons<ComposedOperator<c64>>,
+            >(&pp_config, q_probe, n_eig, energy_cutoff, checkpoint.as_ref())
+        };
+
         let cache_exists = std::path::Path::new(&cache_filename).exists();
         let (cache, save_cache) = if use_cached && cache_exists {
             match sim_common::cache::load_bincode::<dielectric::SheetDielectricCache>(
@@ -439,46 +460,33 @@ fn run_dielectric_scan(e_config: ExcitonConfig, args: cli::DielectricArgs) -> Re
                     (cache, false)
                 }
                 Ok(_) => {
-                    timed_println_rank0!(
-                        "Sheet2D cache metadata is inconsistent, recalculating..."
-                    );
-                    (
-                        dielectric::compute_sheet_dielectric_cache::<
-                            ComposedOperator<c64>,
-                            SingExBosons<ComposedOperator<c64>>,
-                        >(&pp_config, q_probe, n_eig, energy_cutoff)?,
-                        true,
-                    )
+                    timed_println_rank0!("Sheet2D cache metadata is inconsistent, recalculating...");
+                    (compute()?, true)
                 }
                 Err(error) => {
                     timed_println_rank0!(
                         "Failed to load sheet2d cache ({}), recalculating...",
                         error
                     );
-                    (
-                        dielectric::compute_sheet_dielectric_cache::<
-                            ComposedOperator<c64>,
-                            SingExBosons<ComposedOperator<c64>>,
-                        >(&pp_config, q_probe, n_eig, energy_cutoff)?,
-                        true,
-                    )
+                    (compute()?, true)
                 }
             }
         } else {
-            (
-                dielectric::compute_sheet_dielectric_cache::<
-                    ComposedOperator<c64>,
-                    SingExBosons<ComposedOperator<c64>>,
-                >(&pp_config, q_probe, n_eig, energy_cutoff)?,
-                true,
-            )
+            (compute()?, true)
         };
 
         if sim_common::mpi::is_mpi_rank0_env() && save_cache {
-            if let Err(error) = sim_common::cache::save_bincode_atomic(&cache_filename, &cache) {
-                timed_println_rank0!("Warning: Failed to save sheet2d cache: {}", error);
-            } else {
-                timed_println_rank0!("Successfully saved sheet2d cache");
+            match sim_common::cache::save_bincode_atomic(&cache_filename, &cache) {
+                Ok(_) => {
+                    timed_println_rank0!("Successfully saved sheet2d cache");
+                    // Reduced data is on disk: eigenvectors are no longer needed.
+                    if let Some(c) = &checkpoint {
+                        c.finish();
+                    }
+                }
+                Err(error) => {
+                    timed_println_rank0!("Warning: Failed to save sheet2d cache: {}", error)
+                }
             }
         }
 
@@ -493,7 +501,7 @@ fn run_dielectric_scan(e_config: ExcitonConfig, args: cli::DielectricArgs) -> Re
     } else {
         let mut pp: PPHamiltonian<ComposedOperator<c64>, SingExBosons<ComposedOperator<c64>>> =
             PPHamiltonian::from_config(&pp_config);
-        dielectric::get_dielectric_function(
+        let result = dielectric::get_dielectric_function(
             &pp_config,
             &mut pp,
             n_eig,
@@ -504,7 +512,22 @@ fn run_dielectric_scan(e_config: ExcitonConfig, args: cli::DielectricArgs) -> Re
             use_cached,
             norm,
             args.antiresonant,
-        )?
+            checkpoint.as_ref(),
+        )?;
+
+        // Only delete eigenvectors once the reduced cache is safely on disk.
+        let diel_cache = dielectric::get_dielectric_cache_filename_from_config(
+            &pp_config,
+            save_dir,
+            n_eig,
+            energy_cutoff,
+        );
+        if let Some(c) = &checkpoint {
+            if std::path::Path::new(&diel_cache).exists() {
+                c.finish();
+            }
+        }
+        result
     };
 
     if sim_common::mpi::is_mpi_rank0_env() {

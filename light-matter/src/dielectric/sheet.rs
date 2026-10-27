@@ -11,6 +11,7 @@ use matrix_ops::{
     ConvertFrom, Diagonalize, DiagonalizationOptions, HermitianConjugate, MatrixOps,
     MatrixOpsError, Norm, Sqrt,
 };
+use crate::checkpoint::DiagCheckpoint;
 use ndarray::{Array1, Array2, s};
 use ndarray_linalg::c64;
 use rayon::prelude::*;
@@ -118,6 +119,7 @@ pub fn compute_sheet_dielectric_cache<M, B>(
     q_probe: f64,
     n_eig: usize,
     energy_cutoff: Option<f64>,
+    checkpoint: Option<&DiagCheckpoint>,
 ) -> Result<SheetDielectricCache, MatrixOpsError>
 where
     M: MatrixOps + Diagonalize,
@@ -130,15 +132,18 @@ where
     B: Boson<M>,
 {
     let is_root = sim_common::mpi::is_mpi_rank0_env();
+    let boosted =
+        pp_config.include_photon_recoil && q_probe > pp_config.d_q.unwrap_or(f64::INFINITY);
 
-    // Determines if we need to compute the K=q Hamiltonian
-    let boosted = pp_config.include_photon_recoil
-        && q_probe > pp_config.d_q.unwrap_or(f64::INFINITY);
+    // Checkpointing only applies to batched (energy-cutoff) solves.
+    let ckpt = checkpoint.zip(energy_cutoff);
 
-    // Build the K=0 Hamiltonian
+    // ---------------- K = 0 ----------------
     let mut cfg0 = pp_config.clone();
     cfg0.e_config.k = vec![0.0, 0.0];
     let mut pp0 = PPHamiltonian::<M, B>::from_config(&cfg0);
+    let ckpt0 = ckpt.map(|(c, cut)| c.prepare(&mut pp0, &cfg0, "sheet_k0", cut));
+
     let h0 = pp0.build_pp_hamiltonian(None)?;
     pp0.polariton.matrix_elements.clear_relative_cache();
     pp0.polariton.matrix_elements.clear_full_cache_maps();
@@ -155,24 +160,27 @@ where
     let layout = pp0.layout;
     let (n_ph, n_pn) = n_ph_n_pn(pp_config);
 
-    let diag_options_0 = if boosted {
+    let mut diag_options_0 = if boosted {
         DiagonalizationOptions::smallest_real(16)
     } else {
         dielectric_diagonalization_options(n_eig, energy_cutoff)
     }
-        .backend(matrix_ops::DiagonalizationBackend::Auto)
-        .hermitian()
-        .max_iterations(50_000)
-        .deflation_batch_size(512)
-        .tolerance(1e-10)
-        .eigenvectors_rank0_only();
+    .backend(matrix_ops::DiagonalizationBackend::Auto)
+    .hermitian()
+    .max_iterations(50_000)
+    .deflation_batch_size(512)
+    .tolerance(1e-10)
+    .eigenvectors_rank0_only();
+    if !boosted {
+        if let Some(c) = ckpt0 {
+            diag_options_0 = diag_options_0.checkpoint(c);
+        }
+    }
 
-    let mut ground_state_index= 0;
-    let (energies0, vecs0) = h0
-        .diagonalize(diag_options_0)?
-        .into_arrays_hermitian();
+    let mut ground_state_index = 0;
+    let (energies0, vecs0) = h0.diagonalize(diag_options_0)?.into_arrays_hermitian();
 
-    let (e0, psi0) = if sim_common::mpi::is_mpi_rank0_env() {
+    let (e0, psi0) = if is_root {
         if energies0.is_empty() || vecs0.ncols() == 0 {
             return Err(MatrixOpsError::Other {
                 message: "K=0 sheet diagonalization returned no eigenvectors".to_string(),
@@ -186,22 +194,23 @@ where
     } else {
         (0.0, None)
     };
-
     drop(h0);
 
-    let (mut ppq, e_vecs_q, energies_q, vecs_q);
-    
-    if boosted {
+    // ---------------- K = q (boosted) ----------------
+    let (ppq, e_vecs_q, energies_q, vecs_q);
 
+    if boosted {
         drop(pp0);
 
         let mut cfgq = pp_config.clone();
         cfgq.e_config.k = vec![q_probe, 0.0];
-        ppq = PPHamiltonian::<M, B>::from_config(&cfgq);
-        let hq = ppq.build_pp_hamiltonian(None)?;
-        ppq.polariton.matrix_elements.clear_relative_cache();
-        ppq.polariton.matrix_elements.clear_full_cache_maps();
-        e_vecs_q = ppq
+        let mut ppq_local = PPHamiltonian::<M, B>::from_config(&cfgq);
+        let ckptq = ckpt.map(|(c, cut)| c.prepare(&mut ppq_local, &cfgq, "sheet_kq", cut));
+
+        let hq = ppq_local.build_pp_hamiltonian(None)?;
+        ppq_local.polariton.matrix_elements.clear_relative_cache();
+        ppq_local.polariton.matrix_elements.clear_full_cache_maps();
+        let evq = ppq_local
             .polariton
             .exciton
             .e_vecs
@@ -210,49 +219,47 @@ where
                 message: "K=q exciton eigenvectors were not computed".to_string(),
             })?;
 
-        if e_vecs0.ncols() != e_vecs_q.ncols() || e_vecs0.ncols() != pp_config.n_ex_eig {
+        if e_vecs0.ncols() != evq.ncols() || e_vecs0.ncols() != pp_config.n_ex_eig {
             return Err(MatrixOpsError::DimensionMismatch {
                 expected: pp_config.n_ex_eig,
-                got: e_vecs_q.ncols(),
+                got: evq.ncols(),
                 context: format!(
                     "sheet2d exciton eigenbasis columns at K=0 ({}) and K=q ({})",
                     e_vecs0.ncols(),
-                    e_vecs_q.ncols()
+                    evq.ncols()
                 ),
             });
         }
 
-        let diag_options = dielectric_diagonalization_options(n_eig, energy_cutoff);
-        (energies_q, vecs_q) = hq
-            .diagonalize(
-                diag_options
-                    .backend(matrix_ops::DiagonalizationBackend::Auto)
-                    .hermitian()
-                    .max_iterations(50_000)
-                    .deflation_batch_size(512)
-                    .tolerance(1e-10)
-                    .eigenvectors_rank0_only(),
-            )?
-            .into_arrays_hermitian();
+        let mut diag_options = dielectric_diagonalization_options(n_eig, energy_cutoff)
+            .backend(matrix_ops::DiagonalizationBackend::Auto)
+            .hermitian()
+            .max_iterations(50_000)
+            .deflation_batch_size(512)
+            .tolerance(1e-10)
+            .eigenvectors_rank0_only();
+        if let Some(c) = ckptq {
+            diag_options = diag_options.checkpoint(c);
+        }
+
+        let (eq, vq) = hq.diagonalize(diag_options)?.into_arrays_hermitian();
 
         if !is_root {
             return Ok(empty_sheet_cache(q_probe, pp_config.include_photon_recoil, e0));
         }
-
-        if energies_q.is_empty() || vecs_q.ncols() != energies_q.len() {
+        if eq.is_empty() || vq.ncols() != eq.len() {
             return Err(MatrixOpsError::Other {
                 message: "K=q sheet diagonalization returned inconsistent eigenpairs".to_string(),
             });
         }
 
-        ground_state_index = select_ground_state(&ppq, &vecs_q)?;
-        let boost_shift = energies_q[ground_state_index] - e0;
+        ground_state_index = select_ground_state(&ppq_local, &vq)?;
+        let boost_shift = eq[ground_state_index] - e0;
         let m_total = pp_config.e_config.m_e + pp_config.e_config.m_h;
-        let expected_shift = q_probe * q_probe / (2.0 * m_total);
         timed_println_rank0!(
             "sheet2d: E_gs(q) - E_gs(0) = {:.6e} (free-COM estimate q^2/2M = {:.6e})",
             boost_shift,
-            expected_shift
+            q_probe * q_probe / (2.0 * m_total)
         );
         if boost_shift < -1e-10 {
             timed_println_rank0!(
@@ -260,17 +267,24 @@ where
                 -boost_shift
             );
         }
-    }
-    else {
+
+        (ppq, e_vecs_q, energies_q, vecs_q) = (ppq_local, evq, eq, vq);
+    } else {
         (ppq, e_vecs_q, energies_q, vecs_q) = (pp0, e_vecs0.clone(), energies0, vecs0);
     }
 
-    // All collective work (every diagonalize) is done above this line.
-    // Everything below needs eigenvectors, which only rank 0 has.
+    timed_println_rank0!(
+        "sheet2d: computed {} eigenpairs at K={:.4e} (ground state index {})",
+        energies_q.len(),
+        q_probe,
+        ground_state_index
+    );
+
     if !is_root {
         return Ok(empty_sheet_cache(q_probe, pp_config.include_photon_recoil, e0));
     }
 
+    // ---------------- Observables (rank 0) ----------------
     let psi0 = psi0.expect("rank 0 must retain the K=0 ground state");
     let x_ex = exciton_dipole_cross(&e_vecs_q, &e_vecs0, &x_rel, n_com);
     let mut x_q = Vec::with_capacity(energies_q.len());
@@ -290,16 +304,7 @@ where
     for idx in 0..energies_q.len() {
         let vec = vecs_q.column(idx);
         x_q.push(
-            pp_dipole(
-                vec,
-                psi0.view(),
-                &x_ex,
-                layout,
-                pp_config.n_ex_eig,
-                n_ph,
-                n_pn,
-            )?
-            .norm(),
+            pp_dipole(vec, psi0.view(), &x_ex, layout, pp_config.n_ex_eig, n_ph, n_pn)?.norm(),
         );
         photonic_chars_q.push(crate::bands::calculate_photonic_character(
             &ppq,
@@ -307,15 +312,13 @@ where
         )?);
 
         if let Some(ref op) = phonon_number_op {
-            let converted: Array1<M::Scalar> = vec
-                .iter()
-                .map(|value| M::Scalar::convert_from(*value))
-                .collect();
-            let dag: Array1<M::Scalar> = converted.iter().map(|value| value.dag()).collect();
+            let converted: Array1<M::Scalar> =
+                vec.iter().map(|v| M::Scalar::convert_from(*v)).collect();
+            let dag: Array1<M::Scalar> = converted.iter().map(|v| v.dag()).collect();
             let mut tmp = Array1::<M::Scalar>::zeros(converted.len());
             op.apply(
-                converted.as_slice().expect("converted eigenvector must be contiguous"),
-                tmp.as_slice_mut().expect("temporary vector must be contiguous"),
+                converted.as_slice().expect("contiguous"),
+                tmp.as_slice_mut().expect("contiguous"),
             )?;
             phonon_numbers_q.push(<M as MatrixOps>::Scalar::norm(dag.dot(&tmp)));
         } else {

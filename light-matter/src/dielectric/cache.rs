@@ -4,6 +4,8 @@ use crate::utils::eig_selection_tag;
 use matrix_ops::MatrixOps;
 use ndarray::Array1;
 
+const DIELECTRIC_CACHE_VERSION: u32 = 2;
+
 pub fn get_dielectric_cache_filename<M, B>(
     _pp: &PPHamiltonian<M, B>,
     pp_config: &PPConfig,
@@ -33,8 +35,9 @@ pub fn get_dielectric_cache_filename_from_config(
     ) {
         let lwa_tag = if !pp_config.include_photon_recoil { "_lwa" } else { "" };
         format!(
-            "{}/dielectric_cache_a0{}_V0{}_nrel{}_omega0{:.6}_domega{:.1e}_omegamax{:.6}_refl{:.7}_nmodes{}_pncoup{:.6}_npn{}_{}{}.bin",
+            "{}/dielectric_cache_v{}_a0{}_V0{}_nrel{}_omega0{:.6}_domega{:.1e}_omegamax{:.6}_refl{:.7}_nmodes{}_pncoup{:.6}_npn{}_{}{}.bin",
             save_dir,
+            DIELECTRIC_CACHE_VERSION,
             pp_config.e_config.a0,
             pp_config.e_config.v0,
             pp_config.n_rel,
@@ -52,8 +55,9 @@ pub fn get_dielectric_cache_filename_from_config(
         let total_coupling = pp_config.lm_couplings.iter().sum::<f64>();
         let lwa_tag = if !pp_config.include_photon_recoil { "_lwa" } else { "" };
         format!(
-            "{}/dielectric_cache_a0{}_V0{}_nrel{}_lmcoup{:.6}_nmodes{}_pncoup{:.6}_npn{}_{}{}.bin",
+            "{}/dielectric_cache_v{}_a0{}_V0{}_nrel{}_lmcoup{:.6}_nmodes{}_pncoup{:.6}_npn{}_{}{}.bin",
             save_dir,
+            DIELECTRIC_CACHE_VERSION,
             pp_config.e_config.a0,
             pp_config.e_config.v0,
             pp_config.n_rel,

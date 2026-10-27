@@ -14,6 +14,7 @@ use num_traits::Zero;
 use rayon::prelude::*;
 use std::iter::Sum;
 
+use crate::checkpoint::DiagCheckpoint;
 use crate::config::PPConfig;
 use crate::hamiltonian::{Boson, PPBasisLayout, PPHamiltonian};
 
@@ -155,6 +156,7 @@ pub fn get_dielectric_function<M, B>(
     use_cached: bool,
     norm: DielectricNormalization,
     antiresonant: bool,
+    checkpoint: Option<&DiagCheckpoint>,
 ) -> Result<DielectricResult, MatrixOpsError>
 where
     M: MatrixOps + Diagonalize,
@@ -166,13 +168,6 @@ where
         + HermitianConjugate<Output = M::Scalar>,
     B: Boson<M>,
 {
-    timed_println_rank0!(
-        "Calculating dielectric function with {} eigenstates, gamma={:.1e}, cutoff={:?}",
-        n_eig,
-        gamma,
-        energy_cutoff
-    );
-
     match energy_cutoff {
         Some(cutoff) => timed_println_rank0!(
             "Calculating dielectric function with ALL eigenstates below E = {:.6e} (overrides n_eig = {}), gamma={:.1e}",
@@ -211,11 +206,11 @@ where
                         x.len(),
                         gs_idx
                     );
-                    compute_dielectric_cache(pp_config, pp, n_eig, energy_cutoff)?
+                    compute_dielectric_cache(pp_config, pp, n_eig, energy_cutoff, checkpoint)?
                 }
                 Err(e) => {
                     timed_println_rank0!("Failed to load cache ({}), recalculating...", e);
-                    compute_dielectric_cache(pp_config, pp, n_eig, energy_cutoff)?
+                    compute_dielectric_cache(pp_config, pp, n_eig, energy_cutoff, checkpoint)?
                 }
             }
         } else {
@@ -224,7 +219,8 @@ where
             } else {
                 timed_println_rank0!("Cache file does not exist, computing diagonalization data...");
             }
-            let cache_data = compute_dielectric_cache(pp_config, pp, n_eig, energy_cutoff)?;
+            let cache_data =
+                compute_dielectric_cache(pp_config, pp, n_eig, energy_cutoff, checkpoint)?;
 
             if sim_common::mpi::is_mpi_rank0_env() {
                 timed_println_rank0!("Saving cache to {}", cache_filename);
@@ -260,8 +256,6 @@ where
         pp_vals.slice(s![0..50.min(pp_vals.len())]).to_owned() - pp_vals[ground_state_index]
     );
 
-    // Precompute transition energies and scalar oscillator strengths.
-    // x_pp[n] stores |<0|x|n>|, so the numerator is x_pp[n]^2.
     let ground_energy = pp_vals[ground_state_index];
 
     let transitions = transitions_from_cache(
@@ -295,24 +289,21 @@ where
 
     let dielectric_function = Array1::from_iter(dielectric_vec.iter().map(|(eps, _)| eps.re));
     let dielectric_imag = Array1::from_iter(dielectric_vec.iter().map(|(eps, _)| eps.im));
-    let alpha_re = if dielectric_vec.iter().any(|(_, alpha)| alpha.is_some()) {
-        Some(Array1::from_iter(
+    let has_alpha = dielectric_vec.iter().any(|(_, alpha)| alpha.is_some());
+    let alpha_re = has_alpha.then(|| {
+        Array1::from_iter(
             dielectric_vec
                 .iter()
                 .map(|(_, alpha)| alpha.expect("normalization alpha must be present").re),
-        ))
-    } else {
-        None
-    };
-    let alpha_im = if dielectric_vec.iter().any(|(_, alpha)| alpha.is_some()) {
-        Some(Array1::from_iter(
+        )
+    });
+    let alpha_im = has_alpha.then(|| {
+        Array1::from_iter(
             dielectric_vec
                 .iter()
                 .map(|(_, alpha)| alpha.expect("normalization alpha must be present").im),
-        ))
-    } else {
-        None
-    };
+        )
+    });
 
     Ok(DielectricResult {
         real: dielectric_function,
@@ -330,6 +321,7 @@ fn compute_dielectric_cache<M, B>(
     pp: &mut PPHamiltonian<M, B>,
     n_eig: usize,
     energy_cutoff: Option<f64>,
+    checkpoint: Option<&DiagCheckpoint>,
 ) -> Result<(Array1<f64>, Array1<f64>, Vec<f64>, Vec<f64>, usize), MatrixOpsError>
 where
     M: MatrixOps + Diagonalize,
@@ -341,12 +333,14 @@ where
         + Norm,
     B: Boson<M>,
 {
-    // Build Hamiltonian
+    // Must happen BEFORE build_pp_hamiltonian (which triggers compute_eigenstates).
+    let ckpt_cfg = match (checkpoint, energy_cutoff) {
+        (Some(c), Some(cut)) => Some(c.prepare(pp, pp_config, "dielectric_k0", cut)),
+        _ => None,
+    };
+
     let h_pp: M = pp.build_pp_hamiltonian(None)?;
 
-    // In the ComposedOperator path, the KronSum now owns Arc references to any
-    // dense matrix-element blocks it needs. Drop the HashMap owners before
-    // diagonalization to reduce resident memory.
     pp.polariton.matrix_elements.clear_relative_cache();
     pp.polariton.matrix_elements.clear_full_cache_maps();
 
@@ -364,23 +358,21 @@ where
             n_eig
         );
     }
-    let diag_options = dielectric_diagonalization_options(n_eig, energy_cutoff);
+
+    let mut diag_options = dielectric_diagonalization_options(n_eig, energy_cutoff)
+        .backend(matrix_ops::DiagonalizationBackend::Auto)
+        .hermitian()
+        .max_iterations(50_000)
+        .deflation_batch_size(512)
+        .tolerance(1e-10)
+        .eigenvectors_rank0_only();
+    if let Some(cfg) = ckpt_cfg {
+        diag_options = diag_options.checkpoint(cfg);
+    }
 
     timed_println_rank0!("Diagonalizing Hamiltonian of size {}", h_pp.shape().0);
-    let (pp_vals, pp_vecs) = h_pp
-        .diagonalize(
-            diag_options
-                .backend(matrix_ops::DiagonalizationBackend::Auto)
-                .hermitian()
-                .max_iterations(50_000)
-                .deflation_batch_size(512)
-                .tolerance(1e-10)
-                .eigenvectors_rank0_only(),
-        )?
-        .into_arrays_hermitian();
+    let (pp_vals, pp_vecs) = h_pp.diagonalize(diag_options)?.into_arrays_hermitian();
 
-    // Number of eigenpairs actually returned. With an energy cutoff this is
-    // generally != n_eig, so everything below must use n_found.
     let n_found = pp_vals.len();
 
     if n_found == 0 {
@@ -410,13 +402,7 @@ where
     }
 
     if !sim_common::mpi::is_mpi_rank0_env() {
-        return Ok((
-            pp_vals,
-            Array1::<f64>::zeros(0),
-            Vec::new(),
-            Vec::new(),
-            0,
-        ));
+        return Ok((pp_vals, Array1::<f64>::zeros(0), Vec::new(), Vec::new(), 0));
     }
 
     if pp_vecs.ncols() != n_found {
@@ -444,72 +430,46 @@ where
     let vec0 = pp_vecs.column(ground_state_index);
 
     let mut x_pp_values = Vec::with_capacity(n_found);
-
     for idx in 0..n_found {
-        let vec1 = pp_vecs.column(idx);
         x_pp_values.push(
-            pp_dipole(
-                vec0,
-                vec1,
-                &x_exc,
-                pp.layout,
-                n_ex_eig,
-                n_ph,
-                n_pn,
-            )?
-            .norm(),
+            pp_dipole(vec0, pp_vecs.column(idx), &x_exc, pp.layout, n_ex_eig, n_ph, n_pn)?.norm(),
         );
     }
-
     let x_pp = Array1::from_vec(x_pp_values);
 
     let mut photonic_chars: Vec<f64> = Vec::with_capacity(n_found);
     let mut phonon_numbers: Vec<f64> = Vec::with_capacity(n_found);
 
     let has_phonon_dof = pp_config.pn_coupling.abs() >= f64::EPSILON && n_pn > 1;
-
     let phonon_number_op = if has_phonon_dof {
         let lm_dim = pp.layout.lm.lm_dim(n_ex_eig, n_ph)?;
         let lm_eye = M::eye(lm_dim);
         let pn_number = pp.phonon.boson.adag_a(0)?;
-
         Some(pp.layout.kron_lm_pn(&lm_eye, &pn_number))
     } else {
         None
     };
 
     for idx in 0..n_found {
-        let vec: Array1<M::Scalar> = pp_vecs
-            .column(idx)
-            .iter()
-            .map(|val| M::Scalar::convert_from(*val))
-            .collect::<Array1<M::Scalar>>();
-        let vec_dag: Array1<M::Scalar> = vec.iter().map(|x| x.dag()).collect();
-
         photonic_chars.push(bands::calculate_photonic_character(
             pp,
             &pp_vecs.column(idx).to_owned(),
         )?);
 
         if let Some(ref op) = phonon_number_op {
+            let vec: Array1<M::Scalar> = pp_vecs
+                .column(idx)
+                .iter()
+                .map(|val| M::Scalar::convert_from(*val))
+                .collect();
+            let vec_dag: Array1<M::Scalar> = vec.iter().map(|x| x.dag()).collect();
             let mut tmp: Array1<M::Scalar> = Array1::zeros(vec.len());
             op.apply(vec.as_slice().unwrap(), tmp.as_slice_mut().unwrap())?;
-            let val: M::Scalar = vec_dag.dot(&tmp);
-            phonon_numbers.push(<M as MatrixOps>::Scalar::norm(val));
+            phonon_numbers.push(<M as MatrixOps>::Scalar::norm(vec_dag.dot(&tmp)));
         } else {
             phonon_numbers.push(0.0);
         }
     }
 
-    debug_assert_eq!(x_pp.len(), n_found);
-    debug_assert_eq!(photonic_chars.len(), n_found);
-    debug_assert_eq!(phonon_numbers.len(), n_found);
-
-    Ok((
-        pp_vals,
-        x_pp,
-        photonic_chars,
-        phonon_numbers,
-        ground_state_index,
-    ))
+    Ok((pp_vals, x_pp, photonic_chars, phonon_numbers, ground_state_index))
 }

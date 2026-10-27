@@ -140,7 +140,7 @@ DIELECTRIC_ARGS=(
   --pn-coupling 1e-3
   --pn-omega 0.0025
   --pn-k-x 0.05
-  --pn-n-fock 4
+  --pn-n-fock 1
   --omega-min-scan 0.0
   --omega-max-scan 0.3
   --n-omega-points 100000
@@ -150,4 +150,8 @@ DIELECTRIC_ARGS=(
   --probe-q-in-dq 2
   --long-wavelength
   --eps-monitor
+  --checkpoint
+  # --checkpoint-dir /lustre/scratch5/mike_tay/saved_data_lm/diag_checkpoints   # default
+  # --checkpoint-resume false    # force a fresh solve
+  # --keep-checkpoint            # keep eigenvectors after the cache is written
 )
