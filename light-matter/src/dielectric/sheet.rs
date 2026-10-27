@@ -99,6 +99,20 @@ pub fn get_sheet_dielectric_cache_filename(
     )
 }
 
+fn empty_sheet_cache(q_probe: f64, include_photon_recoil: bool, e0: f64) -> SheetDielectricCache {
+    SheetDielectricCache {
+        version: SHEET_CACHE_VERSION,
+        q_probe,
+        include_photon_recoil,
+        e0,
+        ground_state_index_q: 0,
+        energies_q: Vec::new(),
+        x_q: Vec::new(),
+        photonic_chars_q: Vec::new(),
+        phonon_numbers_q: Vec::new(),
+    }
+}
+
 pub fn compute_sheet_dielectric_cache<M, B>(
     pp_config: &PPConfig,
     q_probe: f64,
@@ -115,7 +129,12 @@ where
         + Norm,
     B: Boson<M>,
 {
-   
+    let is_root = sim_common::mpi::is_mpi_rank0_env();
+
+    // Determines if we need to compute the K=q Hamiltonian
+    let boosted = pp_config.include_photon_recoil
+        && q_probe > pp_config.d_q.unwrap_or(f64::INFINITY);
+
     // Build the K=0 Hamiltonian
     let mut cfg0 = pp_config.clone();
     cfg0.e_config.k = vec![0.0, 0.0];
@@ -136,25 +155,17 @@ where
     let layout = pp0.layout;
     let (n_ph, n_pn) = n_ph_n_pn(pp_config);
 
-    let diag_options_0;
-    if pp_config.include_photon_recoil && q_probe > pp_config.d_q.unwrap_or_else(|| f64::INFINITY) {
-        diag_options_0 = DiagonalizationOptions::smallest_real(16)
-            .backend(matrix_ops::DiagonalizationBackend::Auto)
-            .hermitian()
-            .max_iterations(50_000)
-            .deflation_batch_size(512)
-            .tolerance(1e-10)
-            .eigenvectors_rank0_only();
+    let diag_options_0 = if boosted {
+        DiagonalizationOptions::smallest_real(16)
+    } else {
+        dielectric_diagonalization_options(n_eig, energy_cutoff)
     }
-    else {
-        diag_options_0 = dielectric_diagonalization_options(n_eig, energy_cutoff)
-            .backend(matrix_ops::DiagonalizationBackend::Auto)
-            .hermitian()
-            .max_iterations(50_000)
-            .deflation_batch_size(512)
-            .tolerance(1e-10)
-            .eigenvectors_rank0_only();
-    }
+        .backend(matrix_ops::DiagonalizationBackend::Auto)
+        .hermitian()
+        .max_iterations(50_000)
+        .deflation_batch_size(512)
+        .tolerance(1e-10)
+        .eigenvectors_rank0_only();
 
     let mut ground_state_index= 0;
     let (energies0, vecs0) = h0
@@ -179,7 +190,8 @@ where
     drop(h0);
 
     let (mut ppq, e_vecs_q, energies_q, vecs_q);
-    if pp_config.include_photon_recoil && q_probe > pp_config.d_q.unwrap_or_else(|| f64::INFINITY) {
+    
+    if boosted {
 
         drop(pp0);
 
@@ -223,18 +235,8 @@ where
             )?
             .into_arrays_hermitian();
 
-        if !sim_common::mpi::is_mpi_rank0_env() {
-            return Ok(SheetDielectricCache {
-                version: SHEET_CACHE_VERSION,
-                q_probe,
-                include_photon_recoil: pp_config.include_photon_recoil,
-                e0,
-                ground_state_index_q: 0,
-                energies_q: Vec::new(),
-                x_q: Vec::new(),
-                photonic_chars_q: Vec::new(),
-                phonon_numbers_q: Vec::new(),
-            });
+        if !is_root {
+            return Ok(empty_sheet_cache(q_probe, pp_config.include_photon_recoil, e0));
         }
 
         if energies_q.is_empty() || vecs_q.ncols() != energies_q.len() {
@@ -263,6 +265,11 @@ where
         (ppq, e_vecs_q, energies_q, vecs_q) = (pp0, e_vecs0.clone(), energies0, vecs0);
     }
 
+    // All collective work (every diagonalize) is done above this line.
+    // Everything below needs eigenvectors, which only rank 0 has.
+    if !is_root {
+        return Ok(empty_sheet_cache(q_probe, pp_config.include_photon_recoil, e0));
+    }
 
     let psi0 = psi0.expect("rank 0 must retain the K=0 ground state");
     let x_ex = exciton_dipole_cross(&e_vecs_q, &e_vecs0, &x_rel, n_com);

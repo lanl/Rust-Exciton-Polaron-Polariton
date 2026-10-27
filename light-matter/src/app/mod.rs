@@ -27,11 +27,11 @@ pub fn run(cli: Cli) -> Result<()> {
         .build_global()
         .unwrap();
 
-    crate::timed_println!(
-        "rayon threads = {}, available_parallelism = {:?}",
-        rayon::current_num_threads(),
-        std::thread::available_parallelism()
-    );
+    // crate::timed_println!(
+    //     "rayon threads = {}, available_parallelism = {:?}",
+    //     rayon::current_num_threads(),
+    //     std::thread::available_parallelism()
+    // );
 
     match cli.command {
         Command::Bandstructure(args) => bandstructure::run_bandstructure_cli(args)?,

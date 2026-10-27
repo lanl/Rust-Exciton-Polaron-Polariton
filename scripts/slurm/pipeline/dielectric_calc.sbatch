@@ -3,12 +3,12 @@
 #SBATCH --output=logs/dielectric/dielectric_%A_%a.out
 #SBATCH --error=logs/dielectric/dielectric_%A_%a.err
 #SBATCH --partition=standard
-#SBATCH --time=5-00:00:00
-#SBATCH --nodes=4
+#SBATCH --time=16:00:00
+#SBATCH --nodes=64
 #SBATCH --ntasks-per-node=4
 #SBATCH --cpus-per-task=64
 #SBATCH --mem=500000
-#SBATCH --qos=long
+###SBATCH --qos=long
 
 set -euo pipefail
 
@@ -45,8 +45,8 @@ run_pmix_v5() {
       "$@"
 }
 
-run_pmix_v5 --ntasks="${SLURM_NTASKS}" --cpus-per-task="${SLURM_CPUS_PER_TASK}" \
-  --cpu-bind=cores bash -c 'echo "rank$SLURM_PROCID on $(hostname): nproc=$(nproc) $(grep Cpus_allowed_list /proc/self/status)"'
+# run_pmix_v5 --ntasks="${SLURM_NTASKS}" --cpus-per-task="${SLURM_CPUS_PER_TASK}" \
+#   --cpu-bind=cores bash -c 'echo "rank$SLURM_PROCID on $(hostname): nproc=$(nproc) $(grep Cpus_allowed_list /proc/self/status)"'
 
 echo "Dielectric calculation"
 echo "  REFLECTIVITY_INDEX   = ${REFLECTIVITY_INDEX}"

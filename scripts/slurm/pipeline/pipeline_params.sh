@@ -144,9 +144,10 @@ DIELECTRIC_ARGS=(
   --omega-min-scan 0.0
   --omega-max-scan 0.3
   --n-omega-points 100000
-  --output-dir dielectric_scan/sheet
+  --output-dir dielectric_scan/sheet_lwa
   --dielectric-method sheet2d
   --exciton-density 1e-5
   --probe-q-in-dq 2
+  --long-wavelength
   --eps-monitor
 )
