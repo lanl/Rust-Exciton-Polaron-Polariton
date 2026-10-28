@@ -26,9 +26,17 @@ export MPLCONFIGDIR="${MPLCONFIGDIR:-${TMPDIR:-/tmp}/rust-exciton-mplconfig}"
 mkdir -p "$MPLCONFIGDIR" plots
 ```
 
-The Python plotter accepts a gathered `.bin` file or a quoted glob for a
-complete set of distributed chunk files. It writes PDF, SVG, and PNG output;
-the format is selected by the output filename.
+The band inspection and plotting scripts accept individual `.bin` files,
+directories, and quoted globs. A complete distributed chunk set is combined
+into one band dataset; independent files are inspected or plotted as separate
+overlaid datasets. The plotter writes PDF, SVG, and PNG output; the format is
+selected by the output filename.
+
+When `--output` is omitted, `plot_bands.py` derives a PDF filename from the
+input data filename. For example, `color_band_a0..._phcoup0.100000.bin`
+becomes `color_band_a0..._phcoup0.100000.pdf`. Distributed chunk suffixes are
+removed from the default name. When several independent files are supplied,
+the first input stem receives a `_set` suffix.
 
 The Python dielectric plotter uses the same NumPy and Matplotlib environment as
 the band plotter and does not require MPI, PETSc, or SLEPc.
@@ -66,6 +74,17 @@ python3 plotting/plot_bands.py "$EXCITON_FILE" \
   --color-kind n-expectation \
   --dark-mode \
   --output plots/exciton_colored_bands.pdf
+```
+
+To inspect or overlay every `.bin` file in a directory instead, pass the
+directory directly. The default plot name is derived from the first sorted
+input filename when `--output` is omitted:
+
+```bash
+python3 plotting/inspect_band_file.py "$EXCITON_DATA_DIR"
+python3 plotting/plot_bands.py "$EXCITON_DATA_DIR" \
+  --color-kind n-expectation \
+  --dark-mode
 ```
 
 For a PNG preview, change the final output option to:
@@ -111,6 +130,18 @@ python3 plotting/plot_bands.py "$POLARITON_FILE" \
   --color-kind photonic \
   --dark-mode \
   --output plots/polariton_bands.pdf
+```
+
+The same scripts can inspect or plot a directory of independent gathered
+files. Each file is drawn on the same axes, while a directory containing one
+complete chunk set is combined before plotting:
+
+```bash
+python3 plotting/inspect_band_file.py --input-dir "$POLARITON_DATA_DIR"
+python3 plotting/plot_bands.py --input-dir "$POLARITON_DATA_DIR" \
+  --color-kind photonic \
+  --dark-mode \
+  --output plots/polariton_bands_all.pdf
 ```
 
 If only distributed chunks are available, construct a run-specific glob from

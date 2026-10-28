@@ -2,20 +2,22 @@
 """
 Publication-quality band-structure plotting for Rust ColoredBandData files.
 
-For photonic-character plots, points are sorted in decreasing photonic
-character before rendering. Consequently:
+For photonic-character plots, colored line segments are sorted in decreasing
+photonic character before rendering. Consequently:
 
-    highly photonic points are drawn first;
-    low-photonic-character points are drawn last/on top.
+    highly photonic segments are drawn first;
+    low-photonic-character segments are drawn last/on top.
 
-Highly photonic points are also faded by default to suppress the dense sea of
-photon modes.
+Highly photonic segments are also faded by default to suppress the dense sea
+of photon modes.
 """
 
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 from pathlib import Path
+import re
 from typing import Literal
 
 import matplotlib as mpl
@@ -23,10 +25,26 @@ import matplotlib.pyplot as plt
 from matplotlib.collections import LineCollection
 import numpy as np
 
-from band_data import build_path_axis, load_band_inputs
+from band_data import (
+    ColoredBandData,
+    build_path_axis,
+    load_band_datasets,
+)
 
 
 ColorKind = Literal["photonic", "n-expectation", "generic"]
+
+
+@dataclass
+class PreparedBandData:
+    data: ColoredBandData
+    x: np.ndarray
+    energies: np.ndarray
+    colors: np.ndarray | None
+    symmetry_positions: np.ndarray | None
+    symmetry_labels: list[str] | None
+    colored_segments: np.ndarray | None
+    segment_colors: np.ndarray | None
 
 
 def theme_colors(dark_mode: bool) -> tuple[str, str]:
@@ -166,39 +184,53 @@ def make_line_segments(
     return segments[valid]
 
 
-def prepare_point_data(
+def make_colored_line_segments(
     x: np.ndarray,
     energies: np.ndarray,
     colors: np.ndarray,
     energy_min: float | None,
     energy_max: float | None,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Flatten and filter the colored band points."""
-    x_values = np.broadcast_to(
-        x[:, None],
-        energies.shape,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Make adjacent band segments and their midpoint color values."""
+    if len(x) < 2:
+        return (
+            np.empty((0, 2, 2), dtype=float),
+            np.empty(0, dtype=float),
+        )
+
+    x0 = np.broadcast_to(
+        x[:-1, None],
+        energies[:-1].shape,
+    )
+    x1 = np.broadcast_to(
+        x[1:, None],
+        energies[1:].shape,
+    )
+
+    segments = np.stack(
+        [
+            np.stack([x0, energies[:-1]], axis=-1),
+            np.stack([x1, energies[1:]], axis=-1),
+        ],
+        axis=-2,
+    ).reshape(-1, 2, 2)
+
+    segment_colors = (
+        0.5 * (colors[:-1] + colors[1:])
     ).reshape(-1)
 
-    energy_values = energies.reshape(-1)
-    color_values = colors.reshape(-1)
-
     valid = (
-        np.isfinite(x_values)
-        & np.isfinite(energy_values)
-        & np.isfinite(color_values)
+        np.all(np.isfinite(segments), axis=(1, 2))
+        & np.isfinite(segment_colors)
     )
 
     if energy_min is not None:
-        valid &= energy_values >= energy_min
+        valid &= np.max(segments[:, :, 1], axis=1) >= energy_min
 
     if energy_max is not None:
-        valid &= energy_values <= energy_max
+        valid &= np.min(segments[:, :, 1], axis=1) <= energy_max
 
-    return (
-        x_values[valid],
-        energy_values[valid],
-        color_values[valid],
-    )
+    return segments[valid], segment_colors[valid]
 
 
 def rendering_order(
@@ -206,7 +238,7 @@ def rendering_order(
     emphasis: str,
 ) -> np.ndarray:
     """
-    Return the point rendering order.
+    Return the colored-segment rendering order.
 
     emphasis="low":
         High values first, low values last/on top.
@@ -215,7 +247,7 @@ def rendering_order(
         Low values first, high values last/on top.
 
     emphasis="none":
-        Retain the existing flattened order.
+        Retain the existing segment order.
     """
     if emphasis == "low":
         return np.argsort(
@@ -240,7 +272,7 @@ def point_alpha(
     alpha_power: float,
     fade: bool,
 ) -> np.ndarray:
-    """Calculate opacity values used for composition emphasis."""
+    """Calculate colored-segment opacity values for composition emphasis."""
     if not fade or emphasis == "none":
         return np.full(
             normalized_colors.shape,
@@ -277,35 +309,99 @@ def add_symmetry_guides(
     ax.set_xticklabels(labels)
 
 
+def _normalized_band_stem(path: Path) -> str:
+    stem = re.sub(
+        r"_chunk\d+_of\d+(?:_zoomed)?$",
+        "",
+        path.stem,
+    )
+
+    if stem.startswith("color_band_chunk_"):
+        stem = "color_band_" + stem[len("color_band_chunk_"):]
+
+    return stem
+
+
+def default_output_path(source_files: tuple[Path, ...]) -> Path:
+    """Return a PDF path derived from the input data filename(s)."""
+    if not source_files:
+        return Path("band_structure.pdf")
+
+    stems = [_normalized_band_stem(path) for path in source_files]
+
+    if len(set(stems)) == 1:
+        return Path(f"{stems[0]}.pdf")
+
+    return Path(f"{stems[0]}_set.pdf")
+
+
 def plot_bands(args: argparse.Namespace) -> None:
-    data = load_band_inputs(
+    datasets = load_band_datasets(
         args.inputs,
+        input_dir=args.input_dir,
         require_complete_chunks=not args.allow_incomplete_chunks,
-    )
-
-    # Energy-cutoff runs have a different number of states at each k-point.
-    # Missing band indices are NaN-padded so lines break rather than the
-    # band being truncated to the minimum count.
-    k_points, energies, colors = data.padded_arrays(
-        max_bands=args.bands,
-    )
-
-    energy_cutoff = (
-        None if args.ignore_energy_cutoff else data.energy_cutoff
     )
 
     # Effective window limits used for both data filtering and the y-axis.
     lower_limit = args.energy_min
-    upper_limit = (
-        args.energy_max
-        if args.energy_max is not None
-        else energy_cutoff
-    )
+    energy_cutoffs = [data.energy_cutoff for data in datasets]
+    if args.energy_max is not None:
+        upper_limit = args.energy_max
+    elif args.ignore_energy_cutoff or not all(
+        cutoff is not None for cutoff in energy_cutoffs
+    ):
+        upper_limit = None
+    else:
+        upper_limit = max(
+            cutoff for cutoff in energy_cutoffs if cutoff is not None
+        )
 
-    x, symmetry_positions, symmetry_labels = build_path_axis(
-        k_points,
-        mode=args.path_mode,
-    )
+    prepared: list[PreparedBandData] = []
+
+    for data in datasets:
+        # Energy-cutoff runs have a different number of states at each
+        # k-point. Missing band indices are NaN-padded so lines break rather
+        # than the band being truncated to the minimum count.
+        k_points, energies, colors = data.padded_arrays(
+            max_bands=args.bands,
+        )
+
+        x, symmetry_positions, symmetry_labels = build_path_axis(
+            k_points,
+            mode=args.path_mode,
+        )
+
+        colored_segments = None
+        segment_colors = None
+
+        if colors is not None:
+            colored_segments, segment_colors = make_colored_line_segments(
+                x,
+                energies,
+                colors,
+                lower_limit,
+                upper_limit,
+            )
+
+            if colored_segments.size == 0:
+                source = data.source_files[0]
+                raise ValueError(
+                    "No finite colored line segments remain in the selected "
+                    f"energy window for {source}"
+                )
+
+        prepared.append(
+            PreparedBandData(
+                data=data,
+                x=x,
+                energies=energies,
+                colors=colors,
+                symmetry_positions=symmetry_positions,
+                symmetry_labels=symmetry_labels,
+                colored_segments=colored_segments,
+                segment_colors=segment_colors,
+            )
+        )
 
     configure_matplotlib(args.dark_mode)
     background_color, foreground_color = theme_colors(args.dark_mode)
@@ -316,10 +412,41 @@ def plot_bands(args: argparse.Namespace) -> None:
         foreground_color if args.dark_mode else "#222222"
     )
 
+    color_arrays = [
+        item.colors
+        for item in prepared
+        if item.colors is not None
+    ]
+    has_colored_data = bool(color_arrays)
+
+    if has_colored_data and len(color_arrays) != len(prepared):
+        raise ValueError(
+            "The input set mixes colored and uncolored band files"
+        )
+
+    if not has_colored_data and not args.uncolored:
+        raise ValueError(
+            "The input files contain empty color rows. Use --uncolored to "
+            "make a conventional uncolored band plot."
+        )
+
+    all_color_values = None
+
+    if has_colored_data:
+        all_color_values = np.concatenate(
+            [array.reshape(-1) for array in color_arrays]
+        )
+
+    source_files = tuple(
+        path
+        for item in prepared
+        for path in item.data.source_files
+    )
+
     if args.color_kind == "auto":
         color_kind = infer_color_kind(
-            data.source_files,
-            colors,
+            source_files,
+            all_color_values,
         )
     else:
         color_kind = args.color_kind
@@ -329,55 +456,24 @@ def plot_bands(args: argparse.Namespace) -> None:
     else:
         emphasis = args.emphasize
 
-    if colors is None and not args.uncolored:
-        raise ValueError(
-            "This file contains empty color rows. Use --uncolored to make "
-            "a conventional uncolored band plot."
+    norm = None
+    cmap = None
+
+    if has_colored_data:
+        segment_color_arrays = [
+            item.segment_colors
+            for item in prepared
+            if item.segment_colors is not None
+        ]
+        finite_colors = np.concatenate(
+            [values[np.isfinite(values)] for values in segment_color_arrays]
         )
 
-    fig, ax = plt.subplots(
-        figsize=(args.width, args.height),
-        constrained_layout=True,
-    )
-    fig.patch.set_facecolor(background_color)
-    ax.set_facecolor(background_color)
-
-    rasterize_dense_layers = not args.vector_points
-
-    if not args.hide_lines:
-        segments = make_line_segments(
-            x,
-            energies,
-            lower_limit,
-            upper_limit,
-        )
-
-        if segments.size:
-            line_collection = LineCollection(
-                segments,
-                colors=line_color,
-                linewidths=args.line_width,
-                alpha=args.line_alpha,
-                zorder=1,
-                rasterized=rasterize_dense_layers,
-            )
-            ax.add_collection(line_collection)
-
-    if colors is not None:
-        x_points, energy_points, color_points = prepare_point_data(
-            x,
-            energies,
-            colors,
-            lower_limit,
-            upper_limit,
-        )
-
-        if x_points.size == 0:
+        if finite_colors.size == 0:
             raise ValueError(
-                "No finite colored points remain in the selected energy window"
+                "No finite colored line segments remain in the selected "
+                "energy window"
             )
-
-        finite_colors = color_points[np.isfinite(color_points)]
 
         if color_kind == "photonic":
             default_min = 0.0
@@ -410,36 +506,88 @@ def plot_bands(args: argparse.Namespace) -> None:
         )
         cmap = mpl.colormaps[cmap_name]
 
-        normalized = norm(color_points)
-        order = rendering_order(normalized, emphasis)
+    fig, ax = plt.subplots(
+        figsize=(args.width, args.height),
+        constrained_layout=True,
+    )
+    fig.patch.set_facecolor(background_color)
+    ax.set_facecolor(background_color)
 
-        x_points = x_points[order]
-        energy_points = energy_points[order]
-        color_points = color_points[order]
-        normalized = normalized[order]
+    rasterize_dense_layers = not args.vector_points
 
-        rgba = cmap(normalized)
-        rgba[:, 3] = point_alpha(
-            normalized,
-            emphasis=emphasis,
-            alpha_min=args.alpha_min,
-            alpha_max=args.alpha_max,
-            alpha_power=args.alpha_power,
-            fade=not args.no_fade,
-        )
+    for item in prepared:
+        if not args.hide_lines:
+            segments = make_line_segments(
+                item.x,
+                item.energies,
+                lower_limit,
+                upper_limit,
+            )
 
-        ax.scatter(
-            x_points,
-            energy_points,
-            s=args.point_size,
-            c=rgba,
-            marker="o",
-            edgecolors="none",
-            linewidths=0.0,
-            zorder=2,
-            rasterized=rasterize_dense_layers,
-        )
+            if segments.size:
+                line_collection = LineCollection(
+                    segments,
+                    colors=line_color,
+                    linewidths=args.line_width,
+                    alpha=args.line_alpha,
+                    zorder=1,
+                    rasterized=rasterize_dense_layers,
+                )
+                ax.add_collection(line_collection)
 
+        if has_colored_data:
+            if (
+                item.colored_segments is None
+                or item.segment_colors is None
+                or norm is None
+                or cmap is None
+            ):
+                raise RuntimeError(
+                    "Colored band data was not prepared for rendering"
+                )
+
+            normalized = norm(item.segment_colors)
+            order = rendering_order(normalized, emphasis)
+
+            colored_segments = item.colored_segments[order]
+            normalized = normalized[order]
+
+            rgba = cmap(normalized)
+            rgba[:, 3] = point_alpha(
+                normalized,
+                emphasis=emphasis,
+                alpha_min=args.alpha_min,
+                alpha_max=args.alpha_max,
+                alpha_power=args.alpha_power,
+                fade=not args.no_fade,
+            )
+
+            gradient_collection = LineCollection(
+                colored_segments,
+                colors=rgba,
+                linewidths=args.gradient_line_width,
+                zorder=2,
+                rasterized=rasterize_dense_layers,
+            )
+            ax.add_collection(gradient_collection)
+
+        elif args.uncolored:
+            # NaN entries break the line automatically.
+            for band_index in range(item.energies.shape[1]):
+                ax.plot(
+                    item.x,
+                    item.energies[:, band_index],
+                    color=uncolored_line_color,
+                    linewidth=args.uncolored_line_width,
+                    zorder=2,
+                    rasterized=rasterize_dense_layers,
+                )
+
+    if has_colored_data:
+        if norm is None or cmap is None:
+            raise RuntimeError(
+                "Colored band data was not prepared for the colorbar"
+            )
         scalar_mappable = mpl.cm.ScalarMappable(
             norm=norm,
             cmap=cmap,
@@ -476,17 +624,8 @@ def plot_bands(args: argparse.Namespace) -> None:
                 np.linspace(0.0, 1.0, 6)
             )
 
-    elif args.uncolored:
-        # NaN entries break the line automatically.
-        for band_index in range(energies.shape[1]):
-            ax.plot(
-                x,
-                energies[:, band_index],
-                color=uncolored_line_color,
-                linewidth=args.uncolored_line_width,
-                zorder=2,
-                rasterized=rasterize_dense_layers,
-            )
+    symmetry_positions = prepared[0].symmetry_positions
+    symmetry_labels = prepared[0].symmetry_labels
 
     if symmetry_positions is not None and symmetry_labels is not None:
         add_symmetry_guides(
@@ -496,9 +635,14 @@ def plot_bands(args: argparse.Namespace) -> None:
             color="#4c4c4c" if args.dark_mode else "0.82",
         )
 
-    ax.set_xlim(float(x[0]), float(x[-1]))
+    ax.set_xlim(
+        min(float(item.x[0]) for item in prepared),
+        max(float(item.x[-1]) for item in prepared),
+    )
 
-    finite_energies = energies[np.isfinite(energies)]
+    finite_energies = np.concatenate(
+        [item.energies[np.isfinite(item.energies)] for item in prepared]
+    )
 
     if finite_energies.size == 0:
         raise ValueError("The energy array has no finite values")
@@ -560,7 +704,11 @@ def plot_bands(args: argparse.Namespace) -> None:
             mpl.ticker.AutoMinorLocator()
         )
 
-    output = Path(args.output)
+    output = (
+        Path(args.output)
+        if args.output is not None
+        else default_output_path(source_files)
+    )
     output.parent.mkdir(
         parents=True,
         exist_ok=True,
@@ -574,22 +722,37 @@ def plot_bands(args: argparse.Namespace) -> None:
 
     print(f"Saved {output}")
     print(
-        f"Plotted up to {energies.shape[1]} bands at "
-        f"{energies.shape[0]} k-points "
-        f"(states per k-point: {data.min_band_count}..{data.max_band_count})"
+        f"Plotted {len(prepared)} dataset(s), up to "
+        f"{max(item.energies.shape[1] for item in prepared)} bands "
+        f"(states per k-point: "
+        f"{min(item.data.min_band_count for item in prepared)}.."
+        f"{max(item.data.max_band_count for item in prepared)})"
     )
 
-    if energy_cutoff is not None:
+    finite_cutoffs = [
+        cutoff for cutoff in energy_cutoffs if cutoff is not None
+    ]
+
+    if finite_cutoffs and not args.ignore_energy_cutoff:
         source = (
             "overridden by --energy-max"
             if args.energy_max is not None
             else "used as y-max"
         )
-        print(f"Energy cutoff from filename: {energy_cutoff:.6e} ({source})")
+        if len(set(finite_cutoffs)) == 1:
+            print(
+                "Energy cutoff from filename: "
+                f"{finite_cutoffs[0]:.6e} ({source})"
+            )
+        else:
+            print(
+                "Energy cutoffs from filenames: "
+                + ", ".join(f"{value:.6e}" for value in finite_cutoffs)
+            )
 
     print(f"y-range: [{energy_min:.6g}, {energy_max:.6g}]")
 
-    if colors is not None:
+    if has_colored_data:
         print(
             f"Color kind: {color_kind}; "
             f"emphasis: {emphasis}"
@@ -617,18 +780,30 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument(
         "inputs",
-        nargs="+",
+        nargs="*",
         help=(
-            "One gathered .bin file or a set/glob of distributed chunk files. "
-            "Quoted wildcard patterns are supported."
+            "Band .bin files, directories, or quoted globs. Distributed "
+            "chunk sets are combined; independent files are overlaid."
+        ),
+    )
+
+    parser.add_argument(
+        "--input-dir",
+        default=None,
+        help=(
+            "Directory scanned for .bin files when no positional inputs are "
+            "provided."
         ),
     )
 
     parser.add_argument(
         "-o",
         "--output",
-        default="band_structure.pdf",
-        help="Output PDF, SVG, or PNG filename.",
+        default=None,
+        help=(
+            "Output PDF, SVG, or PNG filename. If omitted, derives a PDF "
+            "name from the input data filename."
+        ),
     )
 
     parser.add_argument(
@@ -736,10 +911,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--gradient-line-width",
         "--point-size",
+        dest="gradient_line_width",
         type=float,
-        default=3.0,
-        help="Scatter marker area in points squared.",
+        default=0.8,
+        help=(
+            "Width of colored gradient band lines in points. The legacy "
+            "--point-size spelling is retained as an alias."
+        ),
     )
 
     parser.add_argument(
@@ -875,10 +1055,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     parser.add_argument(
+        "--vector-lines",
         "--vector-points",
+        dest="vector_points",
         action="store_true",
         help=(
-            "Keep every point and line segment as a vector object. This can "
+            "Keep every colored line segment as a vector object. This can "
             "create very large PDFs for dense photon-mode calculations."
         ),
     )
@@ -916,8 +1098,8 @@ def validate_arguments(args: argparse.Namespace) -> None:
     ):
         raise ValueError("--energy-max must exceed --energy-min")
 
-    if args.point_size <= 0.0:
-        raise ValueError("--point-size must be positive")
+    if args.gradient_line_width <= 0.0:
+        raise ValueError("--gradient-line-width must be positive")
 
     if not 0.0 <= args.alpha_min <= 1.0:
         raise ValueError("--alpha-min must lie in [0,1]")

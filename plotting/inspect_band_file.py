@@ -1,4 +1,4 @@
-"""Inspect one gathered ColoredBandData file or a collection of chunks."""
+"""Inspect one or more ColoredBandData files or collections of chunks."""
 
 from __future__ import annotations
 
@@ -6,29 +6,38 @@ import argparse
 
 import numpy as np
 
-from band_data import load_band_inputs
+from band_data import ColoredBandData, load_band_datasets
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Inspect Rust ColoredBandData bincode files. Inputs may be one "
-            "gathered file or a complete distributed chunk glob."
+            "Inspect Rust ColoredBandData bincode files. Inputs may be "
+            "files, directories, quoted globs, or distributed chunk sets."
         )
     )
 
     parser.add_argument(
         "inputs",
-        nargs="+",
+        nargs="*",
         help=(
-            "Input .bin file(s). Quoted wildcard patterns are supported."
+            "Input .bin files, directories, or quoted globs."
+        ),
+    )
+
+    parser.add_argument(
+        "--input-dir",
+        default=None,
+        help=(
+            "Directory scanned for .bin files when no positional inputs are "
+            "provided."
         ),
     )
 
     parser.add_argument(
         "--allow-incomplete-chunks",
         action="store_true",
-        help="Permit plotting or inspection of only part of a chunk set.",
+        help="Permit inspection of only part of a chunk set.",
     )
 
     return parser
@@ -41,13 +50,14 @@ def _concat_finite(rows: list[np.ndarray]) -> np.ndarray:
     return np.concatenate(parts)
 
 
-def main() -> None:
-    args = build_parser().parse_args()
-
-    data = load_band_inputs(
-        args.inputs,
-        require_complete_chunks=not args.allow_incomplete_chunks,
-    )
+def inspect_dataset(
+    data: ColoredBandData,
+    dataset_index: int,
+    dataset_count: int,
+) -> None:
+    if dataset_count > 1:
+        print(f"Dataset {dataset_index}/{dataset_count}")
+        print()
 
     print("Decoded ColoredBandData successfully")
     print()
@@ -147,6 +157,25 @@ def main() -> None:
         )
     else:
         print(f"color row sizes:      {color_lengths}")
+
+
+def main() -> None:
+    args = build_parser().parse_args()
+
+    datasets = load_band_datasets(
+        args.inputs,
+        input_dir=args.input_dir,
+        require_complete_chunks=not args.allow_incomplete_chunks,
+    )
+
+    for index, data in enumerate(datasets, start=1):
+        inspect_dataset(data, index, len(datasets))
+
+        if index < len(datasets):
+            print()
+
+    if len(datasets) > 1:
+        print(f"Inspected {len(datasets)} band datasets")
 
 
 if __name__ == "__main__":

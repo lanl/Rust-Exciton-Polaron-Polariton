@@ -384,6 +384,21 @@ _CHUNK_PATTERN = re.compile(
 )
 
 
+def _band_stem_without_chunk(path: str | Path) -> str:
+    path = Path(path)
+    match = _CHUNK_PATTERN.search(path.name)
+
+    if match is None:
+        return path.stem
+
+    stem = path.name[:match.start()]
+
+    if stem.startswith("color_band_chunk_"):
+        stem = "color_band_" + stem[len("color_band_chunk_"):]
+
+    return stem
+
+
 def chunk_information(path: str | Path) -> tuple[int, int] | None:
     """Return (chunk_index, total_chunks) from a chunk filename."""
     path = Path(path)
@@ -512,18 +527,25 @@ def load_chunk_files(
 
 def expand_input_patterns(
     inputs: Iterable[str | Path],
+    input_dir: str | Path | None = None,
 ) -> list[Path]:
     """
-    Expand shell-style wildcard patterns.
+    Expand files, directories, and shell-style wildcard patterns.
 
     Quoted globs are supported, for example:
 
         "pp_data/color_band_chunk_*_chunk*_of16.bin"
     """
+    items = list(inputs)
+
+    if not items and input_dir is not None:
+        items = [input_dir]
+
     paths: list[Path] = []
 
-    for item in inputs:
+    for item in items:
         text = str(item)
+        item_path = Path(item)
 
         if any(character in text for character in "*?[]"):
             matches = [Path(path) for path in glob(text)]
@@ -534,21 +556,99 @@ def expand_input_patterns(
                 )
 
             paths.extend(matches)
+        elif item_path.is_dir():
+            matches = (
+                set(item_path.glob("color_band_*.bin"))
+                | set(item_path.glob("n_colored_band_*.bin"))
+            )
+
+            if not matches:
+                matches = set(item_path.glob("*.bin"))
+
+            paths.extend(sorted(matches))
         else:
-            paths.append(Path(text))
+            paths.append(item_path)
 
     # Resolve exact duplicates while retaining deterministic order.
     unique: dict[str, Path] = {}
 
     for path in paths:
-        unique[str(path)] = path
+        if path.is_file() and path.suffix == ".bin":
+            unique[str(path)] = path
 
-    return list(unique.values())
+    if not unique:
+        checked = ", ".join(str(item) for item in items) or "(none)"
+        raise FileNotFoundError(
+            "No band .bin files were found. "
+            f"Checked: {checked}"
+        )
+
+    return sorted(unique.values(), key=lambda path: str(path))
+
+
+def load_band_datasets(
+    inputs: Sequence[str | Path],
+    *,
+    input_dir: str | Path | None = None,
+    require_complete_chunks: bool = True,
+) -> list[ColoredBandData]:
+    """
+    Load one or more independent band datasets.
+
+    A complete set of distributed chunk files is combined into one dataset.
+    Multiple non-chunk files are returned as separate datasets so callers can
+    overlay parameter scans without connecting one path to the next.
+    """
+    paths = expand_input_patterns(inputs, input_dir=input_dir)
+
+    chunk_paths = [
+        path
+        for path in paths
+        if chunk_information(path) is not None
+    ]
+
+    nonchunk_paths = [
+        path
+        for path in paths
+        if chunk_information(path) is None
+    ]
+    datasets = [load_colored_band_file(path) for path in nonchunk_paths]
+
+    gathered_keys = {
+        (str(path.parent), path.stem)
+        for path in nonchunk_paths
+    }
+
+    chunk_groups: dict[tuple[str, str], list[Path]] = {}
+
+    for path in chunk_paths:
+        key = (
+            str(path.parent),
+            _band_stem_without_chunk(path),
+        )
+        chunk_groups.setdefault(key, []).append(path)
+
+    for key, group in chunk_groups.items():
+        if key in gathered_keys:
+            continue
+
+        datasets.append(
+            load_chunk_files(
+                sorted(group),
+                require_complete=require_complete_chunks,
+            )
+        )
+
+    return sorted(
+        datasets,
+        key=lambda data: str(data.source_files[0]),
+    )
 
 
 def load_band_inputs(
     inputs: Sequence[str | Path],
     *,
+    input_dir: str | Path | None = None,
     require_complete_chunks: bool = True,
 ) -> ColoredBandData:
     """
@@ -558,30 +658,16 @@ def load_band_inputs(
     publication plots should use either one gathered file or one complete chunk
     set.
     """
-    paths = expand_input_patterns(inputs)
-
-    if not paths:
-        raise ValueError("No input files were provided")
-
-    if len(paths) == 1:
-        return load_colored_band_file(paths[0])
-
-    chunk_info = [chunk_information(path) for path in paths]
-
-    if all(info is not None for info in chunk_info):
-        return load_chunk_files(
-            paths,
-            require_complete=require_complete_chunks,
-        )
-
-    if any(info is not None for info in chunk_info):
-        raise ValueError(
-            "The input mixes chunk and non-chunk files"
-        )
-
-    return concatenate_band_data(
-        [load_colored_band_file(path) for path in paths]
+    datasets = load_band_datasets(
+        inputs,
+        input_dir=input_dir,
+        require_complete_chunks=require_complete_chunks,
     )
+
+    if len(datasets) == 1:
+        return datasets[0]
+
+    return concatenate_band_data(datasets)
 
 
 def cumulative_path_distances(k_points: np.ndarray) -> np.ndarray:
