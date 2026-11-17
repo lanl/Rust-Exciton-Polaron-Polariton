@@ -1,9 +1,6 @@
 [submodule "slepc_rust"]
 	path = slepc_rust
 	url = ssh://git@lisdi-git.lanl.gov:10022/mike_tay/slepc_rust.git
-[submodule "latex"]
-	path = latex
-	url = https://git@git.overleaf.com/68878a8d73c6b214e349cdef
 [submodule "matrix_ops"]
 	path = matrix_ops
 	url = ssh://git@lisdi-git.lanl.gov:10022/mike_tay/matrix_ops.git
